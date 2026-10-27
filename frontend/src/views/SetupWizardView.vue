@@ -13,14 +13,12 @@ import {
   setDriveAccountDefault,
   setDriveAccountStatus,
 } from '@/api/extensions'
-import { fetchResourceSearchSources, patchResourceSearchSource } from '@/api/resourceSearch'
 import { fetchTMDBConfig, patchTMDBConfig } from '@/api/tmdb'
 import DriveAccountDrawer from '@/components/extensions/DriveAccountDrawer.vue'
 import NotificationConfigView from '@/views/extensions/NotificationConfigView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSetupStore } from '@/stores/setup'
 import type { DriveAccountItem, DriveTypeItem } from '@/types/extensions'
-import type { ResourceSearchSourceItem, ResourceSearchSourceKey } from '@/types/resourceSearch'
 import type { TMDBConfig } from '@/types/tmdb'
 
 const router = useRouter()
@@ -201,62 +199,6 @@ function prevStep() {
   activeStep.value = Math.max(activeStep.value - 1, 0)
 }
 
-const sourcesLoading = ref(false)
-const sourceSavingKey = ref<ResourceSearchSourceKey | null>(null)
-const sources = reactive({
-  cloudsaver: { enabled: false, server: '', username: '', token: '' },
-  pansou: { enabled: false, server: '' },
-})
-
-function applySources(list: ResourceSearchSourceItem[]) {
-  const findSource = (key: ResourceSearchSourceKey) => list.find((item) => item.key === key) || null
-  const cs = findSource('cloudsaver')
-  sources.cloudsaver.enabled = Boolean(cs?.enabled)
-  sources.cloudsaver.server = String(cs?.server || '')
-  sources.cloudsaver.username = String(cs?.username || '')
-  sources.cloudsaver.token = String(cs?.token || '')
-  const ps = findSource('pansou')
-  sources.pansou.enabled = Boolean(ps?.enabled)
-  sources.pansou.server = String(ps?.server || '')
-}
-
-async function refreshSources() {
-  if (!auth.isAuthenticated) return
-  sourcesLoading.value = true
-  try {
-    const data = await fetchResourceSearchSources()
-    applySources(data.sources || [])
-  } finally {
-    sourcesLoading.value = false
-  }
-}
-
-async function saveSource(key: ResourceSearchSourceKey) {
-  if (!auth.isAuthenticated) return
-  sourceSavingKey.value = key
-  try {
-    if (key === 'pansou') {
-      await patchResourceSearchSource('pansou', {
-        enabled: Boolean(sources.pansou.enabled),
-        server: sources.pansou.server ? String(sources.pansou.server).trim() : null,
-      })
-      ElMessage.success('已保存')
-      await refreshSources()
-      return
-    }
-    await patchResourceSearchSource('cloudsaver', {
-      enabled: Boolean(sources.cloudsaver.enabled),
-      server: sources.cloudsaver.server ? String(sources.cloudsaver.server).trim() : null,
-      username: sources.cloudsaver.username ? String(sources.cloudsaver.username).trim() : null,
-      token: sources.cloudsaver.token ? String(sources.cloudsaver.token).trim() : null,
-    })
-    ElMessage.success('已保存')
-    await refreshSources()
-  } finally {
-    sourceSavingKey.value = null
-  }
-}
-
 const tmdbLoading = ref(false)
 const tmdbSaving = ref(false)
 const tmdb = reactive({
@@ -313,7 +255,7 @@ watch(
       await loadDriveData()
     }
     if (value >= 3) {
-      await Promise.all([refreshSources(), refreshTMDB()])
+      await refreshTMDB()
     }
   },
   { immediate: true },
@@ -422,55 +364,6 @@ onBeforeUnmount(() => {
       <template #header>
         <div class="setup__card-title">4. 资源搜索 & TMDB（可跳过）</div>
       </template>
-
-      <el-card class="setup__section" shadow="never">
-        <template #header>
-          <div class="setup__section-title">
-            <div>资源搜索</div>
-            <el-button text :loading="sourcesLoading" @click="refreshSources">刷新</el-button>
-          </div>
-        </template>
-
-        <el-card class="setup__subsection" shadow="never">
-          <template #header>
-            <div class="setup__subsection-title">
-              <div>CloudSaver（cloudsaver）</div>
-              <el-button size="small" type="primary" :loading="sourceSavingKey === 'cloudsaver'" @click="saveSource('cloudsaver')">保存</el-button>
-            </div>
-          </template>
-          <el-form label-position="top">
-            <el-form-item>
-              <el-switch v-model="sources.cloudsaver.enabled" active-text="启用" inactive-text="禁用" />
-            </el-form-item>
-            <el-form-item label="服务地址（可选）">
-              <el-input v-model="sources.cloudsaver.server" placeholder="例如：https://xxx" />
-            </el-form-item>
-            <el-form-item label="用户名（可选）">
-              <el-input v-model="sources.cloudsaver.username" />
-            </el-form-item>
-            <el-form-item label="Token（可选）">
-              <el-input v-model="sources.cloudsaver.token" type="password" show-password />
-            </el-form-item>
-          </el-form>
-        </el-card>
-
-        <el-card class="setup__subsection" shadow="never">
-          <template #header>
-            <div class="setup__subsection-title">
-              <div>Pansou（pansou）</div>
-              <el-button size="small" type="primary" :loading="sourceSavingKey === 'pansou'" @click="saveSource('pansou')">保存</el-button>
-            </div>
-          </template>
-          <el-form label-position="top">
-            <el-form-item>
-              <el-switch v-model="sources.pansou.enabled" active-text="启用" inactive-text="禁用" />
-            </el-form-item>
-            <el-form-item label="服务地址（可选）">
-              <el-input v-model="sources.pansou.server" placeholder="例如：https://xxx" />
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-card>
 
       <el-card class="setup__section" shadow="never">
         <template #header>

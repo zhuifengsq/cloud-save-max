@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import posixpath
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,9 +19,6 @@ from app.extensions.runtime.account_manager import DatabaseAccountManager
 from app.extensions.runtime.adapter_registry import AdapterRegistry
 from app.models.drive_account import DriveAccount
 from app.models.notification_setting import NotificationSetting
-from app.models.sync_execution import SyncExecution
-from app.models.sync_task import SyncTask
-from app.models.sync_task_drama_link import SyncTaskDramaLink
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
 from app.services.drive_account_auth_sessions import create_auth_session, delete_auth_session, get_auth_session
@@ -54,22 +50,9 @@ from app.services.notifications.settings import (
     get_runtime_notification_config,
     update_notification_setting,
 )
-from app.services.openlist_client_factory import get_openlist_client
 from app.services.share_preview_batch import preview_share_batch
-from app.services.openlist_settings import get_or_create_openlist_setting, load_openlist_config, update_openlist_setting
-from app.services.resource_search import fetch_task_suggestions, list_sources, update_source
+from app.services.resource_search import fetch_task_suggestions
 from app.schemas.task_browse import SharePreviewBatchIn, SharePreviewIn
-from app.services.sync_tasks import (
-    browse_local_dir,
-    create_sync_task,
-    delete_sync_task,
-    get_sync_task,
-    list_sync_execution_files,
-    list_sync_executions,
-    list_sync_tasks,
-    update_sync_task,
-)
-from app.extensions.runtime.sync_executor import SyncExecutor
 from app.services.task_scheduler import get_or_create_task_scheduler_setting, update_task_scheduler_setting
 from app.services.tasks import (
     create_task,
@@ -399,27 +382,7 @@ def _task_execution_summary(execution: TaskExecution | None) -> dict[str, Any] |
     }
 
 
-def _sync_execution_summary(execution: SyncExecution | None) -> dict[str, Any] | None:
-    if execution is None:
-        return None
-    return {
-        "id": int(execution.id),
-        "status": str(execution.status or ""),
-        "stage": str(execution.stage or "") or None,
-        "message": str(execution.message or "") or None,
-        "started_at": _dump_dt(execution.started_at),
-        "finished_at": _dump_dt(execution.finished_at),
-        "cancel_requested_at": _dump_dt(getattr(execution, "cancel_requested_at", None)),
-    }
-
-
 def _task_to_dict(db: Session, task: Task) -> dict[str, Any]:
-    sync_task_uids = db.execute(select(SyncTaskDramaLink.sync_task_uid).where(SyncTaskDramaLink.task_uid == str(task.task_uid))).scalars().all()
-    sync_uid_list = [str(x) for x in sync_task_uids if x]
-    sync_name_map: dict[str, str] = {}
-    if sync_uid_list:
-        rows = db.execute(select(SyncTask.uid, SyncTask.name).where(SyncTask.uid.in_(sync_uid_list))).all()
-        sync_name_map = {str(uid): str(name or uid) for uid, name in rows if uid}
     latest_execution = None
     if getattr(task, "executions", None):
         latest_execution = sorted(task.executions, key=lambda x: x.id, reverse=True)[0]
@@ -439,37 +402,7 @@ def _task_to_dict(db: Session, task: Task) -> dict[str, Any]:
         "enabled": bool(task.enabled),
         "addition": _loads(task.addition_json),
         "extra": _loads(task.extra_json),
-        "sync_task_uids": sync_uid_list,
-        "sync_task_names": [sync_name_map.get(uid, uid) for uid in sync_uid_list],
         "latest_execution": _task_execution_summary(latest_execution),
-        "created_at": _dump_dt(task.created_at),
-        "updated_at": _dump_dt(task.updated_at),
-    }
-
-
-def _sync_task_to_dict(db: Session, task: SyncTask) -> dict[str, Any]:
-    links = db.execute(select(SyncTaskDramaLink.task_uid).where(SyncTaskDramaLink.sync_task_uid == str(task.uid))).scalars().all()
-    drama_uid_list = [str(x) for x in links if x]
-    drama_name_map: dict[str, str] = {}
-    if drama_uid_list:
-        rows = db.execute(select(Task.task_uid, Task.taskname).where(Task.task_uid.in_(drama_uid_list))).all()
-        drama_name_map = {str(uid): str(name or uid) for uid, name in rows if uid}
-    latest_execution = None
-    if getattr(task, "executions", None):
-        latest_execution = sorted(task.executions, key=lambda x: x.id, reverse=True)[0]
-    return {
-        "id": int(task.id),
-        "uid": str(task.uid),
-        "name": str(task.name or ""),
-        "enabled": bool(task.enabled),
-        "source": {"type": str(task.source_type or ""), "path": str(task.source_path or "")},
-        "target": {"type": str(task.target_type or ""), "path": str(task.target_path or "")},
-        "mode": str(task.mode or ""),
-        "strategy": _loads(task.strategy_json),
-        "addition": _loads(task.addition_json),
-        "drama_task_uids": drama_uid_list,
-        "drama_task_names": [drama_name_map.get(uid, uid) for uid in drama_uid_list],
-        "latest_execution": _sync_execution_summary(latest_execution),
         "created_at": _dump_dt(task.created_at),
         "updated_at": _dump_dt(task.updated_at),
     }
@@ -482,18 +415,11 @@ class TelegramBotActions:
     def build_status_summary(self) -> dict[str, Any]:
         drama = build_drama_overview(self.db, days=30)
         capacity = build_capacity_overview(self.db)
-        sync_total = self.db.execute(select(func.count(SyncTask.id))).scalar_one()
-        sync_running = (
-            self.db.execute(select(func.count(SyncExecution.id)).where(SyncExecution.status == "running", SyncExecution.finished_at.is_(None)))
-            .scalar_one()
-        )
         task_total = self.db.execute(select(func.count(Task.id))).scalar_one()
         task_enabled = self.db.execute(select(func.count(Task.id)).where(Task.enabled.is_(True))).scalar_one()
         return {
             "tasks_total": int(task_total or 0),
             "tasks_enabled": int(task_enabled or 0),
-            "sync_total": int(sync_total or 0),
-            "sync_running": int(sync_running or 0),
             "drama_summary": drama.get("summary") or {},
             "capacity_summary": (capacity.get("summary") or {}),
             "updated_at": _dump_dt(datetime.now()),
@@ -818,100 +744,6 @@ class TelegramBotActions:
         self.db.refresh(task)
         return _task_to_dict(self.db, task)
 
-    def list_sync_tasks(self, *, page: int = 1, page_size: int = 8) -> dict[str, Any]:
-        page = max(1, int(page or 1))
-        items = list_sync_tasks(self.db)
-        total = len(items)
-        start = (page - 1) * page_size
-        sliced = items[start : start + page_size]
-        return {"items": [_sync_task_to_dict(self.db, x) for x in sliced], "total": total, "page": page, "page_size": page_size}
-
-    def list_sync_task_options(self) -> list[dict[str, Any]]:
-        items = list_sync_tasks(self.db)
-        return [
-            {
-                "id": int(item.id),
-                "uid": str(item.uid or ""),
-                "name": str(item.name or ""),
-                "enabled": bool(item.enabled),
-                "mode": str(item.mode or ""),
-            }
-            for item in items
-        ]
-
-    def list_drama_task_options(self) -> list[dict[str, Any]]:
-        items = list_tasks_recent_executions(self.db, limit=1)
-        return [
-            {
-                "id": int(item.id),
-                "task_uid": str(item.task_uid or ""),
-                "taskname": str(item.taskname or ""),
-                "enabled": bool(item.enabled),
-            }
-            for item in items
-            if str(getattr(item, "task_type", "") or "") == "drama"
-        ]
-
-    def get_sync_task_detail(self, sync_task_id: int) -> dict[str, Any]:
-        return _sync_task_to_dict(self.db, get_sync_task(self.db, int(sync_task_id)))
-
-    def toggle_sync_task(self, sync_task_id: int) -> dict[str, Any]:
-        task = get_sync_task(self.db, int(sync_task_id))
-        task = update_sync_task(self.db, int(task.id), enabled=(not bool(task.enabled)))
-        self.db.commit()
-        self.db.refresh(task)
-        return _sync_task_to_dict(self.db, task)
-
-    def delete_sync_task(self, sync_task_id: int) -> None:
-        delete_sync_task(self.db, int(sync_task_id))
-        self.db.commit()
-
-    def save_sync_task(self, *, sync_task_id: int | None = None, payload: dict[str, Any]) -> dict[str, Any]:
-        data = dict(payload or {})
-        if sync_task_id is None:
-            task = create_sync_task(self.db, **data)
-        else:
-            task = update_sync_task(self.db, int(sync_task_id), **data)
-        self.db.commit()
-        self.db.refresh(task)
-        return _sync_task_to_dict(self.db, task)
-
-    def run_sync_task(self, sync_task_id: int) -> dict[str, Any]:
-        task = get_sync_task(self.db, int(sync_task_id))
-        execution = SyncExecutor(self.db).run_sync_task(task)
-        self.db.commit()
-        self.db.refresh(execution)
-        return _sync_execution_summary(execution) or {}
-
-    def cancel_sync_task(self, sync_task_id: int) -> dict[str, Any] | None:
-        execution = (
-            self.db.execute(
-                select(SyncExecution)
-                .where(SyncExecution.sync_task_id == int(sync_task_id), SyncExecution.status == "running", SyncExecution.finished_at.is_(None))
-                .order_by(SyncExecution.id.desc())
-            )
-            .scalars()
-            .first()
-        )
-        if execution is None:
-            return None
-        now = datetime.now()
-        execution.cancel_requested_at = now
-        execution.stage = "aborting"
-        execution.message = "cancel requested from tg"
-        execution.heartbeat_at = now
-        self.db.commit()
-        self.db.refresh(execution)
-        return _sync_execution_summary(execution)
-
-    def list_sync_executions(self, sync_task_id: int, *, limit: int = 5) -> list[dict[str, Any]]:
-        rows = list_sync_executions(self.db, int(sync_task_id), limit=int(limit))
-        return [_sync_execution_summary(x) or {} for x in rows]
-
-    def list_sync_execution_files_summary(self, sync_task_id: int, sync_execution_id: int, *, limit: int = 10) -> list[dict[str, Any]]:
-        rows = list_sync_execution_files(self.db, int(sync_task_id), int(sync_execution_id), offset=0, limit=int(limit))
-        return [{"path": str(x.path or ""), "action": str(x.action or ""), "status": str(x.status or ""), "message": str(x.message or "") or None} for x in rows]
-
     def list_accounts(self, *, page: int = 1, page_size: int = 8) -> dict[str, Any]:
         page = max(1, int(page or 1))
         items = [serialize_drive_account(x) for x in list_drive_accounts(self.db)]
@@ -1098,54 +930,6 @@ class TelegramBotActions:
             "paths": paths,
         }
 
-    def browse_sync_path(self, *, path_type: str, dir_path: str, max_items: int = 100) -> dict[str, Any]:
-        path_type = str(path_type or "").strip().lower()
-        if path_type == "local":
-            rel, exists, items, paths = browse_local_dir(dir_path)
-            items.sort(key=lambda x: (not bool(x.get("is_dir")), str(x.get("name") or "").lower()))
-            return {"path_type": path_type, "dir_path": rel, "exists": exists, "items": items[: int(max_items)], "paths": paths}
-        if path_type == "openlist":
-            client = get_openlist_client(self.db)
-            normalized = "/" + posixpath.normpath(str(dir_path or "").strip() or "/").lstrip("/")
-            if normalized != "/" and normalized.endswith("/"):
-                normalized = normalized.rstrip("/")
-            segments = [s for s in normalized.split("/") if s]
-            paths = [{"name": name, "path": "/" + "/".join(segments[: i + 1])} for i, name in enumerate(segments)]
-            try:
-                resp = client.fs_list(normalized, refresh=False, page=1, per_page=int(max_items))
-            except Exception:
-                return {"path_type": path_type, "dir_path": normalized, "exists": False, "items": [], "paths": paths}
-            data = resp.get("data") if isinstance(resp, dict) else None
-            raw_items = None
-            if isinstance(data, dict):
-                raw_items = data.get("content") or data.get("items") or data.get("list") or data.get("files")
-            if raw_items is None and isinstance(resp, dict):
-                raw_items = resp.get("content") or resp.get("items") or resp.get("list") or resp.get("files")
-            if not isinstance(raw_items, list):
-                raw_items = []
-            items: list[dict[str, Any]] = []
-            for it in raw_items[: int(max_items)]:
-                if not isinstance(it, dict):
-                    continue
-                name = str(it.get("name") or it.get("file_name") or it.get("fileName") or it.get("title") or "").strip()
-                if not name or name in {".", ".."}:
-                    continue
-                full = posixpath.join(normalized.rstrip("/") or "/", name)
-                if not full.startswith("/"):
-                    full = "/" + full
-                items.append(
-                    {
-                        "name": name,
-                        "path": full,
-                        "is_dir": bool(it.get("is_dir")) if it.get("is_dir") is not None else _bool_is_dir(it),
-                        "updated_at": it.get("updated_at") or it.get("modified_at") or it.get("mtime"),
-                        "size": _pick_size(it),
-                    }
-                )
-            items.sort(key=lambda x: (not bool(x.get("is_dir")), str(x.get("name") or "").lower()))
-            return {"path_type": path_type, "dir_path": normalized, "exists": True, "items": items, "paths": paths}
-        raise ValueError("不支持的路径类型")
-
     def start_account_auth(self, account_id: int) -> dict[str, Any]:
         account = get_drive_account(self.db, int(account_id))
         if str(account.drive_type or "") == "aliyun":
@@ -1275,9 +1059,7 @@ class TelegramBotActions:
             {"key": "notifications", "label": "通知配置"},
             {"key": "task_scheduler", "label": "任务调度"},
             {"key": "probe_scheduler", "label": "账号探测调度"},
-            {"key": "resource_sources", "label": "资源搜索源"},
             {"key": "tmdb", "label": "TMDB"},
-            {"key": "openlist", "label": "OpenList"},
         ]
 
     def get_setting_domain(self, key: str) -> dict[str, Any]:
@@ -1306,19 +1088,12 @@ class TelegramBotActions:
                     "enabled_only": bool(item.enabled_only),
                 },
             }
-        if key == "resource_sources":
-            return {"key": key, "label": "资源搜索源", "values": {"sources": list_sources(self.db)}}
         if key == "tmdb":
             item = get_or_create_tmdb_setting(self.db)
             runtime = get_tmdb_runtime_config(item)
             values = load_tmdb_config(item)
             values["api_key"] = runtime.get("api_key") or ""
             return {"key": key, "label": "TMDB", "values": values}
-        if key == "openlist":
-            item = get_or_create_openlist_setting(self.db)
-            values = load_openlist_config(item)
-            values["token"] = str(getattr(item, "token", "") or "")
-            return {"key": key, "label": "OpenList", "values": values}
         raise ValueError(f"unsupported setting domain: {key}")
 
     def update_setting_value(self, domain: str, field: str, value: Any) -> dict[str, Any]:
@@ -1332,14 +1107,8 @@ class TelegramBotActions:
         elif domain == "probe_scheduler":
             payload = {field: value}
             update_drive_account_probe_scheduler_setting(self.db, **payload)
-        elif domain == "resource_sources":
-            source_key, _, source_field = field.partition(".")
-            payload = {source_field: value}
-            update_source(self.db, source_key, payload)
         elif domain == "tmdb":
             update_tmdb_setting(self.db, payload={field: value})
-        elif domain == "openlist":
-            update_openlist_setting(self.db, payload={field: value})
         else:
             raise ValueError(f"unsupported setting domain: {domain}")
         self.db.commit()

@@ -1,6 +1,6 @@
 import type { RouteRecordRaw } from 'vue-router'
 
-import { AUDIT_READ, DRIVE_ACCOUNT_READ, NOTIFY_READ, PLUGIN_READ, SYNC_READ, TASK_READ, TASK_WRITE, USER_READ, USER_WRITE } from '@/constants/permissions'
+import { AUDIT_READ, DRIVE_ACCOUNT_READ, NOTIFY_READ, PLUGIN_READ, TASK_READ, TASK_WRITE, USER_READ, USER_WRITE } from '@/constants/permissions'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -63,19 +63,13 @@ export const appRoutes: RouteRecordRaw[] = [
         path: 'tasks/drama',
         name: 'DramaTasks',
         component: () => import('@/views/tasks/DramaTaskView.vue'),
-        meta: { title: '追剧任务', icon: 'Setting', permissions: [TASK_READ] },
-      },
-      {
-        path: 'tasks/sync',
-        name: 'SyncTasks',
-        component: () => import('@/views/tasks/SyncTaskView.vue'),
-        meta: { title: '同步任务', icon: 'Refresh', permissions: [SYNC_READ] },
+        meta: { title: '追剧任务', icon: 'VideoPlay', permissions: [TASK_READ] },
       },
       {
         path: 'extensions/drives',
         name: 'DriveAccounts',
         component: () => import('@/views/extensions/DriveAccountView.vue'),
-        meta: { title: '账号管理', icon: 'Setting', permissions: [DRIVE_ACCOUNT_READ] },
+        meta: { title: '账号管理', icon: 'Cloudy', permissions: [DRIVE_ACCOUNT_READ] },
       },
       {
         path: 'extensions/drives/auth/:accountId',
@@ -84,10 +78,10 @@ export const appRoutes: RouteRecordRaw[] = [
         meta: { title: '账号二次认证', hidden: true, permissions: [DRIVE_ACCOUNT_READ] },
       },
       {
-        path: 'extensions/plugins',
-        name: 'Plugins',
-        component: () => import('@/views/extensions/PluginManagerView.vue'),
-        meta: { title: '插件管理', icon: 'Setting', permissions: [PLUGIN_READ] },
+        path: 'search-sources',
+        name: 'SearchSources',
+        component: () => import('@/views/extensions/SearchSourcesView.vue'),
+        meta: { title: '搜索源管理', icon: 'Search', permissions: [PLUGIN_READ] },
       },
       {
         path: 'extensions/notifications',
@@ -100,25 +94,25 @@ export const appRoutes: RouteRecordRaw[] = [
         name: 'CacheManagement',
         component: () => import('@/views/cache/CacheLayoutView.vue'),
         redirect: '/cache/tmdb',
-        meta: { title: '缓存管理', icon: 'Setting', permissions: [TASK_WRITE] },
+        meta: { title: '缓存管理', icon: 'FolderOpened', permissions: [TASK_WRITE] },
         children: [
           {
             path: 'tmdb',
             name: 'CacheTMDB',
             component: () => import('@/views/extensions/TMDBCacheManageView.vue'),
-            meta: { title: 'TMDB 缓存', icon: 'Setting', permissions: [TASK_WRITE] },
+            meta: { title: 'TMDB 缓存', icon: 'Film', permissions: [TASK_WRITE] },
           },
           {
             path: 'share-links',
             name: 'CacheShareLinks',
             component: () => import('@/views/cache/ShareLinkCacheManageView.vue'),
-            meta: { title: '分享链接缓存', icon: 'Setting', permissions: [TASK_WRITE] },
+            meta: { title: '分享链接缓存', icon: 'Link', permissions: [TASK_WRITE] },
           },
           {
             path: 'proxy-image',
             name: 'CacheProxyImage',
             component: () => import('@/views/cache/ProxyImageCacheManageView.vue'),
-            meta: { title: '代理图片缓存', icon: 'Setting', permissions: [TASK_WRITE] },
+            meta: { title: '代理图片缓存', icon: 'Picture', permissions: [TASK_WRITE] },
           },
         ],
       },
@@ -126,7 +120,7 @@ export const appRoutes: RouteRecordRaw[] = [
         path: 'tmdb-cache',
         name: 'TMDBCacheLegacy',
         redirect: '/cache/tmdb',
-        meta: { title: 'TMDB 缓存', icon: 'Setting', hidden: true, permissions: [TASK_WRITE] },
+        meta: { title: 'TMDB 缓存', icon: 'Film', hidden: true, permissions: [TASK_WRITE] },
       },
       {
         path: 'users',
@@ -150,7 +144,7 @@ export const appRoutes: RouteRecordRaw[] = [
         path: 'extensions/audit-logs',
         name: 'AuditLogs',
         component: () => import('@/views/extensions/AuditLogView.vue'),
-        meta: { title: '审计日志', icon: 'Setting', permissions: [AUDIT_READ] },
+        meta: { title: '审计日志', icon: 'Document', permissions: [AUDIT_READ] },
       },
     ],
   },

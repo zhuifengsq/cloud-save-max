@@ -94,7 +94,9 @@ class QuarkAdapter(BaseCloudDriveAdapter):
         if "headers" in kwargs:
             headers = kwargs["headers"]
             del kwargs["headers"]
-        if self.mparam and "share" in url and self.BASE_URL in url:
+        # Mobile credentials apply to accessing someone else's sharepage only.
+        # Creating a share for our own files uses the PC API and Cookie.
+        if self.mparam and url.startswith(f"{self.BASE_URL}/1/clouddrive/share/sharepage/"):
             url = url.replace(self.BASE_URL, self.BASE_URL_APP)
             kwargs["params"].update(
                 {
@@ -409,6 +411,87 @@ class QuarkAdapter(BaseCloudDriveAdapter):
             if len(file_paths) == 0:
                 break
         return fids
+
+    def create_share_link(self, file_path: str, title: str) -> Dict[str, str]:
+        """Share the exact saved folder through Quark's share task API."""
+        import time
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+        path = "/" + "/".join(part for part in str(file_path or "").replace("\\", "/").split("/") if part)
+        if path == "/":
+            raise ValueError("不能分享网盘根目录")
+        candidates = self.get_fids([path]) or []
+        folder = next(
+            (item for item in candidates if str(item.get("file_path") or item.get("path") or "").rstrip("/") == path),
+            None,
+        )
+        fid = str((folder or {}).get("fid") or "").strip()
+        if not fid:
+            raise ValueError("保存目录不存在，请先执行转存任务")
+        if folder.get("dir") is False or folder.get("is_dir") is False:
+            raise ValueError("保存路径不是文件夹")
+
+        listing = self.ls_dir(fid, max_items=1)
+        if not isinstance(listing, dict) or listing.get("code") != 0:
+            raise RuntimeError("无法读取保存目录")
+        if not (((listing.get("data") or {}).get("list")) or []):
+            raise ValueError("保存目录为空，请先执行转存任务")
+
+        params = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
+        def read_response(method: str, endpoint: str, **kwargs) -> dict:
+            request_params = kwargs.pop("params", params)
+            http_response = self._send_request(
+                method, f"{self.BASE_URL}/1/clouddrive/{endpoint}", params=request_params, timeout=20, **kwargs
+            )
+            status_code = getattr(http_response, "status_code", None)
+            if isinstance(status_code, int) and status_code >= 400:
+                raise RuntimeError(f"夸克分享接口请求失败（HTTP {status_code}），请检查账号登录状态")
+            try:
+                response = http_response.json()
+            except ValueError as exc:
+                status_text = f"HTTP {status_code}" if isinstance(status_code, int) else "未知状态"
+                raise RuntimeError(f"夸克分享接口返回非 JSON（{status_text}），请检查账号 Cookie 或稍后重试") from exc
+            if not isinstance(response, dict):
+                raise RuntimeError("夸克分享接口没有返回有效数据")
+            if response.get("code", 0) != 0:
+                raise RuntimeError(str(response.get("message") or "夸克分享接口调用失败"))
+            return response.get("data") or {}
+
+        created = read_response(
+            "POST", "share",
+            json={"fid_list": [fid], "title": str(title or path.rsplit("/", 1)[-1]), "url_type": 1, "expired_type": 1},
+        )
+        share_id = str(created.get("share_id") or "").strip()
+        task_id = str(created.get("task_id") or "").strip()
+        if not share_id and not task_id:
+            raise RuntimeError("夸克没有返回分享任务 ID")
+        for attempt in range(20):
+            if share_id:
+                break
+            task_data = read_response("GET", "task", params={**params, "task_id": task_id, "retry_index": attempt})
+            share_id = str(task_data.get("share_id") or "").strip()
+            if not share_id:
+                time.sleep(0.5)
+        if not share_id:
+            raise RuntimeError("夸克生成分享链接超时，请稍后重试")
+
+        detail = read_response("POST", "share/password", json={"share_id": share_id})
+        share_url = str(detail.get("share_url") or "").strip()
+        if not share_url.startswith("https://"):
+            raise RuntimeError("夸克没有返回有效分享链接")
+        passcode = str(detail.get("passcode") or "").strip()
+        if passcode:
+            parts = urlsplit(share_url)
+            query = dict(parse_qsl(parts.query, keep_blank_values=True))
+            if "pwd" not in query:
+                query["pwd"] = passcode
+                share_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+        return {
+            "share_url": share_url,
+            "share_id": share_id,
+            "title": str(detail.get("title") or title or ""),
+            "passcode": passcode,
+        }
 
     def extract_url(self, url: str) -> Tuple[Optional[str], str, Any, List]:
         """解析分享链接"""

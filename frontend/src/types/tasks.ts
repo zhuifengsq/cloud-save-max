@@ -1,6 +1,13 @@
 export type TaskExtraConfig = Record<string, any> & {
   auto_update_shareurl?: boolean | null
   auto_update_115_shareurl?: boolean | null
+  share_link?: TaskShareLink | null
+  saved_latest?: {
+    episode?: number | null
+    season?: number | null
+    name?: string | null
+    at?: string | null
+  } | null
 }
 
 export type TaskExecutionItem = {
@@ -14,7 +21,17 @@ export type TaskExecutionItem = {
   stage?: string | null
   run_log?: string | null
   adapter_snapshot: Record<string, any>
-  plugins_snapshot: Array<Record<string, any>>
+}
+
+export type TaskShareLink = {
+  share_url: string
+  share_id: string
+  title: string
+  drive_type: string
+  account_name: string
+  passcode?: string | null
+  expires_in_days?: number | null
+  saved_at?: string | null
 }
 
 export type TaskItem = {

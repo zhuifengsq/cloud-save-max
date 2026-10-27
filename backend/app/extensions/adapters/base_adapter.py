@@ -325,6 +325,10 @@ class BaseCloudDriveAdapter(ABC):
         """
         return {"code": 0, "message": "success"}
 
+    def create_share_link(self, file_path: str, title: str) -> Dict[str, str]:
+        """Create a link for a saved cloud-drive path when the drive supports sharing."""
+        raise NotImplementedError(f"{self.DRIVE_NAME}暂不支持创建分享链接")
+
     def get_account_info(self) -> Any:
         """获取账户信息（可选实现）"""
         return False

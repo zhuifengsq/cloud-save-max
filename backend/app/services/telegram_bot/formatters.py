@@ -79,7 +79,7 @@ def _nested_value(target: dict[str, Any], path: str) -> Any:
 def home_message() -> str:
     return (
         "TG 控制台已就绪\n\n"
-        "可通过菜单查看任务、同步、资源搜索、账号管理、系统设置和运行状态。\n"
+        "可通过菜单查看任务、资源搜索、账号管理、系统设置和运行状态。\n"
         "复杂输入会进入向导模式，随时可用 /cancel 取消。"
     )
 
@@ -87,7 +87,7 @@ def home_message() -> str:
 def home_keyboard() -> dict[str, Any]:
     return keyboard(
         [
-            [button("📋 任务管理", "menu", "tasks"), button("🔄 同步任务", "menu", "sync")],
+            [button("📋 任务管理", "menu", "tasks")],
             [button("🔎 资源搜索", "menu", "search"), button("👥 账号管理", "menu", "accounts")],
             [button("⚙️ 系统设置", "menu", "settings"), button("📊 运行状态", "menu", "status")],
         ]
@@ -119,10 +119,6 @@ def status_message(summary: dict[str, Any]) -> str:
                 "🧩 任务",
                 f"总数: {summary.get('tasks_total', 0)}",
                 f"启用: {summary.get('tasks_enabled', 0)}",
-                "",
-                "🔄 同步",
-                f"总数: {summary.get('sync_total', 0)}",
-                f"运行中: {summary.get('sync_running', 0)}",
                 "",
                 "🎬 追剧执行",
                 f"成功: {drama.get('execution_success', 0)}",
@@ -159,7 +155,6 @@ def tasks_message(payload: dict[str, Any], *, title: str = "任务列表") -> st
 
 def task_detail_message(item: dict[str, Any]) -> str:
     execution = item.get("latest_execution") or {}
-    linked_sync = item.get("sync_task_names") or item.get("sync_task_uids") or []
     status_text = "🟢 启用" if item.get("enabled") else "⚪ 停用"
     tmdb_media_type = str(item.get("tmdb_media_type") or "").strip() or "-"
     tmdb_id = item.get("tmdb_id") or "-"
@@ -173,7 +168,6 @@ def task_detail_message(item: dict[str, Any]) -> str:
         f"💾 保存路径: {_short_text(item.get('savepath') or '-', 88)}",
         f"👤 执行账号: {item.get('account_name') or '-'}",
         f"🎬 TMDB: {tmdb_media_type} / {tmdb_id}",
-        f"🔗 关联同步: {_short_text(', '.join(linked_sync) or '-', 88)}",
         "",
         f"🚦 最近执行: {exec_status}",
         f"📣 执行说明: {exec_message}",
@@ -191,64 +185,6 @@ def task_detail_keyboard(task_id: int, enabled: bool, *, back_page: int = 1, tas
             [button("✏️ 编辑", "tsk", "edit", task_id), button("🔎 搜索换链", "tsk", "search", task_id)],
             [button("🧾 执行记录", "tsk", "execs", task_id), button("🗑️ 删除", "tsk", "delete", task_id)],
             [list_button, button("🏠 首页", "home")],
-        ]
-    )
-
-
-def sync_tasks_message(payload: dict[str, Any]) -> str:
-    items = payload.get("items") or []
-    lines = [f"🔄 同步任务 · 第 {payload.get('page', 1)} 页"]
-    if not items:
-        lines.append("暂无数据")
-    for item in items:
-        status = "🟢 启用" if item.get("enabled") else "⚪ 停用"
-        lines.append("")
-        lines.append(f"#{item.get('id')} {_short_text(item.get('name') or '-', 58)}")
-        lines.append(f"🏷️ {item.get('mode') or '-'} · {status}")
-        source = item.get("source", {}) or {}
-        target = item.get("target", {}) or {}
-        if source.get("path"):
-            lines.append(f"📥 {_short_text(source.get('path') or '-', 68)}")
-        if target.get("path"):
-            lines.append(f"📤 {_short_text(target.get('path') or '-', 68)}")
-    lines.append("")
-    lines.append(f"共 {payload.get('total', 0)} 条")
-    return truncate("\n".join(lines))
-
-
-def sync_detail_message(item: dict[str, Any]) -> str:
-    execution = item.get("latest_execution") or {}
-    linked_drama = item.get("drama_task_names") or item.get("drama_task_uids") or []
-    status_text = "🟢 启用" if item.get("enabled") else "⚪ 停用"
-    source = item.get("source", {}) or {}
-    target = item.get("target", {}) or {}
-    exec_status = str(execution.get("status") or "-")
-    exec_message = _short_text(execution.get("message") or "-", 72)
-    lines = [
-        f"🔄 同步详情 · #{item.get('id')}",
-        f"📝 {_short_text(item.get('name') or '-', 72)}",
-        f"🏷️ {item.get('mode') or '-'} · {status_text}",
-        "",
-        f"📥 源: {source.get('type') or '-'}",
-        f"   {_short_text(source.get('path') or '-', 88)}",
-        f"📤 目标: {target.get('type') or '-'}",
-        f"   {_short_text(target.get('path') or '-', 88)}",
-        f"🎬 关联追剧: {_short_text(', '.join(linked_drama) or '-', 88)}",
-        "",
-        f"🚦 最近执行: {exec_status}",
-        f"📣 执行说明: {exec_message}",
-    ]
-    return truncate("\n".join(lines))
-
-
-def sync_detail_keyboard(sync_task_id: int, enabled: bool, *, back_page: int = 1) -> dict[str, Any]:
-    toggle_text = "⏸️ 停用" if enabled else "▶️ 启用"
-    return keyboard(
-        [
-            [button("▶️ 运行", "syn", "run", sync_task_id), button("⏹️ 取消运行", "syn", "cancel", sync_task_id)],
-            [button(toggle_text, "syn", "toggle", sync_task_id), button("✏️ 编辑", "syn", "edit", sync_task_id)],
-            [button("🧾 执行记录", "syn", "execs", sync_task_id), button("🗑️ 删除", "syn", "delete", sync_task_id)],
-            [button("📋 返回列表", "syn", "list", back_page), button("🏠 首页", "home")],
         ]
     )
 

@@ -72,7 +72,6 @@ class TelegramBotManager:
                         {"command": "start", "description": "启动控制台"},
                         {"command": "menu", "description": "主菜单"},
                         {"command": "tasks", "description": "任务管理"},
-                        {"command": "sync", "description": "同步任务"},
                         {"command": "accounts", "description": "账号管理"},
                         {"command": "search", "description": "资源搜索"},
                         {"command": "settings", "description": "系统设置"},

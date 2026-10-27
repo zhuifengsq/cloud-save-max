@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import time
 import logging
-import json
 from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -21,15 +20,10 @@ from app.services.tmdb_cache import purge_cold_cache, refresh_expired_cache, ref
 from app.services.tmdb_cache_scheduler import get_or_create_tmdb_cache_scheduler_setting
 from app.services.drive_account_probe_scheduler import get_or_create_drive_account_probe_scheduler_setting
 from app.services.drive_accounts import probe_drive_account, sign_in_drive_account
-from app.services.sync_execution_cleanup import purge_old_sync_executions
-from app.services.sync_execution_recovery import abort_stale_running_sync_executions
-from app.services.sync_task_triggers import should_trigger_linked_sync_for_drama_execution, trigger_linked_sync_tasks_async
 from app.services.audit_log_scheduler import get_or_create_audit_log_scheduler_setting, purge_old_audit_logs
 from app.models.drive_account import DriveAccount
 from app.extensions.runtime.account_manager import DatabaseAccountManager
 from app.extensions.runtime.task_executor import TaskExecutor
-from app.extensions.runtime.plugin_loader import sync_plugin_definitions
-from app.extensions.runtime.plugin_registry import PluginRegistry
 from app.core.errors import ApiError
 
 
@@ -48,18 +42,6 @@ class TaskSchedulerManager:
         self.scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
         self.scheduler.start()
         self.reload()
-        try:
-            self.scheduler.add_job(
-                run_sync_execution_recovery,
-                trigger=CronTrigger(minute="*/10", timezone="Asia/Shanghai"),
-                id="sync_execution_recovery",
-                replace_existing=True,
-                max_instances=1,
-                coalesce=True,
-                misfire_grace_time=60,
-            )
-        except Exception as e:
-            logger.error(f"同步执行兜底调度加载失败: {e}")
 
     def shutdown(self) -> None:
         if self.scheduler is None:
@@ -225,13 +207,6 @@ def run_drama_tasks() -> None:
     task_ids: list[int] = []
     task_payloads: list[dict[str, Any]] = []
     with SessionLocal() as db:
-        try:
-            from app.extensions.runtime.plugin_loader import sync_plugin_definitions
-
-            sync_plugin_definitions(db)
-            db.commit()
-        except Exception:
-            db.rollback()
         rows = (
             db.execute(select(Task.id, Task.task_uid, Task.account_name, Task.shareurl).where(Task.enabled.is_(True), Task.task_type == "drama").order_by(Task.id.asc()))
             .all()
@@ -253,8 +228,6 @@ def run_drama_tasks() -> None:
             account_manager = None
 
     sections: list[str] = []
-    success_task_uids: list[str] = []
-    plugin_candidates: list[object] = []
 
     for task_id in task_ids:
         max_attempts = 3
@@ -269,26 +242,12 @@ def run_drama_tasks() -> None:
                         task,
                         account_manager=account_manager,
                         init_account_for_task=False,
-                        defer_plugins=True,
-                        keep_runtime_tree=True,
                     )
                     should_notify = False
                     try:
                         section, should_notify = build_task_section(task, execution)
                         if should_notify and section:
                             sections.append(section)
-                    except Exception:
-                        pass
-                    try:
-                        if should_trigger_linked_sync_for_drama_execution(execution):
-                            uid = str(getattr(task, "task_uid", "") or "").strip()
-                            if uid:
-                                success_task_uids.append(uid)
-                    except Exception:
-                        pass
-                    try:
-                        if getattr(execution, "status", None) == "success" and bool(getattr(execution, "_has_new_files", False)):
-                            plugin_candidates.append(execution)
                     except Exception:
                         pass
                     db.commit()
@@ -312,97 +271,6 @@ def run_drama_tasks() -> None:
                 db.commit()
             except Exception:
                 db.rollback()
-    if success_task_uids:
-        trigger_linked_sync_tasks_async(success_task_uids, source="scheduler.run_drama_tasks")
-    plugin_candidates_count = len(plugin_candidates)
-    if not plugin_candidates:
-        return
-    try:
-        with SessionLocal() as pdb:
-            try:
-                sync_plugin_definitions(pdb)
-                pdb.commit()
-            except Exception:
-                pdb.rollback()
-                logger.exception("追剧调度后置插件: 插件定义同步失败")
-            try:
-                plugins = PluginRegistry(pdb).load_active_plugins()
-                pdb.rollback()
-            except Exception:
-                plugins = []
-                logger.exception("追剧调度后置插件: 加载插件失败")
-    except Exception:
-        plugins = []
-        logger.exception("追剧调度后置插件: 创建插件注册表失败")
-    if not plugins:
-        logger.warning("追剧调度后置插件: 无可用插件（可能尚未安装或全部禁用）")
-        return
-    deduped: dict[str, tuple[object, dict[str, Any], object, object]] = {}
-    for item in plugins:
-        plugin = item.get("instance")
-        definition = item.get("definition")
-        plugin_key = str(getattr(plugin, "plugin_name", "") or getattr(definition, "plugin_key", "") or "").strip()
-        if not bool(getattr(plugin, "is_active", False)):
-            continue
-        if not hasattr(plugin, "run"):
-            continue
-        if not plugin_key:
-            continue
-        base_task_cfg = getattr(plugin, "default_task_config", None)
-        if not isinstance(base_task_cfg, dict):
-            base_task_cfg = {}
-        for execution in plugin_candidates:
-            task_data = getattr(execution, "_runtime_task_data", None)
-            adapter = getattr(execution, "_runtime_adapter", None)
-            tree = getattr(execution, "_runtime_tree", None)
-            if not isinstance(task_data, dict) or adapter is None or tree is None:
-                continue
-            merged_cfg = dict(base_task_cfg)
-            addition_cfg = (task_data.get("addition") or {}).get(plugin_key)
-            if isinstance(addition_cfg, dict):
-                merged_cfg.update(addition_cfg)
-            cfg_key = json.dumps(merged_cfg, ensure_ascii=False, sort_keys=True)
-            context_key = json.dumps(
-                {
-                    "taskname": str(task_data.get("taskname") or ""),
-                    "savepath": str(task_data.get("savepath") or ""),
-                    "task_type": str(task_data.get("task_type") or ""),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-            account_key = f"{str(getattr(adapter, 'DRIVE_TYPE', '') or '')}:{str(getattr(adapter, 'account_name', '') or '')}"
-            dedupe_key = f"{plugin_key}|{account_key}|{cfg_key}|{context_key}"
-            if dedupe_key not in deduped:
-                deduped[dedupe_key] = (plugin, task_data, adapter, tree)
-    for _k, payload in deduped.items():
-        plugin, task_data, adapter, tree = payload
-        plugin_key = str(getattr(plugin, "plugin_name", "") or getattr(plugin, "__class__", type(plugin)).__name__ or "").strip()
-        try:
-            plugin.run(task_data, account=adapter, tree=tree)
-        except Exception:
-            logger.exception("追剧调度后置插件: 执行失败 plugin=%s", plugin_key)
-
-
-def run_sync_execution_recovery() -> None:
-    with SessionLocal() as db:
-        try:
-            n = abort_stale_running_sync_executions(db, threshold_seconds=2 * 60 * 60)
-            cleanup = purge_old_sync_executions(db, keep_per_task=3)
-            if n or int(cleanup.get("deleted_executions") or 0) or int(cleanup.get("deleted_files") or 0):
-                db.commit()
-                if cleanup.get("deleted_executions") or cleanup.get("deleted_files"):
-                    pass
-            else:
-                db.rollback()
-        except OperationalError as e:
-            logger.error(f"同步执行兜底调度失败: {e}")
-            db.rollback()
-        except Exception as e:
-            logger.error(f"同步执行兜底调度异常: {e}")
-            db.rollback()
-
-
 def run_tmdb_cache_refresh() -> None:
     with SessionLocal() as db:
         setting = get_or_create_tmdb_cache_scheduler_setting(db)

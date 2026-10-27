@@ -1,5 +1,5 @@
 import { http } from '@/api/http'
-import type { DriveAccountItem, DriveTypeItem, PluginItem } from '@/types/extensions'
+import type { DriveAccountItem, DriveTypeItem } from '@/types/extensions'
 
 export async function fetchDriveAccounts() {
   const { data } = await http.get<DriveAccountItem[]>('/drive-accounts')
@@ -129,35 +129,5 @@ export async function patchDriveAccountProbeScheduler(payload: Partial<{ enabled
 
 export async function refreshDriveAccountProfiles() {
   const { data } = await http.post<DriveAccountItem[]>('/drive-accounts/refresh-profiles')
-  return data
-}
-
-export async function fetchPlugins() {
-  const { data } = await http.get<PluginItem[]>('/plugins')
-  return data
-}
-
-export async function refreshPlugins() {
-  const { data } = await http.post<PluginItem[]>('/plugins/refresh')
-  return data
-}
-
-export async function updatePlugin(pluginKey: string, payload: Partial<{ enabled: boolean; priority: number; config: Record<string, any> }>) {
-  const { data } = await http.patch<PluginItem>(`/plugins/${pluginKey}`, payload)
-  return data
-}
-
-export async function fetchSyncPlugins() {
-  const { data } = await http.get<PluginItem[]>('/sync-plugins')
-  return data
-}
-
-export async function refreshSyncPlugins() {
-  const { data } = await http.post<PluginItem[]>('/sync-plugins/refresh')
-  return data
-}
-
-export async function updateSyncPlugin(pluginKey: string, payload: Partial<{ enabled: boolean; priority: number; config: Record<string, any> }>) {
-  const { data } = await http.patch<PluginItem>(`/sync-plugins/${pluginKey}`, payload)
   return data
 }

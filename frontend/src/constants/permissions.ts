@@ -14,7 +14,3 @@ export const TASK_WRITE = 'task:write'
 export const TASK_RUN = 'task:run'
 export const AUDIT_READ = 'audit:read'
 export const AUDIT_WRITE = 'audit:write'
-
-export const SYNC_READ = 'sync:read'
-export const SYNC_WRITE = 'sync:write'
-export const SYNC_RUN = 'sync:run'

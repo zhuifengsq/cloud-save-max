@@ -9,21 +9,12 @@ import type {
   TaskExecutionItem,
   TaskItem,
   TaskSchedulerSetting,
+  TaskShareLink,
 } from '@/types/tasks'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 
 export async function fetchTasks() {
   const { data } = await http.get<TaskItem[]>('/tasks')
-  return data
-}
-
-export async function syncDramaSavepathSnapshots() {
-  const { data } = await http.post('/tasks/drama/savepath-snapshots/sync')
-  return data
-}
-
-export async function syncSingleSavepathSnapshot(taskId: number) {
-  const { data } = await http.post(`/tasks/${taskId}/savepath-snapshot/sync`)
   return data
 }
 
@@ -33,7 +24,6 @@ export async function createTask(payload: {
   taskname: string
   shareurl: string
   savepath: string
-  sync_task_uids?: string[]
   pattern?: string | null
   replace?: string | null
   ignore_extension?: boolean
@@ -55,7 +45,6 @@ export async function updateTask(
     taskname: string
     shareurl: string
     savepath: string
-    sync_task_uids: string[]
     pattern: string | null
     replace: string | null
     ignore_extension: boolean
@@ -78,6 +67,11 @@ export async function setTaskStatus(taskId: number, enabled: boolean) {
 
 export async function runTask(taskId: number) {
   const { data } = await http.post<TaskExecutionItem>(`/tasks/${taskId}/run`)
+  return data
+}
+
+export async function createTaskShareLink(taskId: number) {
+  const { data } = await http.post<TaskShareLink>(`/tasks/${taskId}/share`, undefined, { headers: { 'X-Silent-Toast': '1' } })
   return data
 }
 

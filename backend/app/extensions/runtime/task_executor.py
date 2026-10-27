@@ -12,13 +12,9 @@ from sqlalchemy.orm import Session
 from treelib import Tree
 
 from app.core.errors import bad_request
-from app.db.session import SessionLocal
 from app.extensions.runtime.account_manager import DatabaseAccountManager
 from app.extensions.runtime.drama_executor import DramaTaskExecutor, SkipTask
 from app.extensions.runtime.execution_log import ExecutionLog
-from app.extensions.runtime.plugin_hooks import PluginHookRunner
-from app.extensions.runtime.plugin_loader import sync_plugin_definitions
-from app.extensions.runtime.plugin_registry import PluginRegistry
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
 from app.services.drama_share_autoupdate import is_auto_update_task, resolve_drama_shareurl_update
@@ -44,7 +40,6 @@ class ExecutionPayload:
     stage: str | None
     run_log: str | None
     adapter_snapshot: dict[str, Any]
-    plugins_snapshot: list[dict[str, Any]]
 
 
 class TaskExecutor:
@@ -91,15 +86,6 @@ class TaskExecutor:
             tree.create_node(str(name), node_id, parent='root')
         return tree
 
-    def _execute_drama_task(self, adapter: Any, task_data: dict[str, Any], log: ExecutionLog | None) -> Tree:
-        executor = DramaTaskExecutor(adapter=adapter, task_data=task_data, log=log)
-        tree = executor.execute()
-        try:
-            setattr(tree, "_transfer_count", int(getattr(executor, "transfer_count", 0) or 0))
-        except Exception:
-            pass
-        return tree
-
     def run_task(
         self,
         task: Task,
@@ -108,11 +94,8 @@ class TaskExecutor:
         persist_execution: bool = True,
         account_manager: DatabaseAccountManager | None = None,
         init_account_for_task: bool = True,
-        defer_plugins: bool = False,
-        keep_runtime_tree: bool = False,
         _auto_update_depth: int = 0,
         _tried_shareurls: set[str] | None = None,
-        _fallback_candidates: list[dict] | None = None,
     ) -> TaskExecution:
         if not task.enabled:
             raise bad_request('TASK_DISABLED', '任务已禁用')
@@ -126,17 +109,6 @@ class TaskExecutor:
         log.line(f"保存路径: {task.savepath}")
         log.line("")
 
-        if not defer_plugins:
-            try:
-                with SessionLocal() as pdb:
-                    sync_plugin_definitions(pdb)
-                    pdb.commit()
-            except Exception:
-                pass
-            try:
-                self.db.expire_all()
-            except Exception:
-                pass
         external_manager = account_manager is not None
         if account_manager is None:
             account_manager = DatabaseAccountManager(self.db)
@@ -179,100 +151,9 @@ class TaskExecutor:
                     task_data["tmdb_episode_weekdays"] = []
 
 
-        # ==================== 影巢任务处理 ====================
-        # 如果是影巢任务，从HDHive获取最新分享链接并自动定位目录
-        if task_data.get('extra', {}).get('hive_item_id'):
-            log.set_stage("hive_resolve")
-            log.section("影巢任务")
-            hive_item_id = task_data['extra']['hive_item_id']
-            log.line(f"关联HDHive资源: #{hive_item_id}")
-            
-            try:
-                from app.services.hive_client import get_hive_client
-                hive_client = get_hive_client()
-                
-                if hive_client.is_available():
-                    latest_url = hive_client.get_resource_latest_url(int(hive_item_id))
-                    if latest_url:
-                        old_url = task_data.get('shareurl', '')
-                        log.line(f"OK: 获取到最新链接")
-                        
-                        # 自动定位目录：调用 fetch_share_file_list_grouped 找到有文件的目录
-                        try:
-                            from app.services.share_preview_batch import fetch_share_file_list_grouped
-                            from app.services.drama_share_autoupdate import _rewrite_shareurl_with_fid
-                            
-                            account_name = task_data.get('account_name')
-                            groups = fetch_share_file_list_grouped(
-                                self.db, 
-                                latest_url, 
-                                account_name=account_name
-                            )
-                            
-                            if groups:
-                                # 取第一个有文件的目录的fid
-                                first_group = groups[0]
-                                files, fid, ts, dir_name = first_group
-                                if fid:
-                                    latest_url = _rewrite_shareurl_with_fid(latest_url, fid)
-                                    log.line(f"自动定位目录: {dir_name or fid}")
-                                    log.line(f"文件数: {len(files)}")
-                            
-                            # 影巢任务禁用自动换链
-                            if "extra" not in task_data:
-                                task_data["extra"] = {}
-                            task_data["extra"]["auto_update_shareurl"] = False
-                            task_data["extra"]["auto_update_115_shareurl"] = False
-                            log.line("已禁用自动换链")
-                        except Exception as e:
-                            logger.warning(f"自动定位目录失败: {e}")
-                            log.line(f"WARN: 自动定位失败，使用原始链接")
-                        
-                        task_data['shareurl'] = latest_url
-                        if old_url != latest_url:
-                            log.line(f"链接已更新")
-                    else:
-                        log.line("WARN: 未获取到链接，使用原链接")
-                else:
-                    log.line("WARN: HDHive服务不可用，使用原链接")
-            except Exception as e:
-                logger.error(f"影巢任务获取链接失败: {e}")
-                log.line(f"WARN: 获取失败 - {str(e)}，使用原链接")
-        # ==================== 影巢任务处理结束 ====================
 
         if init_account_for_task:
             account_manager.init_for_tasks([task_data])
-        default_adapter = account_manager.get_default_adapter()
-        plugins = []
-        should_defer_plugins = bool(defer_plugins) or str(task_data.get("task_type") or "") == "drama"
-        if not should_defer_plugins:
-            registry = PluginRegistry(self.db)
-            log.set_stage("load_plugins")
-            # log.section("载入插件")
-            plugins = registry.load_active_plugins()
-            if plugins:
-                # log.line("启用插件: " + ", ".join([p["definition"].plugin_key for p in plugins]))
-                for item in plugins:
-                    definition = item.get("definition")
-                    config = item.get("config")
-                    instance = item.get("instance")
-                    key = getattr(definition, "plugin_key", None) or ""
-                    rs = getattr(config, "runtime_status", None)
-                    err = getattr(config, "last_error", None)
-                    active = bool(getattr(instance, "is_active", False))
-                    meta = []
-                    if rs:
-                        meta.append(f"status={rs}")
-                    meta.append(f"is_active={'Y' if active else 'N'}")
-                    if err:
-                        meta.append(f"error={str(err)}")
-                    # log.line(f"- {key} " + " ".join(meta))
-            else:
-                log.line("启用插件: (无)")
-            log.set_stage("plugin_task_before")
-            # log.section("插件前置")
-            task_list = PluginHookRunner.task_before(plugins, [task_data], default_adapter, emit_line=log.line)
-            task_data = task_list[0] if task_list else task_data
         adapter = account_manager.get_adapter_for_task(task_data)
         if adapter is None and external_manager:
             try:
@@ -284,7 +165,7 @@ class TaskExecutor:
                 adapter = None
         started_at = datetime.now()
         task_id = int(getattr(task, "id", 0) or 0)
-        snapshot_row = None
+        drama_executor = None
 
         if adapter is None:
             log.set_stage("select_account")
@@ -300,7 +181,6 @@ class TaskExecutor:
                 stage=log.stage,
                 run_log=log.render(),
                 adapter_snapshot=json.dumps({}, ensure_ascii=False),
-                plugins_snapshot=json.dumps([], ensure_ascii=False),
             )
             if not persist_execution:
                 execution.id = 0
@@ -310,7 +190,6 @@ class TaskExecutor:
             return execution
 
         try:
-            autoupdate_db_changed = False
             log.set_stage("validate_account")
             log.section("验证账户")
             if not getattr(adapter, 'is_active', False):
@@ -319,229 +198,26 @@ class TaskExecutor:
             if task_data.get('task_type') == 'drama':
                 log.set_stage("execute_drama")
                 log.section("转存任务")
-                tree = self._execute_drama_task(adapter, task_data, log)
+                drama_executor = DramaTaskExecutor(adapter=adapter, task_data=task_data, log=log)
+                tree = drama_executor.execute()
             else:
                 log.set_stage("execute_generic")
                 log.section("转存任务")
                 tree = self._execute_with_adapter(adapter, task_data)
-            has_new_files = False
-            if str(task_data.get("task_type") or "") == "drama":
-                transfer_count = None
-                if hasattr(tree, "_transfer_count"):
+            if persist_execution and task_id > 0 and task_data.get('task_type') == 'drama':
+                # 已存进度：执行时顺手算出来的最大集数，写进任务 extra（不建快照表）
+                saved_latest = getattr(drama_executor, "saved_latest", None)
+                if isinstance(saved_latest, dict) and saved_latest:
                     try:
-                        transfer_count = int(getattr(tree, "_transfer_count") or 0)
+                        from app.services.task_share_links import merge_task_extra
+
+                        merge_task_extra(task, {"saved_latest": saved_latest})
+                        self.db.flush()
+                        episode = saved_latest.get("episode")
+                        if episode:
+                            log.line(f"已存进度: 第{int(episode)}集")
                     except Exception:
-                        transfer_count = 0
-                if transfer_count is None:
-                    try:
-                        transfer_count = int(getattr(tree, "size", lambda: 0)() > 1)
-                    except Exception:
-                        transfer_count = 0
-                has_new_files = bool(transfer_count)
-            if keep_runtime_tree:
-                setattr(task, "_runtime_tree", tree)
-            setattr(task, "_runtime_task_data", task_data)
-            setattr(task, "_runtime_adapter", adapter)
-            setattr(task, "_runtime_has_new_files", has_new_files)
-            if not defer_plugins:
-                if str(task_data.get("task_type") or "") == "drama":
-                    if not has_new_files:
-                        log.set_stage("plugin_run")
-                        log.section("插件执行")
-                        log.line("跳过: 本次无新增文件")
-                    else:
-                        registry = PluginRegistry(self.db)
-                        log.set_stage("load_plugins")
-                        plugins = registry.load_active_plugins()
-                        log.set_stage("plugin_run")
-                        log.section("插件执行")
-                        if not plugins:
-                            log.line("无可执行插件")
-                        else:
-                            for item in plugins:
-                                definition = item.get("definition")
-                                instance = item.get("instance")
-                                key = getattr(definition, "plugin_key", None) or ""
-                                if not bool(getattr(instance, "is_active", False)):
-                                    log.line(f"SKIP: {key}（is_active=false）")
-                                    continue
-                                if not hasattr(instance, "run"):
-                                    log.line(f"SKIP: {key}（缺少 run）")
-                                    continue
-                                log.line(f"RUN: {key}")
-                        task_data = PluginHookRunner.run(plugins, task_data, adapter, tree, emit_line=log.line)
-                        log.set_stage("plugin_task_after")
-                        log.section("插件收尾")
-                        log.line("说明: task_after 为可选钩子，缺少 task_after 不影响插件在“插件执行(run)”阶段运行。")
-                        if plugins:
-                            for item in plugins:
-                                definition = item.get("definition")
-                                instance = item.get("instance")
-                                key = getattr(definition, "plugin_key", None) or ""
-                                if not bool(getattr(instance, "is_active", False)):
-                                    log.line(f"SKIP: {key}（is_active=false）")
-                                    continue
-                                if not hasattr(instance, "task_after"):
-                                    log.line(f"INFO: {key}（无 task_after）")
-                                    continue
-                                log.line(f"RUN: {key}（task_after）")
-                        PluginHookRunner.task_after(plugins, [task_data], default_adapter or adapter, emit_line=log.line)
-                else:
-                    log.set_stage("plugin_run")
-                    log.section("插件执行")
-                    if not plugins:
-                        log.line("无可执行插件")
-                    else:
-                        for item in plugins:
-                            definition = item.get("definition")
-                            instance = item.get("instance")
-                            key = getattr(definition, "plugin_key", None) or ""
-                            if not bool(getattr(instance, "is_active", False)):
-                                # log.line(f"SKIP: {key}（is_active=false）")
-                                continue
-                            if not hasattr(instance, "run"):
-                                log.line(f"SKIP: {key}（缺少 run）")
-                                continue
-                            log.line(f"RUN: {key}")
-                    task_data = PluginHookRunner.run(plugins, task_data, adapter, tree, emit_line=log.line)
-                    log.set_stage("plugin_task_after")
-                    log.section("插件收尾")
-                    log.line("说明: task_after 为可选钩子，缺少 task_after 不影响插件在“插件执行(run)”阶段运行。")
-                    if plugins:
-                        for item in plugins:
-                            definition = item.get("definition")
-                            instance = item.get("instance")
-                            key = getattr(definition, "plugin_key", None) or ""
-                            if not bool(getattr(instance, "is_active", False)):
-                                # log.line(f"SKIP: {key}（task_after, is_active=false）")
-                                continue
-                            if not hasattr(instance, "task_after"):
-                                log.line(f"INFO: {key}（无 task_after）")
-                                continue
-                            log.line(f"RUN: {key}（task_after）")
-                    PluginHookRunner.task_after(plugins, [task_data], default_adapter or adapter, emit_line=log.line)
-            if persist_execution and task_id > 0:
-                try:
-                    from app.services.task_savepath_snapshot import capture_and_upsert_snapshot
-                    account_name = str(getattr(adapter, "account_name", "") or getattr(task, "account_name", "") or "").strip()
-                    snapshot_row = capture_and_upsert_snapshot(
-                        self.db,
-                        task_uid=str(getattr(task, "task_uid", "") or "").strip(),
-                        savepath=task_data.get("savepath"),
-                        adapter=adapter,
-                        account_name=account_name,
-                        emit_line=log.line,
-                    )
-                    if snapshot_row is not None:
-                        self.db.commit()
-                        try:
-                            self.db.refresh(snapshot_row)
-                        except Exception:
-                            pass
-                except Exception:
-                    snapshot_row = None
-                # 自动更新文件时间过滤
-                try:
-                    import json as _json
-                    _raw_addition = getattr(task, "addition_json", None)
-                    addition = dict(_json.loads(_raw_addition) if _raw_addition else {})
-                    _auto_upd = str(addition.get("auto_update_file_min_date") or "").strip()
-                    if _auto_upd == "1" and snapshot_row is not None:
-                        from app.services.task_savepath_snapshot import resolve_saved_latest_progress
-                        from app.services.drama_update_progress import resolve_tmdb_latest_aired_episode
-                        from app.services.tmdb_cache import get_tmdb_detail_cached
-                        files = list(_json.loads(getattr(snapshot_row, "files_json", None) or "[]") or [])
-                        if files:
-                            saved_season, saved_episode, latest_name = resolve_saved_latest_progress(
-                                self.db,
-                                task_uid=str(getattr(task, "task_uid", "") or "").strip(),
-                                files=files,
-                            )
-                            if latest_name and saved_season is not None and saved_episode is not None:
-                                # 检查是否达到TMDB最新集数
-                                tmdb_id = int(getattr(task, "tmdb_id", 0) or 0)
-                                tmdb_media_type = str(getattr(task, "tmdb_media_type", "") or "").strip().lower()
-                                if tmdb_id > 0 and tmdb_media_type == "tv":
-                                    configured, tmdb_detail, _u, _e, _r = get_tmdb_detail_cached(self.db, media_type="tv", tmdb_id=tmdb_id)
-                                    if isinstance(tmdb_detail, dict):
-                                        tmdb_latest_season, tmdb_latest_episode, _ = resolve_tmdb_latest_aired_episode(tmdb_detail)
-                                        if tmdb_latest_season is not None and tmdb_latest_episode is not None:
-                                            if (int(saved_season) or 0, int(saved_episode)) >= (int(tmdb_latest_season) or 1, int(tmdb_latest_episode)):
-                                                matched = [f for f in files if str(f.get("file_name") or "").strip() == str(latest_name).strip()]
-                                                if matched:
-                                                    file_time = str(matched[0].get("updated_at") or "").strip()
-                                                    if file_time:
-                                                        try:
-                                                            _ts = int(file_time)
-                                                            if _ts > 1e12:
-                                                                _ts = _ts / 1000
-                                                            _date_str = datetime.utcfromtimestamp(_ts).strftime("%Y-%m-%d")
-                                                        except Exception:
-                                                            _date_str = ""
-                                                        if _date_str:
-                                                            old_date = str(addition.get("file_min_date") or "").strip()
-                                                            addition["file_min_date"] = _date_str
-                                                            task.addition_json = _json.dumps(addition, ensure_ascii=False)
-                                                            self.db.commit()
-                                                            log.line(f"自动更新文件时间过滤: {old_date or '(无)'} -> {_date_str}")
-                except Exception:
-                    pass
-            if str(task_data.get("task_type") or "") == "drama" and is_auto_update_task(self.db, task, respect_toggle=True):
-                log.set_stage("shareurl_autoupdate_after")
-                log.section("自动换链")
-                if _tried_shareurls is None:
-                    _tried_shareurls = set()
-                if _fallback_candidates is None:
-                    _fallback_candidates = []
-                try:
-                    update_result = resolve_drama_shareurl_update(self.db, task, respect_toggle=True, tried_shareurls=_tried_shareurls, fallback_candidates=_fallback_candidates)
-                    autoupdate_db_changed = bool(update_result.get("db_changed"))
-                    if bool(update_result.get("updated")):
-                        season = update_result.get("season")
-                        episode = update_result.get("episode")
-                        se = ""
-                        if season is not None and episode is not None:
-                            se = f" S{int(season):02d}E{int(episode):02d}"
-                        log.line(
-                            "OK: 自动换链成功"
-                            f"{se} old={str(update_result.get('old_shareurl') or '').strip()}"
-                            f" new={str(update_result.get('new_shareurl') or '').strip()}"
-                        )
-                    elif bool(update_result.get("checked")):
-                        reason = str(update_result.get("reason") or "未找到更高集数链接")
-                        detail = update_result.get("reason_detail")
-                        if isinstance(detail, dict) and detail:
-                            log.line(f"跳过: {reason}")
-                        else:
-                            log.line(f"跳过: {reason}")
-                    # 换链成功才递归，其他情况直接终止
-                    if bool(update_result.get("updated")) and _auto_update_depth < 5:
-                        try:
-                            self.db.commit()
-                            self.db.refresh(task)
-                            log.line("换链后立即再次执行任务")
-                            re_execution = self.run_task(
-                                task,
-                                persist_execution=persist_execution,
-                                account_manager=account_manager,
-                                init_account_for_task=False,
-                                _auto_update_depth=_auto_update_depth + 1,
-                                _tried_shareurls=_tried_shareurls,
-                                _fallback_candidates=_fallback_candidates,
-                            )
-                            return re_execution
-                        except Exception as re_exc:
-                            log.line(f"再次执行失败: {str(re_exc).strip() or type(re_exc).__name__}")
-                    elif bool(update_result.get("updated")) and _auto_update_depth >= 5:
-                        log.line(f"已达最大尝试次数（5次），停止自动换链")
-                except Exception as exc:
-                    logger.warning(
-                        "任务执行后自动换链失败 task_id=%s task_uid=%s err=%s",
-                        task_id,
-                        str(getattr(task, "task_uid", "") or ""),
-                        str(exc),
-                    )
-                    log.line(f"WARN: 自动换链失败 err={str(exc).strip() or type(exc).__name__}")
+                        logger.warning("写入已存进度失败 task_id=%s", task_id, exc_info=True)
             log.set_stage("end")
             log.section("程序结束")
             finished_at_local = datetime.now()
@@ -570,14 +246,6 @@ class TaskExecutor:
                     'drive_type': getattr(adapter, 'DRIVE_TYPE', ''),
                     'active': bool(getattr(adapter, 'is_active', False)),
                 },
-                plugins_snapshot=[
-                    {
-                        'plugin_key': item['definition'].plugin_key,
-                        'enabled': item['config'].enabled,
-                        'runtime_status': item['config'].runtime_status,
-                    }
-                    for item in plugins
-                ],
             )
         except Exception as exc:
             status = 'skipped' if isinstance(exc, SkipTask) else 'failed'
@@ -594,13 +262,10 @@ class TaskExecutor:
             ):
                 if _tried_shareurls is None:
                     _tried_shareurls = set()
-                if _fallback_candidates is None:
-                    _fallback_candidates = []
                 try:
                     log.section("链接失效自动换链")
                     log.line(f"链接失效（阶段={stage}），尝试自动换链")
-                    update_result = resolve_drama_shareurl_update(self.db, task, respect_toggle=True, tried_shareurls=_tried_shareurls, fallback_candidates=_fallback_candidates)
-                    autoupdate_db_changed = bool(update_result.get("db_changed"))
+                    update_result = resolve_drama_shareurl_update(self.db, task, respect_toggle=True, tried_shareurls=_tried_shareurls)
                     if bool(update_result.get("updated")):
                         log.line(f"OK: 自动换链成功 new={str(update_result.get('new_shareurl') or '').strip()}")
                         self.db.commit()
@@ -613,7 +278,6 @@ class TaskExecutor:
                             init_account_for_task=False,
                             _auto_update_depth=_auto_update_depth + 1,
                             _tried_shareurls=_tried_shareurls,
-                            _fallback_candidates=_fallback_candidates,
                         )
                         return re_execution
                     else:
@@ -653,14 +317,6 @@ class TaskExecutor:
                     'drive_type': getattr(adapter, 'DRIVE_TYPE', ''),
                     'active': bool(getattr(adapter, 'is_active', False)),
                 },
-                plugins_snapshot=[
-                    {
-                        'plugin_key': item['definition'].plugin_key,
-                        'enabled': item['config'].enabled,
-                        'runtime_status': item['config'].runtime_status,
-                    }
-                    for item in plugins
-                ],
             )
 
         execution = TaskExecution(
@@ -673,24 +329,19 @@ class TaskExecutor:
             stage=payload.stage,
             run_log=payload.run_log,
             adapter_snapshot=json.dumps(payload.adapter_snapshot, ensure_ascii=False),
-            plugins_snapshot=json.dumps(payload.plugins_snapshot, ensure_ascii=False),
         )
         if not persist_execution:
             execution.id = 0
-            setattr(execution, "_has_new_files", bool(getattr(task, "_runtime_has_new_files", False)))
-            if keep_runtime_tree:
-                setattr(execution, "_runtime_tree", getattr(task, "_runtime_tree", None))
-            setattr(execution, "_runtime_task_data", getattr(task, "_runtime_task_data", None))
-            setattr(execution, "_runtime_adapter", getattr(task, "_runtime_adapter", None))
             return execution
         self.db.add(execution)
         self.db.flush()
-        if snapshot_row is not None:
-            snapshot_row.task_execution_id = execution.id
-            self.db.flush()
-        setattr(execution, "_has_new_files", bool(getattr(task, "_runtime_has_new_files", False)))
-        if keep_runtime_tree:
-            setattr(execution, "_runtime_tree", getattr(task, "_runtime_tree", None))
-        setattr(execution, "_runtime_task_data", getattr(task, "_runtime_task_data", None))
-        setattr(execution, "_runtime_adapter", getattr(task, "_runtime_adapter", None))
+        if task_id > 0:
+            try:
+                from app.services.task_executions import prune_task_executions
+
+                removed = prune_task_executions(self.db, task_id)
+                if removed:
+                    logger.info("清理旧执行记录 task_id=%s removed=%s", task_id, removed)
+            except Exception:
+                logger.warning("清理旧执行记录失败 task_id=%s", task_id, exc_info=True)
         return execution

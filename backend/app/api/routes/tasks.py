@@ -19,13 +19,13 @@ from app.core.settings import settings
 from app.db.session import get_db
 from app.db.session import SessionLocal
 from app.extensions.adapters.adapter_factory import AdapterFactory
+from app.extensions.adapters.base_adapter import BaseCloudDriveAdapter
 from app.extensions.runtime.adapter_registry import AdapterRegistry
 from app.extensions.runtime.account_manager import DatabaseAccountManager
 from app.extensions.runtime.execution_log import ExecutionLog
 from app.extensions.runtime.magic_rename import MagicRename
 from app.models.drive_account import DriveAccount
 from app.models.task import Task
-from app.models.task_savepath_snapshot import TaskSavepathSnapshot
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.extensions.runtime.task_scheduler import task_scheduler_manager
 from app.extensions.runtime.task_executor import TaskExecutor
@@ -48,12 +48,11 @@ from app.schemas.task_browse import (
 from app.schemas.task_magic_regex import MagicRegexOut, MagicRegexRuleOut
 from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn
 from app.schemas.task import (
-    SavepathSnapshotSyncItemOut,
-    SavepathSnapshotSyncOut,
     StopCompletedDramaTasksOut,
     TaskCreateIn,
     TaskExecutionOut,
     TaskOut,
+    TaskShareLinkOut,
     TaskStatusIn,
     TaskUpdateIn,
 )
@@ -61,13 +60,13 @@ from app.schemas.resource_search import TaskSuggestionListOut
 from app.services import audit
 from app.services.notifications.sender import send_runtime
 from app.services.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
-from app.services.sync_task_triggers import should_trigger_linked_sync_for_drama_execution, trigger_linked_sync_tasks_async, trigger_sync_tasks_by_sync_uids
 from app.services.share_preview_batch import cache_clear as _preview_batch_cache_clear
 from app.services.share_preview_batch import preview_share_batch, validate_share_links
 from app.services.drama_update_progress import build_drama_update_progress
 from app.services.task_scheduler import get_or_create_task_scheduler_setting, update_task_scheduler_setting
 from app.services.resource_search import fetch_task_suggestions
 from app.services.tasks import create_task, delete_task, get_task, list_tasks_recent_executions, set_task_enabled, update_task
+from app.services.task_share_links import save_task_share_link
 from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
 
 router = APIRouter()
@@ -90,7 +89,6 @@ def _execution_out(item) -> TaskExecutionOut:
         stage=getattr(item, "stage", None),
         run_log=getattr(item, "run_log", None),
         adapter_snapshot=json.loads(item.adapter_snapshot) if item.adapter_snapshot else {},
-        plugins_snapshot=json.loads(item.plugins_snapshot) if item.plugins_snapshot else [],
     )
 
 
@@ -206,30 +204,6 @@ def _load_tmdb_payload_map(db: Session, items: list[object]) -> dict[tuple[str, 
     return out
 
 
-def _load_savepath_snapshot_map(db: Session, items: list[object]) -> dict[str, TaskSavepathSnapshot]:
-    task_uids: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        if str(getattr(item, "task_type", "") or "") != "drama":
-            continue
-        uid = str(getattr(item, "task_uid", "") or "").strip()
-        if not uid or uid in seen:
-            continue
-        seen.add(uid)
-        task_uids.append(uid)
-    if not task_uids:
-        return {}
-    try:
-        rows = (
-            db.execute(select(TaskSavepathSnapshot).where(TaskSavepathSnapshot.task_uid.in_(task_uids)))
-            .scalars()
-            .all()
-        )
-    except Exception:
-        return {}
-    return {str(r.task_uid): r for r in rows if getattr(r, "task_uid", None)}
-
-
 def _get_tmdb_status(db: Session, mt: str, tid: int) -> str | None:
     language, poster_language = _tmdb_lang_pair(db)
     row = (
@@ -258,7 +232,6 @@ def _task_out(
     *,
     tmdb_status_map: dict[tuple[str, int], str | None] | None = None,
     tmdb_payload_map: dict[tuple[str, int], dict[str, object] | None] | None = None,
-    snapshot_map: dict[str, TaskSavepathSnapshot] | None = None,
 ) -> TaskOut:
     raw_executions = list(getattr(item, "executions", None) or [])
     raw_executions.sort(key=lambda x: x.started_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
@@ -271,26 +244,12 @@ def _task_out(
         tmdb_status = tmdb_status_map.get(key) if isinstance(tmdb_status_map, dict) else _get_tmdb_status(db, key[0], key[1])
         if key[0] == "tv" and tmdb_status is not None:
             tmdb_is_ended = tmdb_status in ("Ended", "Canceled")
-        if (
-            key[0] == "tv"
-            and str(getattr(item, "task_type", "") or "") == "drama"
-            and isinstance(tmdb_payload_map, dict)
-            and isinstance(snapshot_map, dict)
-        ):
-            snapshot = snapshot_map.get(str(getattr(item, "task_uid", "") or "").strip())
-            if snapshot:
-                drama_update_progress = build_drama_update_progress(
-                    tmdb_details=tmdb_payload_map.get(key),
-                    snapshot=snapshot,
-                )
-    elif str(getattr(item, "task_type", "") or "") == "drama" and isinstance(snapshot_map, dict):
-        # 没有TMDB的追剧任务，也构建进度信息
-        snapshot = snapshot_map.get(str(getattr(item, "task_uid", "") or "").strip())
-        if snapshot:
-            drama_update_progress = build_drama_update_progress(
-                tmdb_details=None,
-                snapshot=snapshot,
-            )
+    extra = json.loads(item.extra_json) if item.extra_json else {}
+    if str(getattr(item, "task_type", "") or "") == "drama":
+        # 进度来自 TMDB 最新已播 + 任务在执行时记录的 saved_latest（不再读快照表）
+        saved_latest = extra.get("saved_latest") if isinstance(extra, dict) else None
+        tmdb_details = tmdb_payload_map.get(key) if (isinstance(tmdb_payload_map, dict) and key is not None and key[0] == "tv") else None
+        drama_update_progress = build_drama_update_progress(tmdb_details=tmdb_details, saved_latest=saved_latest)
 
     return TaskOut(
         id=item.id,
@@ -525,14 +484,12 @@ def get_tasks(db: Session = Depends(get_db)):
     items = list_tasks_recent_executions(db, limit=3)
     tmdb_status_map = _load_tmdb_status_map(db, items)
     tmdb_payload_map = _load_tmdb_payload_map(db, items)
-    snapshot_map = _load_savepath_snapshot_map(db, items)
     return [
         _task_out(
             db,
             item,
             tmdb_status_map=tmdb_status_map,
             tmdb_payload_map=tmdb_payload_map,
-            snapshot_map=snapshot_map,
         )
         for item in items
     ]
@@ -600,123 +557,6 @@ def post_stop_completed_drama_tasks(request: Request, current: CurrentUser = Dep
     return StopCompletedDramaTasksOut(checked=int(checked or 0), matched=len(matched_ids), stopped=stopped, task_ids=matched_ids[:50])
 
 
-@router.post("/drama/savepath-snapshots/sync", response_model=SavepathSnapshotSyncOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
-def post_sync_drama_savepath_snapshots(
-    request: Request, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)
-):
-    items = (
-        db.execute(select(Task).where(Task.task_type == "drama").order_by(Task.id.desc()))
-        .scalars()
-        .all()
-    )
-    checked = len(items)
-    if not items:
-        return SavepathSnapshotSyncOut(checked=0, synced=0, skipped=0, failed=0, items=[])
-
-    manager = DatabaseAccountManager(db)
-    task_payloads = [{"shareurl": str(t.shareurl or ""), "account_name": getattr(t, "account_name", None)} for t in items]
-    manager.init_for_tasks(task_payloads)
-
-    synced = 0
-    skipped = 0
-    failed = 0
-    out_items: list[SavepathSnapshotSyncItemOut] = []
-    for task in items:
-        ok = False
-        msg = None
-        try:
-            payload = {"shareurl": str(task.shareurl or ""), "account_name": getattr(task, "account_name", None)}
-            adapter = manager.get_adapter_for_task(payload)
-            if adapter is None:
-                msg = "没有可用的驱动账号"
-                failed += 1
-            else:
-                if not getattr(adapter, "is_active", False):
-                    adapter.init()
-                from app.services.task_savepath_snapshot import capture_and_upsert_snapshot
-
-                account_name = str(getattr(adapter, "account_name", "") or getattr(task, "account_name", "") or "").strip()
-                row = capture_and_upsert_snapshot(
-                    db,
-                    task_uid=str(getattr(task, "task_uid", "") or "").strip(),
-                    savepath=str(getattr(task, "savepath", "") or "").strip(),
-                    adapter=adapter,
-                    account_name=account_name,
-                    emit_line=None,
-                )
-                if row is None:
-                    msg = "快照生成失败"
-                    skipped += 1
-                else:
-                    ok = True
-                    synced += 1
-        except Exception as e:
-            msg = str(e) or type(e).__name__
-            failed += 1
-
-        if len(out_items) < 50:
-            out_items.append(
-                SavepathSnapshotSyncItemOut(
-                    task_id=int(getattr(task, "id", 0) or 0),
-                    task_uid=str(getattr(task, "task_uid", "") or ""),
-                    taskname=str(getattr(task, "taskname", "") or ""),
-                    ok=ok,
-                    message=msg,
-                )
-            )
-
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="task.drama.sync_savepath_snapshots",
-        target_type="task",
-        target_id="drama",
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-        detail=f"checked={checked}, synced={synced}, skipped={skipped}, failed={failed}",
-    )
-    db.commit()
-    return SavepathSnapshotSyncOut(checked=checked, synced=synced, skipped=skipped, failed=failed, items=out_items)
-
-
-@router.post("/{task_id:int}/savepath-snapshot/sync", dependencies=[Depends(require_permissions(TASK_WRITE))])
-def post_sync_single_savepath_snapshot(
-    task_id: int,
-    request: Request,
-    current: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    task = db.get(Task, task_id)
-    if task is None or str(getattr(task, "task_type", "") or "") != "drama":
-        raise HTTPException(status_code=404, detail="任务不存在或非追剧任务")
-
-    manager = DatabaseAccountManager(db)
-    payload = {"shareurl": str(task.shareurl or ""), "account_name": getattr(task, "account_name", None)}
-    manager.init_for_tasks([payload])
-    adapter = manager.get_adapter_for_task(payload)
-    if adapter is None:
-        raise HTTPException(status_code=400, detail="没有可用的驱动账号")
-    if not getattr(adapter, "is_active", False):
-        adapter.init()
-
-    from app.services.task_savepath_snapshot import capture_and_upsert_snapshot
-
-    account_name = str(getattr(adapter, "account_name", "") or getattr(task, "account_name", "") or "").strip()
-    row = capture_and_upsert_snapshot(
-        db,
-        task_uid=str(getattr(task, "task_uid", "") or "").strip(),
-        savepath=str(getattr(task, "savepath", "") or "").strip(),
-        adapter=adapter,
-        account_name=account_name,
-        emit_line=None,
-    )
-    db.commit()
-    if row is None:
-        raise HTTPException(status_code=500, detail="快照生成失败")
-    return {"ok": True}
-
-
 @router.post('', response_model=TaskOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
 def post_task(request: Request, payload: TaskCreateIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     task = create_task(db, **payload.model_dump())
@@ -766,9 +606,79 @@ def post_run_task(request: Request, task_id: int, current: CurrentUser = Depends
                 send_runtime(db, DRAMA_NOTIFY_TITLE, section)
         except Exception:
             pass
-        if should_trigger_linked_sync_for_drama_execution(execution):
-            trigger_linked_sync_tasks_async([str(getattr(task, "task_uid", "") or "")], source="api.tasks.run")
     return _execution_out(execution)
+
+
+@router.post('/{task_id:int}/share', response_model=TaskShareLinkOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
+def post_create_task_share(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = get_task(db, task_id)
+    if task.account_name:
+        account = _get_active_account(db, task.account_name)
+        if account is None:
+            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '任务指定的网盘账号不存在或不可用')
+    else:
+        drive_type = AdapterRegistry.detect_drive_type(task.shareurl)
+        if not drive_type:
+            raise bad_request('TASK_SHAREURL_INVALID', '无法识别任务使用的网盘类型')
+        account_name = _pick_default_account_name(db, drive_type)
+        account = _get_active_account(db, account_name) if account_name else None
+        if account is None:
+            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的网盘账号')
+
+    adapter_class = AdapterFactory.ADAPTER_MAP.get(str(account.drive_type))
+    if adapter_class is None or adapter_class.create_share_link is BaseCloudDriveAdapter.create_share_link:
+        raise bad_request('TASK_SHARE_UNSUPPORTED', f'{account.drive_type}暂不支持生成分享链接')
+
+    task_payload = {'shareurl': task.shareurl, 'account_name': account.name}
+    manager = DatabaseAccountManager(db)
+    manager.init_for_tasks([task_payload])
+    adapter = manager.get_adapter_for_task(task_payload)
+    if adapter is None or not adapter.is_active:
+        raise bad_request('DRIVE_ACCOUNT_UNAVAILABLE', '网盘账号登录失败，请检查账号状态')
+
+    try:
+        result = adapter.create_share_link(task.savepath, task.taskname)
+    except ValueError as exc:
+        raise bad_request('TASK_SHARE_PATH_INVALID', str(exc)) from exc
+    except NotImplementedError as exc:
+        raise bad_request('TASK_SHARE_UNSUPPORTED', str(exc)) from exc
+    except Exception as exc:
+        logger.exception('生成任务分享链接失败 task_id=%s drive_type=%s', task_id, account.drive_type)
+        raise bad_request('TASK_SHARE_FAILED', str(exc) or '生成分享链接失败') from exc
+
+    share_url = str(result.get('share_url') or '').strip()
+    if not share_url:
+        raise bad_request('TASK_SHARE_FAILED', '网盘没有返回分享链接')
+    title = str(result.get('title') or task.taskname)
+    passcode = str(result.get('passcode') or '') or None
+    expires_in_days = int(result['expires_in_days']) if result.get('expires_in_days') is not None else None
+    # 生成的分享链接永久记录在任务上，下次直接查看/复制，不必重新生成。
+    saved = save_task_share_link(
+        task,
+        share_url=share_url,
+        share_id=str(result.get('share_id') or ''),
+        title=title,
+        drive_type=str(account.drive_type),
+        account_name=str(account.name),
+        passcode=passcode,
+        expires_in_days=expires_in_days,
+    )
+    audit.write_audit_log(
+        db, actor_user_id=current.user.id, action='task.share.create', target_type='task', target_id=str(task_id),
+        ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True,
+        detail=f'drive_type={account.drive_type}',
+    )
+    db.commit()
+    return TaskShareLinkOut(
+        share_url=share_url,
+        share_id=str(result.get('share_id') or ''),
+        title=title,
+        drive_type=str(account.drive_type),
+        account_name=str(account.name),
+        passcode=passcode,
+        expires_in_days=expires_in_days,
+        saved_at=str(saved.get('saved_at') or '') or None,
+    )
 
 
 @router.post('/{task_id:int}/run/stream', dependencies=[Depends(require_permissions_scoped(TASK_RUN))])
@@ -816,17 +726,6 @@ def post_run_task_stream(request: Request, task_id: int, current: CurrentUser = 
                             send_runtime(wdb, DRAMA_NOTIFY_TITLE, section)
                     except Exception:
                         pass
-                    tree_sum = str(getattr(execution, "tree_summary", "") or "")
-                    if should_trigger_linked_sync_for_drama_execution(execution):
-                        uid = str(getattr(wtask, "task_uid", "") or "").strip()
-                        trigger_linked_sync_tasks_async([uid], source="api.tasks.run.stream")
-                    else:
-                        logger.warning(
-                            "追剧同步判定为 False，不触发同步任务 execution.status=%s tree_summary=%s run_log 前100=%s",
-                            str(getattr(execution, "status", "") or ""),
-                            tree_sum[:100],
-                            str(getattr(execution, "run_log", "") or "")[:100],
-                        )
                 q.put(
                     (
                         "done",
@@ -859,7 +758,6 @@ def post_run_task_stream(request: Request, task_id: int, current: CurrentUser = 
                                 "stage": log.stage,
                                 "run_log": log.render(),
                                 "adapter_snapshot": {},
-                                "plugins_snapshot": [],
                             },
                         },
                     )
@@ -960,20 +858,6 @@ def post_run_task_stream_by_payload(request: Request, payload: TaskCreateIn, cur
                 )
                 wtask.id = 0
                 execution = TaskExecutor(wdb).run_task(wtask, log=log, persist_execution=False)
-                if str(getattr(wtask, "task_type", "") or "") == "drama":
-                    task_uid_for_sync = str(getattr(wtask, "task_uid", "") or "").strip()
-                    if should_trigger_linked_sync_for_drama_execution(execution):
-                        # 优先用 payload.sync_task_uids（前端透传，未保存时 DB 无关联记录）
-                        payload_sync_uids = getattr(payload, "sync_task_uids", None) or []
-                        if payload_sync_uids:
-                            trigger_sync_tasks_by_sync_uids(list(payload_sync_uids), source="api.tasks.run.stream.preview")
-                        # 已保存任务走关联链路：根据 shareurl 查找真实 uid
-                        elif task_uid_for_sync.startswith("preview-"):
-                            existing = wdb.execute(select(Task.task_uid).where(Task.shareurl == str(payload.shareurl or "").strip())).scalars().first()
-                            if existing:
-                                trigger_linked_sync_tasks_async([str(existing)], source="api.tasks.run.stream.preview")
-                        elif task_uid_for_sync:
-                            trigger_linked_sync_tasks_async([task_uid_for_sync], source="api.tasks.run.stream.preview")
                 q.put(
                     (
                         "done",
@@ -1006,7 +890,6 @@ def post_run_task_stream_by_payload(request: Request, payload: TaskCreateIn, cur
                                 "stage": log.stage,
                                 "run_log": log.render(),
                                 "adapter_snapshot": {},
-                                "plugins_snapshot": [],
                             },
                         },
                     )

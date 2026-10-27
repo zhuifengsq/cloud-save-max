@@ -50,22 +50,3 @@ export type DriveAccountItem = {
   created_at: string
   updated_at: string
 }
-
-export type PluginItem = {
-  id: number
-  plugin_key: string
-  module_name: string
-  source_type: string
-  version?: string | null
-  installed: boolean
-  discovered_at: string
-  enabled: boolean
-  priority: number
-  runtime_status?: string | null
-  last_checked_at?: string | null
-  last_error?: string | null
-  config: Record<string, any>
-  config_fields: ConfigFieldItem[]
-  default_task_config: Record<string, any>
-  task_config_fields: ConfigFieldItem[]
-}

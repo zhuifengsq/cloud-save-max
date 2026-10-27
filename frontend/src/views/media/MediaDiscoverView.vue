@@ -5,14 +5,12 @@ import { Search } from '@element-plus/icons-vue'
 import { fetchDoubanCategories, fetchDoubanList, fetchTMDBDetail, searchTMDB } from '@/api/media'
 import DramaTaskDrawer from '@/components/tasks/DramaTaskDrawer.vue'
 import { createTask, fetchTasks, updateTask } from '@/api/tasks'
-import { fetchSyncTasks } from '@/api/syncTasks'
-import { fetchDriveAccounts, fetchPlugins } from '@/api/extensions'
+import { fetchDriveAccounts } from '@/api/extensions'
 import { TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
-import type { DriveAccountItem, PluginItem } from '@/types/extensions'
+import type { DriveAccountItem } from '@/types/extensions'
 import type { DoubanCategory, DoubanListItem, TMDBBrief } from '@/types/media'
-import type { SyncTaskItem } from '@/types/syncTasks'
 import type { TaskItem } from '@/types/tasks'
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342'
@@ -59,15 +57,8 @@ const searchPager = reactive({
 const viewMode = ref<'douban' | 'tmdb'>('douban')
 
 const accounts = ref<DriveAccountItem[]>([])
-const plugins = ref<PluginItem[]>([])
-
-const activePlugins = computed(() => {
-  return plugins.value.filter((item) => Boolean(item.installed) && Boolean(item.enabled))
-})
 const tasksCache = ref<TaskItem[]>([])
 const tasksLoading = ref(false)
-const syncTasks = ref<SyncTaskItem[]>([])
-const syncTasksLoading = ref(false)
 
 const runLogDialog = reactive({
   visible: false,
@@ -154,9 +145,8 @@ async function ensureTaskDepsLoaded() {
   if (tasksLoading.value) return
   tasksLoading.value = true
   try {
-    const [acc, pls, ts] = await Promise.all([fetchDriveAccounts(), fetchPlugins(), fetchTasks()])
+    const [acc, ts] = await Promise.all([fetchDriveAccounts(), fetchTasks()])
     accounts.value = acc || []
-    plugins.value = pls || []
     tasksCache.value = ts || []
   } finally {
     tasksLoading.value = false
@@ -176,14 +166,6 @@ function findExistingDramaTasks(tmdb_id: number, tmdb_media_type: 'movie' | 'tv'
 }
 
 async function openNewDramaTask(presetTaskname: string, tmdb_id: number, tmdb_media_type: 'movie' | 'tv') {
-  syncTasksLoading.value = true
-  try {
-    await fetchSyncTasks()
-      .then((data) => { syncTasks.value = data || [] })
-      .catch(() => { syncTasks.value = [] })
-  } finally {
-    syncTasksLoading.value = false
-  }
   taskDrawer.currentTask = null
   taskDrawer.presetTaskname = String(presetTaskname || '').trim()
   taskDrawer.presetTmdb = { tmdb_id, tmdb_media_type }
@@ -191,14 +173,6 @@ async function openNewDramaTask(presetTaskname: string, tmdb_id: number, tmdb_me
 }
 
 async function openEditDramaTask(task: TaskItem) {
-  syncTasksLoading.value = true
-  try {
-    await fetchSyncTasks()
-      .then((data) => { syncTasks.value = data || [] })
-      .catch(() => { syncTasks.value = [] })
-  } finally {
-    syncTasksLoading.value = false
-  }
   taskDrawer.currentTask = task
   taskDrawer.presetTaskname = ''
   taskDrawer.presetTmdb = null
@@ -350,8 +324,11 @@ async function loadCategories() {
     const data = await fetchDoubanCategories()
     categories.value = data.categories || []
     if (!filters.main && categories.value.length) {
-      filters.main = categories.value[0].key
-      filters.sub = String(categories.value[0].subs?.[0]?.key || '')
+      // 默认展示「最近热门剧集」，其次回退到后端返回的第一个分类
+      const preferred = categories.value.find((item) => item.key === 'tv_drama')
+      const initial = preferred || categories.value[0]
+      filters.main = initial.key
+      filters.sub = String(initial.subs?.[0]?.key || '')
     }
   } finally {
     categoriesLoading.value = false
@@ -821,8 +798,6 @@ onMounted(async () => {
       v-model="taskDrawer.visible"
       :task="taskDrawer.currentTask"
       :accounts="accounts"
-      :plugins="activePlugins"
-      :sync-tasks="syncTasks"
       :submitting="taskDrawer.submitting"
       :preset-taskname="taskDrawer.presetTaskname"
       :preset-tmdb="taskDrawer.presetTmdb"

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 115网盘适配器
-参考 CloudSaver 的 Cloud115Service 实现
 """
 import re
 import time

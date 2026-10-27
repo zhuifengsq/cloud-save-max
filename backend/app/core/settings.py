@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     tasks_share_preview_batch_cache_max_entries: int = 2000
     tasks_share_preview_batch_db_cache_ttl_seconds: int = 6 * 60 * 60
     tasks_share_preview_batch_db_cache_retention_seconds: int = 7 * 24 * 60 * 60
+    # 每个任务保留的执行记录条数（超出后自动删除最旧的）
+    task_execution_history_limit: int = 20
 
     drama_runtime_retry_max_attempts: int = 3
     drama_runtime_retry_backoff_seconds: float = 1.0

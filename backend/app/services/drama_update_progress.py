@@ -3,15 +3,10 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
-from app.models.task_savepath_snapshot import TaskSavepathSnapshot
 from app.schemas.task import DramaUpdateProgressOut
 
 logger = logging.getLogger(__name__)
-
-
-_SH_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _parse_air_date(value: Any) -> date | None:
@@ -51,67 +46,60 @@ def resolve_tmdb_latest_aired_episode(details: dict[str, Any] | None) -> tuple[i
     return season, episode, None
 
 
-def resolve_saved_latest_episode_from_snapshot(
-    *,
-    snapshot: TaskSavepathSnapshot,
-    tmdb_season: int,
-) -> tuple[int | None, int | None, str | None]:
+def _to_int(value: Any) -> int | None:
     try:
-        saved_season = int(getattr(snapshot, "saved_latest_season", None) or 0)
-    except Exception:
-        saved_season = 0
-    try:
-        saved_episode = int(getattr(snapshot, "saved_latest_episode", None) or 0)
-    except Exception:
-        saved_episode = 0
-
-    if saved_season <= 0 or saved_episode <= 0:
-        return None, None, "快照未记录已存最新集数"
-    if int(saved_season) != int(tmdb_season):
-        return None, None, "当前季无匹配文件"
-    return int(saved_season), int(saved_episode), None
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
 
 
 def build_drama_update_progress(
     *,
     tmdb_details: dict[str, Any] | None,
-    snapshot: TaskSavepathSnapshot | None,
+    saved_latest: dict[str, Any] | None,
 ) -> DramaUpdateProgressOut:
+    """Compose progress info from TMDB's latest aired episode plus the task's saved_latest.
+
+    ``saved_latest`` is computed during each task execution (see DramaTaskExecutor),
+    so no extra drive requests are needed when rendering task lists.
+    """
     tmdb_season, tmdb_episode, tmdb_reason = resolve_tmdb_latest_aired_episode(tmdb_details)
+    saved = saved_latest if isinstance(saved_latest, dict) else {}
+    saved_season = _to_int(saved.get("season"))
+    saved_episode = _to_int(saved.get("episode"))
+    saved_at = str(saved.get("at") or "").strip() or None
 
-    if snapshot is None:
-        return DramaUpdateProgressOut(available=False, tmdb_season=tmdb_season, tmdb_episode=tmdb_episode, reason="无快照")
-
-    # 没有TMDB时，只返回已保存的进度
     if tmdb_season is None or tmdb_episode is None:
-        saved_season = getattr(snapshot, "saved_latest_season", None)
-        saved_episode = getattr(snapshot, "saved_latest_episode", None)
         return DramaUpdateProgressOut(
-            available=bool(saved_season is not None and saved_episode is not None),
+            available=saved_episode is not None,
             saved_season=saved_season,
             saved_episode=saved_episode,
-            snapshot_captured_at=snapshot.captured_at if snapshot is not None else None,
+            snapshot_captured_at=saved_at,
             reason=tmdb_reason or "无TMDB信息",
         )
 
-    saved_season, saved_episode, saved_reason = resolve_saved_latest_episode_from_snapshot(
-        snapshot=snapshot,
-        tmdb_season=int(tmdb_season),
-    )
+    if saved_episode is None:
+        return DramaUpdateProgressOut(
+            available=False,
+            tmdb_season=tmdb_season,
+            tmdb_episode=tmdb_episode,
+            snapshot_captured_at=saved_at,
+            reason="暂无已存进度",
+        )
 
-    if saved_season is None or saved_episode is None:
+    if saved_season is not None and int(saved_season) != int(tmdb_season):
         return DramaUpdateProgressOut(
             available=False,
             tmdb_season=tmdb_season,
             tmdb_episode=tmdb_episode,
             saved_season=saved_season,
             saved_episode=saved_episode,
-            snapshot_captured_at=snapshot.captured_at,
-            reason=saved_reason or "快照解析失败",
+            snapshot_captured_at=saved_at,
+            reason="当前季无匹配文件",
         )
 
     behind = max(0, int(tmdb_episode) - int(saved_episode))
-    is_latest = behind == 0
     return DramaUpdateProgressOut(
         available=True,
         tmdb_season=tmdb_season,
@@ -119,7 +107,7 @@ def build_drama_update_progress(
         saved_season=saved_season,
         saved_episode=saved_episode,
         behind_episodes=behind,
-        is_latest=is_latest,
-        snapshot_captured_at=snapshot.captured_at,
-        reason=saved_reason,
+        is_latest=behind == 0,
+        snapshot_captured_at=saved_at,
+        reason=None,
     )

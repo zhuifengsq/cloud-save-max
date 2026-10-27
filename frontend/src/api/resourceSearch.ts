@@ -1,13 +1,59 @@
 import { http } from '@/api/http'
-import type { ResourceSearchSourceKey, ResourceSearchSourceListResponse, TaskSuggestionResponse } from '@/types/resourceSearch'
+import type { ApiSearchSource, ApiSearchSourceInput, PythonSearchPlugin, SearchTestResult, TaskSuggestionResponse } from '@/types/resourceSearch'
 
-export async function fetchResourceSearchSources() {
-  const { data } = await http.get<ResourceSearchSourceListResponse>('/resource-search/sources')
+function unpackList<T>(data: T[] | { sources?: T[]; plugins?: T[]; items?: T[] }): T[] {
+  if (Array.isArray(data)) return data
+  return data.sources || data.plugins || data.items || []
+}
+
+export async function fetchApiSearchSources() {
+  const { data } = await http.get<ApiSearchSource[] | { sources: ApiSearchSource[] }>('/resource-search/api-sources')
+  return unpackList(data)
+}
+
+export async function createApiSearchSource(payload: ApiSearchSourceInput) {
+  const { data } = await http.post<ApiSearchSource>('/resource-search/api-sources', payload)
   return data
 }
 
-export async function patchResourceSearchSource(key: ResourceSearchSourceKey, payload: Partial<{ enabled: boolean; server: string | null; username: string | null; password: string | null; token: string | null }>) {
-  const { data } = await http.patch<ResourceSearchSourceListResponse>(`/resource-search/sources/${encodeURIComponent(key)}`, payload)
+export async function patchApiSearchSource(id: string | number, payload: Partial<ApiSearchSourceInput>) {
+  const { data } = await http.patch<ApiSearchSource>(`/resource-search/api-sources/${encodeURIComponent(String(id))}`, payload)
+  return data
+}
+
+export async function deleteApiSearchSource(id: string | number) {
+  await http.delete(`/resource-search/api-sources/${encodeURIComponent(String(id))}`)
+}
+
+export async function testApiSearchSource(id: string | number, keyword: string) {
+  const { data } = await http.post<SearchTestResult>(`/resource-search/api-sources/${encodeURIComponent(String(id))}/test`, { keyword }, { timeout: 30000 })
+  return data
+}
+
+export async function fetchPythonSearchPlugins() {
+  const { data } = await http.get<PythonSearchPlugin[] | { plugins: PythonSearchPlugin[] }>('/resource-search/plugins')
+  return unpackList(data)
+}
+
+export async function refreshPythonSearchPlugins() {
+  const { data } = await http.post<PythonSearchPlugin[] | { plugins: PythonSearchPlugin[] }>('/resource-search/plugins/refresh')
+  return unpackList(data)
+}
+
+export async function patchPythonSearchPlugin(key: string, enabled: boolean) {
+  const { data } = await http.patch<PythonSearchPlugin>(`/resource-search/plugins/${encodeURIComponent(key)}`, { enabled })
+  return data
+}
+
+export async function testPythonSearchPlugin(key: string, keyword: string) {
+  const { data } = await http.post<SearchTestResult>(`/resource-search/plugins/${encodeURIComponent(key)}/test`, { keyword }, { timeout: 30000 })
+  return data
+}
+
+export async function uploadPythonSearchPlugin(file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await http.post('/resource-search/plugins/upload', form, { timeout: 30000 })
   return data
 }
 

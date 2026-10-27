@@ -20,7 +20,6 @@ from app.extensions.runtime.retry_utils import RetryResult, retry_call, summariz
 logger = logging.getLogger(__name__)
 
 
-
 class SkipTask(Exception):
     pass
 
@@ -141,6 +140,7 @@ class DramaTaskExecutor:
         self.task_data = task_data
         self.log = log
         self.transfer_count = 0
+        self.saved_latest: dict[str, Any] | None = None
 
     def _set_stage(self, stage: str | None) -> None:
         if self.log:
@@ -438,7 +438,7 @@ class DramaTaskExecutor:
 
         dest_filename_list = []
         dest_episode_set: set[tuple[int, int]] = set()
-        from app.services.drama_share_autoupdate import _extract_episode_from_file
+        from app.services.episode_number import extract_episode
         mr._resolved_pattern = pattern
         mr._resolved_replace = replace
         for raw in dest_file_list:
@@ -448,7 +448,7 @@ class DramaTaskExecutor:
             if name:
                 dest_filename_list.append(name)
                 try:
-                    s, e = _extract_episode_from_file(name, mr=mr)
+                    s, e = extract_episode(name, mr=mr)
                     if s is not None and e is not None:
                         dest_episode_set.add((int(s), int(e)))
                 except Exception:
@@ -469,7 +469,7 @@ class DramaTaskExecutor:
                 # 基于集数去重：重命名后文件名变了但集数相同
                 if dest_episode_set:
                     try:
-                        s, e = _extract_episode_from_file(origin_name, mr=mr)
+                        s, e = extract_episode(origin_name, mr=mr)
                         if s is not None and e is not None and (int(s), int(e)) in dest_episode_set:
                             continue
                     except Exception:
@@ -782,118 +782,369 @@ class DramaTaskExecutor:
         tree.create_node(str(self.task_data.get("taskname") or ""), "root")
 
         root_files = [raw for raw in share_items if not _is_dir(raw)]
-        self._set_stage("plan_transfer")
-        self._section("生成转存计划")
-        plan = self._plan_transfer(share_files=self._iter_files(root_files), dest_file_list=dest_file_list)
-        self._line(f"待转存文件数: {len(plan)}")
+        addition = self.task_data.get("addition") or {}
+        folder_mode = str(addition.get("folder_mode") or "normal").strip().lower()
 
-        # 连贯集数过滤：只转存从当前进度+1开始的连贯集数
-        from app.services.drama_share_consecutive import _extract_episode as _ext_ep, check_consecutive_episodes
-        from app.models.task_savepath_snapshot import TaskSavepathSnapshot
-        from app.db.session import SessionLocal
-        from sqlalchemy import select as sa_select
-        task_uid = str(self.task_data.get("task_uid") or "").strip()
-        snap = None
-        if task_uid:
-            with SessionLocal() as snap_db:
-                snap = snap_db.execute(sa_select(TaskSavepathSnapshot).where(TaskSavepathSnapshot.task_uid == task_uid)).scalars().first()
-        current_ep = int(getattr(snap, "saved_latest_episode", None) or 0) if snap else 0
-        if plan:
-            addition = self.task_data.get("addition") or {}
-            from app.services.share_preview_batch import fetch_share_file_list_grouped
-            folder_filter = str(addition.get("folder_filter") or "").strip()
-            folder_exclude = str(addition.get("folder_exclude") or "").strip()
-            folder_filter_mode = str(addition.get("folder_filter_mode") or "").strip()
-            folder_exclude_mode = str(addition.get("folder_exclude_mode") or "").strip()
-            folder_priority = str(addition.get("folder_priority") or "").strip()
-            folder_priority_mode = str(addition.get("folder_priority_mode") or "").strip()
-            shareurl = str(self.task_data.get("shareurl") or "").strip()
-            account_name = str(getattr(self.adapter, "account_name", "") or "").strip()
-            min_size_str = str(addition.get("min_size") or "").strip()
-            filter_words_str = str(addition.get("filter_words") or "").strip()
-            file_filter_str = str(addition.get("file_filter") or "").strip()
-            from app.services.drama_share_consecutive import _parse_size
-            _min_size = _parse_size(min_size_str) if min_size_str else 0
-            _filter_words = [w.strip() for w in filter_words_str.split("|") if w.strip()] if filter_words_str else []
-            _file_filter_words = [w.strip().lower() for w in file_filter_str.split("|") if w.strip()] if file_filter_str else []
-            _file_filter_is_any = str(addition.get("file_filter_mode") or "all").strip().lower() == "any"
-            _file_min_date = str(addition.get("file_min_date") or "").strip()
-            import logging as _dbg_log
-            _dbg = _dbg_log.getLogger(__name__)
-            _dbg.info("开始执行任务：%s", str(self.task_data.get("taskname") or ""))
-            _dbg.info("  过滤规则：关键词=%d 文件筛选=%d 文件夹筛选=%s 文件夹排除=%s 文件夹优先=%s 时间=%s 大小=%s", len(_filter_words), len(_file_filter_words), folder_filter or "无", folder_exclude or "无", folder_priority or "无", _file_min_date or "无", _min_size or "无")
-            mr_ep = MagicRename(magic_regex=(self.task_data.get("magic_regex") if isinstance(self.task_data.get("magic_regex"), dict) else None))
-            mr_ep.set_taskname(str(self.task_data.get("taskname") or ""))
-            _pat = str(self.task_data.get("pattern") or "")
-            _rep = str(self.task_data.get("replace") or "")
-            if _pat and _rep:
-                try:
-                    _pat, _rep = mr_ep.magic_regex_conv(_pat, _rep)
-                    mr_ep._resolved_pattern = _pat
-                    mr_ep._resolved_replace = _rep
-                except Exception:
-                    mr_ep = None
-            else:
-                mr_ep = None
-            with SessionLocal() as _ep_db:
-                groups = fetch_share_file_list_grouped(_ep_db, shareurl, folder_filter=folder_filter, folder_exclude=folder_exclude, folder_filter_mode=folder_filter_mode, folder_exclude_mode=folder_exclude_mode, folder_priority=folder_priority, folder_priority_mode=folder_priority_mode)
-            # 没有重命名规则时跳过连贯性检查
-            if mr_ep is None:
-                self._line("未设置重命名规则，跳过连贯性检查")
-            else:
-                _dbg = __import__("logging").getLogger(__name__)
-                _dbg.info("连贯性检查：当前已转存进度=%d", current_ep)
-                _dbg.info("  过滤规则：关键词=%d 文件筛选=%d 文件夹筛选=%s 文件夹排除=%s 时间=%s 大小=%s", len(_filter_words), len(_file_filter_words), folder_filter or "无", folder_exclude or "无", _file_min_date or "无", _min_size or "无")
-                allowed_eps: set[int] = set()
-                for file_list, fid, dir_ts, dir_name in groups:
-                    if not file_list:
-                        continue
-                    is_con, con_eps, max_ep = check_consecutive_episodes(file_list, current_episode=current_ep, min_size=_min_size, filter_words=_filter_words, file_filter_words=_file_filter_words, file_filter_is_any=_file_filter_is_any, file_min_date=_file_min_date, mr=mr_ep)
-                    _dbg.info("  文件夹：%s 文件数=%d %s", dir_name or fid[:8], len(file_list), "连贯" if is_con else "不连贯")
-                    if con_eps:
-                        allowed_eps.update(con_eps)
-                if allowed_eps:
-                    _dbg.info("连贯性检查：结果 连贯集数=E%s-E%s", min(allowed_eps), max(allowed_eps))
-                else:
-                    _dbg.info("连贯性检查：结果 无连贯集数")
-                if allowed_eps:
-                    before = len(plan)
-                    plan_filtered = []
-                    for p in plan:
-                        _, ep = _ext_ep(p.target_name or p.origin_name, mr=mr_ep)
-                        if ep is not None and ep in allowed_eps:
-                            plan_filtered.append(p)
-                        else:
-                            pass
-                    plan = plan_filtered
-                    removed = before - len(plan)
-                    if removed:
-                        self._line(f"连贯集数过滤：保留 E{min(allowed_eps)}-E{max(allowed_eps)}，{len(plan)} 个文件，移除 {removed} 个")
-                else:
-                    self._line("连贯集数过滤：无连贯集数，取消转存")
-                    plan = []
-
-        if plan:
-            self._set_stage("save_file")
-            self._section("执行转存")
-            saved_fids = self._save_with_saved_fids(pwd_id=str(pwd_id), stoken=str(stoken), dest_root_fid=dest_root_fid, plan=plan)
-            self._set_stage("rename")
-            self._section("重命名")
-            self._rename_by_fids(saved_fids=saved_fids, plan=plan, dest_root_fid=dest_root_fid)
-            limit = min(len(plan), len(saved_fids))
-            for i in range(limit):
-                item = plan[i]
-                saved_fid = str(saved_fids[i] or "").strip()
-                data = {
-                    "fid": saved_fid,
-                    "file_name": item.origin_name,
-                    "file_name_re": item.target_name,
-                    "is_dir": False,
-                }
-                tree.create_node(f"{i + 1}. {item.origin_name} -> {item.target_name}", f"item-{i + 1}", parent="root", data=data)
+        if folder_mode == "folder_diff":
+            self._execute_folder_diff(
+                share_items=share_items,
+                root_files=root_files,
+                pwd_id=str(pwd_id),
+                stoken=str(stoken),
+                dest_root_fid=str(dest_root_fid),
+                dest_file_list=dest_file_list,
+                dest_dir_map=dest_dir_map,
+                savepath=savepath,
+                ignore_extension=ignore_extension,
+                tree=tree,
+            )
+        else:
+            self._execute_normal(
+                root_files=root_files,
+                dest_file_list=dest_file_list,
+                pwd_id=str(pwd_id),
+                stoken=str(stoken),
+                dest_root_fid=str(dest_root_fid),
+                tree=tree,
+            )
 
         if tree.size() <= 1:
             tree.create_node("无可转存文件", "empty", parent="root")
             self._line("无可转存文件")
         self._set_stage("end")
         return tree
+
+    # ------------------------------------------------------------------
+    # 普通模式：平铺转存根目录文件 + 重命名
+    # ------------------------------------------------------------------
+    def _execute_normal(self, *, root_files: list[dict], dest_file_list: list[dict], pwd_id: str, stoken: str, dest_root_fid: str, tree: Tree) -> None:
+        self._set_stage("plan_transfer")
+        self._section("生成转存计划")
+        plan = self._plan_transfer(share_files=self._iter_files(root_files), dest_file_list=dest_file_list)
+        self._line(f"待转存文件数: {len(plan)}")
+        if not plan:
+            return
+        self._set_stage("save_file")
+        self._section("执行转存")
+        saved_fids = self._save_with_saved_fids(pwd_id=pwd_id, stoken=stoken, dest_root_fid=dest_root_fid, plan=plan)
+        self._set_stage("rename")
+        self._section("重命名")
+        self._rename_by_fids(saved_fids=saved_fids, plan=plan, dest_root_fid=dest_root_fid)
+        limit = min(len(plan), len(saved_fids))
+        for i in range(limit):
+            item = plan[i]
+            saved_fid = str(saved_fids[i] or "").strip()
+            data = {
+                "fid": saved_fid,
+                "file_name": item.origin_name,
+                "file_name_re": item.target_name,
+                "is_dir": False,
+            }
+            tree.create_node(f"{i + 1}. {item.origin_name} -> {item.target_name}", f"item-{i + 1}", parent="root", data=data)
+        self._record_saved_latest([item.target_name for item in plan[:limit]])
+
+    # ------------------------------------------------------------------
+    # 文件夹对比模式：白名单文件夹按层级增量，其它文件夹整包转存一次
+    # ------------------------------------------------------------------
+    def _execute_folder_diff(
+        self,
+        *,
+        share_items: list[dict],
+        root_files: list[dict],
+        pwd_id: str,
+        stoken: str,
+        dest_root_fid: str,
+        dest_file_list: list[dict],
+        dest_dir_map: dict[str, str],
+        savepath: str,
+        ignore_extension: bool,
+        tree: Tree,
+    ) -> None:
+        addition = self.task_data.get("addition") or {}
+        whitelist = [w.strip().lower() for w in str(addition.get("whitelist_folders") or "").split("|") if w.strip()]
+        whitelist_is_any = str(addition.get("whitelist_mode") or "any").strip().lower() != "all"
+        exclude_keywords = [w.strip().lower() for w in str(addition.get("folder_exclude") or "").split("|") if w.strip()]
+        exclude_is_all = str(addition.get("folder_exclude_mode") or "any").strip().lower() == "all"
+
+        self._line("模式: 文件夹对比（白名单增量 + 其它文件夹整包一次）")
+        self._line(f"白名单: {'|'.join(whitelist) if whitelist else '(未设置，所有文件夹按增量处理)'}")
+        transferred_names: list[str] = []
+
+        # 1) 分享根目录下的文件：按普通模式（同名跳过，不改名）
+        if root_files:
+            existing_names: set[str] = set()
+            for raw in dest_file_list:
+                if _is_dir(raw):
+                    continue
+                name = _get_name(raw)
+                if name:
+                    existing_names.add(_normalize_name(name, ignore_extension))
+            plan: list[DramaPlanItem] = []
+            for raw in self._iter_files(root_files):
+                name = _get_name(raw)
+                fid = _get_fid(raw)
+                token = _get_fid_token(raw)
+                if not name or not fid:
+                    continue
+                if not token:
+                    self._line(f"跳过缺少 fid_token 的文件: {name}")
+                    continue
+                if _normalize_name(name, ignore_extension) in existing_names:
+                    continue
+                plan.append(
+                    DramaPlanItem(
+                        fid=str(fid),
+                        fid_token=str(token),
+                        origin_name=name,
+                        target_name=name,
+                    )
+                )
+            if plan:
+                self._set_stage("save_file")
+                self._section("转存根目录文件")
+                saved = self._save_with_saved_fids(pwd_id=pwd_id, stoken=stoken, dest_root_fid=dest_root_fid, plan=plan)
+                limit = min(len(plan), len(saved))
+                self._line(f"根目录新增文件: {limit}")
+                for i in range(limit):
+                    item = plan[i]
+                    tree.create_node(f"{item.origin_name}", f"root-file-{i + 1}", parent="root", data={
+                        "fid": str(saved[i] or ""),
+                        "file_name": item.origin_name,
+                        "file_name_re": item.target_name,
+                        "is_dir": False,
+                    })
+                transferred_names.extend([item.origin_name for item in plan[:limit]])
+
+        # 2) 子文件夹
+        for raw in share_items:
+            if not _is_dir(raw):
+                continue
+            name = _get_name(raw)
+            fid = _get_fid(raw)
+            if not name or not fid:
+                continue
+            lowered = name.lower()
+            if exclude_keywords:
+                if (all(kw in lowered for kw in exclude_keywords) if exclude_is_all else any(kw in lowered for kw in exclude_keywords)):
+                    self._line(f"跳过排除文件夹: {name}")
+                    continue
+            if not whitelist or (any(kw in lowered for kw in whitelist) if whitelist_is_any else all(kw in lowered for kw in whitelist)):
+                names = self._sync_share_dir_incremental(
+                    pwd_id=pwd_id,
+                    stoken=stoken,
+                    share_fid=str(fid),
+                    share_name=name,
+                    dest_base_fid=dest_root_fid,
+                    dest_base_path=savepath,
+                    ignore_extension=ignore_extension,
+                    tree=tree,
+                    rel_label=name,
+                    depth=0,
+                    copy_all=False,
+                )
+                transferred_names.extend(names)
+            else:
+                names = self._save_share_dir_once(
+                    pwd_id=pwd_id,
+                    stoken=stoken,
+                    share_fid=str(fid),
+                    share_token=_get_fid_token(raw),
+                    share_name=name,
+                    dest_root_fid=dest_root_fid,
+                    dest_dir_map=dest_dir_map,
+                    savepath=savepath,
+                    ignore_extension=ignore_extension,
+                    tree=tree,
+                )
+                transferred_names.extend(names)
+        self._record_saved_latest(transferred_names)
+
+    def _sync_share_dir_incremental(
+        self,
+        *,
+        pwd_id: str,
+        stoken: str,
+        share_fid: str,
+        share_name: str,
+        dest_base_fid: str,
+        dest_base_path: str,
+        ignore_extension: bool,
+        tree: Tree,
+        rel_label: str,
+        depth: int,
+        copy_all: bool,
+    ) -> list[str]:
+        if depth > 3:
+            self._line(f"层级过深，跳过: {rel_label}")
+            return []
+        dest_path = f"{dest_base_path.rstrip('/')}/{share_name}" if share_name else dest_base_path
+        try:
+            dest_fid = self._ensure_dest_dir_fid(dest_path)
+        except Exception as exc:
+            self._line(f"创建目标目录失败 {dest_path}: {exc}")
+            return []
+
+        children = self._fetch_share_items(pwd_id=pwd_id, stoken=stoken, pdir_fid=share_fid)
+        files = [item for item in children if not _is_dir(item)]
+        dirs = [item for item in children if _is_dir(item)]
+        existing_names = self._list_dest_names(dest_fid, ignore_extension) if not copy_all else set()
+
+        plan: list[DramaPlanItem] = []
+        for item in files:
+            name = _get_name(item)
+            fid = _get_fid(item)
+            token = _get_fid_token(item)
+            if not name or not fid:
+                continue
+            if not token:
+                self._line(f"跳过缺少 fid_token 的文件: {name}")
+                continue
+            if not copy_all and _normalize_name(name, ignore_extension) in existing_names:
+                continue
+            plan.append(
+                DramaPlanItem(
+                    fid=str(fid),
+                    fid_token=str(token),
+                    origin_name=name,
+                    target_name=name,
+                )
+            )
+        transferred: list[str] = []
+        if plan:
+            self._line(f"增量目录 {dest_path}: {len(plan)} 个新文件")
+            saved = self._save_with_saved_fids(pwd_id=pwd_id, stoken=stoken, dest_root_fid=dest_fid, plan=plan)
+            limit = min(len(plan), len(saved))
+            for i in range(limit):
+                item = plan[i]
+                tree.create_node(f"{item.origin_name}", f"dir-{rel_label}-{depth}-{i + 1}", parent="root", data={
+                    "fid": str(saved[i] or ""),
+                    "file_name": item.origin_name,
+                    "file_name_re": item.target_name,
+                    "is_dir": False,
+                })
+            transferred.extend([item.origin_name for item in plan[:limit]])
+
+        for item in dirs:
+            sub_name = _get_name(item)
+            sub_fid = _get_fid(item)
+            if not sub_name or not sub_fid:
+                continue
+            transferred.extend(
+                self._sync_share_dir_incremental(
+                    pwd_id=pwd_id,
+                    stoken=stoken,
+                    share_fid=str(sub_fid),
+                    share_name=sub_name,
+                    dest_base_fid=dest_fid,
+                    dest_base_path=dest_path,
+                    ignore_extension=ignore_extension,
+                    tree=tree,
+                    rel_label=f"{rel_label}/{sub_name}",
+                    depth=depth + 1,
+                    copy_all=copy_all,
+                )
+            )
+        return transferred
+
+    def _save_share_dir_once(
+        self,
+        *,
+        pwd_id: str,
+        stoken: str,
+        share_fid: str,
+        share_token: str | None,
+        share_name: str,
+        dest_root_fid: str,
+        dest_dir_map: dict[str, str],
+        savepath: str,
+        ignore_extension: bool,
+        tree: Tree,
+    ) -> list[str]:
+        if share_name in dest_dir_map:
+            self._line(f"跳过已存在的文件夹: {share_name}")
+            return []
+        # 优先整包转存目录 fid
+        if share_token:
+            try:
+                plan = [
+                    DramaPlanItem(
+                        fid=share_fid,
+                        fid_token=str(share_token),
+                        origin_name=share_name,
+                        target_name=share_name,
+                    )
+                ]
+                saved = self._save_with_saved_fids(pwd_id=pwd_id, stoken=stoken, dest_root_fid=dest_root_fid, plan=plan)
+                if saved:
+                    self._line(f"整包转存文件夹: {share_name}")
+                    dest_dir_map[share_name] = str(saved[0] or "")
+                    tree.create_node(f"📁{share_name}", f"folder-{share_name}", parent="root", data={"is_dir": True})
+                    return []
+            except Exception as exc:
+                self._line(f"目录直转失败，改为逐文件转存: {exc}")
+        # 退化：新建同名目录 + 递归转存全部文件
+        self._line(f"逐文件整包转存文件夹: {share_name}")
+        return self._sync_share_dir_incremental(
+            pwd_id=pwd_id,
+            stoken=stoken,
+            share_fid=share_fid,
+            share_name=share_name,
+            dest_base_fid=dest_root_fid,
+            dest_base_path=savepath,
+            ignore_extension=ignore_extension,
+            tree=tree,
+            rel_label=share_name,
+            depth=0,
+            copy_all=True,
+        )
+
+    def _record_saved_latest(self, file_names: list[str]) -> None:
+        """记录本次转存到的最大集数（写到任务的 extra.saved_latest）。"""
+        if not file_names:
+            return
+        from datetime import datetime
+
+        from app.services.episode_number import extract_episode, guess_episode
+
+        extra = self.task_data.get("extra") if isinstance(self.task_data.get("extra"), dict) else {}
+        prev = extra.get("saved_latest") if isinstance(extra.get("saved_latest"), dict) else {}
+        try:
+            prev_episode = int(prev.get("episode") or 0)
+        except (TypeError, ValueError):
+            prev_episode = 0
+
+        mr = MagicRename(magic_regex=(self.task_data.get("magic_regex") if isinstance(self.task_data.get("magic_regex"), dict) else None))
+        mr.set_taskname(str(self.task_data.get("taskname") or ""))
+        pattern = str(self.task_data.get("pattern") or "")
+        replace = str(self.task_data.get("replace") or "")
+        if pattern and replace:
+            try:
+                pattern, replace = mr.magic_regex_conv(pattern, replace)
+                mr._resolved_pattern = pattern
+                mr._resolved_replace = replace
+            except Exception:
+                mr = None
+        else:
+            mr = None
+
+        best_episode = prev_episode
+        best_season = prev.get("season")
+        best_name = str(prev.get("name") or "")
+        for name in file_names:
+            season, episode = extract_episode(name, mr=mr)
+            if episode is None:
+                episode = guess_episode(name)
+            if episode is None:
+                continue
+            if int(episode) > int(best_episode or 0):
+                best_episode = int(episode)
+                best_season = season
+                best_name = name
+        if not best_episode:
+            return
+        self.saved_latest = {
+            "episode": int(best_episode),
+            "season": best_season,
+            "name": best_name,
+            "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }

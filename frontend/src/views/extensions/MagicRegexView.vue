@@ -2,16 +2,12 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { deleteMagicRegexRule, fetchMagicRegexRules, upsertMagicRegexRule } from '@/api/magicRegex'
-import { fetchOpenListConfig, patchOpenListConfig } from '@/api/openlist'
-import { fetchResourceSearchSources, patchResourceSearchSource } from '@/api/resourceSearch'
 import { fetchTMDBConfig, patchTMDBConfig } from '@/api/tmdb'
 import { fetchTaskTemplates, createTaskTemplate, updateTaskTemplate, deleteTaskTemplate } from '@/api/taskTemplates'
 import type { TaskTemplate } from '@/api/taskTemplates'
 import { TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import type { MagicRegexRuleSetting } from '@/types/magicRegex'
-import type { OpenListConfig } from '@/types/openlist'
-import type { ResourceSearchSourceItem } from '@/types/resourceSearch'
 import type { TMDBConfig } from '@/types/tmdb'
 
 const auth = useAuthStore()
@@ -49,28 +45,12 @@ const TEMPLATE_FIELDS = [
   { key: 'folder_filter', label: '文件夹筛选', type: 'keyword', hint: '只转存文件夹名称包含这些词的目录，用 | 分隔' },
   { key: 'folder_exclude', label: '文件夹过滤', type: 'keyword', hint: '跳过文件夹名称包含这些词的目录，用 | 分隔' },
   { key: 'folder_priority', label: '文件夹优先级', type: 'keyword', hint: '匹配的文件夹将优先转存，用 | 分隔' },
-  { key: 'auto_update_file_min_date', label: '自动更新文件时间过滤', type: 'switch', hint: '追剧进度追上最新集数时自动更新文件时间过滤' },
+  { key: 'folder_mode', label: '文件夹模式', type: 'text', hint: 'normal=普通平铺；folder_diff=文件夹对比（白名单增量 + 其它文件夹整包一次）' },
+  { key: 'whitelist_folders', label: '白名单文件夹', type: 'keyword', hint: '文件夹对比模式下按相对路径+文件名增量的文件夹，用 | 分隔' },
   { key: 'filter_words', label: '关键词过滤', type: 'filter_words', hint: '转存时过滤掉文件名包含这些关键词的文件' },
   { key: 'file_filter', label: '关键词筛选', type: 'keyword', hint: '只转存文件名包含这些关键词的文件，用 | 分隔' },
   { key: 'min_size', label: '最小文件大小', type: 'text', hint: '小于此大小的文件将被过滤，如：100MB' },
 ]
-
-const resourceSearch = reactive({
-  loading: false,
-  savingKey: '' as string,
-  selectedSource: 'pansou' as 'pansou' | 'cloudsaver',
-  cloudsaver: {
-    enabled: false,
-    server: '',
-    username: '',
-    token: '',
-    passwordInput: '',
-  },
-  pansou: {
-    enabled: false,
-    server: '',
-  },
-})
 
 const tmdb = reactive({
   loading: false,
@@ -79,20 +59,6 @@ const tmdb = reactive({
   language: 'zh-CN',
   posterLanguage: 'zh-CN',
   apiKeyInput: '',
-})
-
-const openlist = reactive({
-  loading: false,
-  saving: false,
-  url: '',
-  hasToken: false,
-  tokenInput: '',
-})
-
-const hive = reactive({
-  loading: false,
-  saving: false,
-  api_url: '',
 })
 
 const sharerFilter = reactive({
@@ -155,41 +121,6 @@ async function refresh() {
   }
 }
 
-function findSource(list: ResourceSearchSourceItem[], key: string) {
-  return list.find((x) => x.key === key) || null
-}
-
-function applySources(list: ResourceSearchSourceItem[]) {
-  const cs = findSource(list, 'cloudsaver')
-  if (cs) {
-    resourceSearch.cloudsaver.enabled = Boolean(cs.enabled)
-    resourceSearch.cloudsaver.server = String(cs.server || '')
-    resourceSearch.cloudsaver.username = String(cs.username || '')
-    resourceSearch.cloudsaver.token = String(cs.token || '')
-  }
-  const ps = findSource(list, 'pansou')
-  if (ps) {
-    resourceSearch.pansou.enabled = Boolean(ps.enabled)
-    resourceSearch.pansou.server = String(ps.server || '')
-  }
-  // 默认选中已启用的搜索源
-  if (resourceSearch.cloudsaver.enabled) {
-    resourceSearch.selectedSource = 'cloudsaver'
-  } else {
-    resourceSearch.selectedSource = 'pansou'
-  }
-}
-
-async function refreshSources() {
-  resourceSearch.loading = true
-  try {
-    const data = await fetchResourceSearchSources()
-    applySources(data.sources || [])
-  } finally {
-    resourceSearch.loading = false
-  }
-}
-
 function applyTMDBConfig(data: TMDBConfig) {
   tmdb.hasApiKey = Boolean(data.has_api_key)
   tmdb.language = String(data.language || 'zh-CN')
@@ -203,39 +134,6 @@ async function refreshTMDB() {
     applyTMDBConfig(data)
   } finally {
     tmdb.loading = false
-  }
-}
-
-function applyOpenListConfig(data: OpenListConfig) {
-  openlist.url = String(data.url || '')
-  openlist.hasToken = Boolean(data.has_token)
-}
-
-async function refreshOpenList() {
-  openlist.loading = true
-  try {
-    const data = await fetchOpenListConfig()
-    applyOpenListConfig(data)
-  } finally {
-    openlist.loading = false
-  }
-}
-
-async function saveOpenList() {
-  if (!canWrite.value) return
-  openlist.saving = true
-  try {
-    const payload: any = {
-      url: openlist.url ? String(openlist.url).trim() : null,
-    }
-    const token = String(openlist.tokenInput || '').trim()
-    if (token) payload.token = token
-    const data = await patchOpenListConfig(payload)
-    openlist.tokenInput = ''
-    applyOpenListConfig(data)
-    ElMessage.success('已保存')
-  } finally {
-    openlist.saving = false
   }
 }
 
@@ -263,32 +161,6 @@ function addSharerFromInput() {
   sharerDialog.inputValue = ''
 }
 
-
-async function loadHiveSettings() {
-  hive.loading = true
-  try {
-    const { fetchHiveSettings } = await import('@/api/systemSettings')
-    const data = await fetchHiveSettings()
-    hive.api_url = data.hive_api_url || ''
-  } catch (e) {
-    console.error('加载HDHive设置失败', e)
-  } finally {
-    hive.loading = false
-  }
-}
-
-async function saveHiveSettings() {
-  hive.saving = true
-  try {
-    const { updateHiveSettings } = await import('@/api/systemSettings')
-    await updateHiveSettings({ hive_api_url: hive.api_url.trim() })
-    ElMessage.success('HDHive设置已保存')
-  } catch (e) {
-    ElMessage.error('保存失败')
-  } finally {
-    hive.saving = false
-  }
-}
 
 async function loadSharerFilter() {
   sharerFilter.loading = true
@@ -392,36 +264,6 @@ async function saveTMDB() {
     ElMessage.success('已保存')
   } finally {
     tmdb.saving = false
-  }
-}
-
-async function saveSource(key: 'cloudsaver' | 'pansou') {
-  if (!canWrite.value) return
-  resourceSearch.savingKey = key
-  try {
-    if (key === 'pansou') {
-      await patchResourceSearchSource('pansou', {
-        enabled: Boolean(resourceSearch.pansou.enabled),
-        server: resourceSearch.pansou.server ? String(resourceSearch.pansou.server).trim() : null,
-      })
-      ElMessage.success('已保存')
-      await refreshSources()
-      return
-    }
-
-    const payload: any = {
-      enabled: Boolean(resourceSearch.cloudsaver.enabled),
-      server: resourceSearch.cloudsaver.server ? String(resourceSearch.cloudsaver.server).trim() : null,
-      username: resourceSearch.cloudsaver.username ? String(resourceSearch.cloudsaver.username).trim() : null,
-    }
-    const pw = String(resourceSearch.cloudsaver.passwordInput || '')
-    if (pw.trim()) payload.password = pw
-    await patchResourceSearchSource('cloudsaver', payload)
-    resourceSearch.cloudsaver.passwordInput = ''
-    ElMessage.success('已保存')
-    await refreshSources()
-  } finally {
-    resourceSearch.savingKey = ''
   }
 }
 
@@ -665,13 +507,10 @@ async function removeTemplate(template: TaskTemplate) {
 
 onMounted(() => {
   refresh()
-  refreshSources()
   refreshTMDB()
-  refreshOpenList()
   loadSharerFilter()
   loadFilterRules()
   loadTemplates()
-  loadHiveSettings()
 })
 </script>
 
@@ -785,56 +624,10 @@ onMounted(() => {
         </el-dialog>
       </el-tab-pane>
 
-      <el-tab-pane label="资源搜索" name="resource_search">
+      <el-tab-pane label="搜索过滤" name="resource_search">
         <div class="page__hint">
-          <div>任务名称输入框会使用这里的搜索源进行资源建议。</div>
-          <div>CloudSaver 密码不回显；如需修改请重新输入后保存。</div>
+          <div>这里设置搜索结果的分享者过滤。API 和 Python 搜索源请到“搜索源管理”页面配置。</div>
         </div>
-
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>搜索源</div>
-              <div>
-                <el-button text :loading="resourceSearch.loading" @click="refreshSources">刷新</el-button>
-                <el-button type="primary" :loading="!!resourceSearch.savingKey" :disabled="!canWrite" @click="saveSource(resourceSearch.selectedSource)">保存</el-button>
-              </div>
-            </div>
-          </template>
-          <el-form label-position="top" :disabled="resourceSearch.loading">
-            <el-form-item label="搜索引擎">
-              <el-select v-model="resourceSearch.selectedSource" style="width: 100%">
-                <el-option label="PanSou" value="pansou" />
-                <el-option label="CloudSaver" value="cloudsaver" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="启用">
-              <el-switch v-if="resourceSearch.selectedSource === 'pansou'" v-model="resourceSearch.pansou.enabled" :disabled="!canWrite" />
-              <el-switch v-else v-model="resourceSearch.cloudsaver.enabled" :disabled="!canWrite" />
-            </el-form-item>
-
-            <template v-if="resourceSearch.selectedSource === 'pansou'">
-              <el-form-item label="服务器">
-                <el-input v-model="resourceSearch.pansou.server" placeholder="例如：https://so.252035.xyz" />
-              </el-form-item>
-            </template>
-
-            <template v-else>
-              <el-form-item label="服务器">
-                <el-input v-model="resourceSearch.cloudsaver.server" placeholder="例如：http://172.17.0.1:8008" />
-              </el-form-item>
-              <el-form-item label="用户名">
-                <el-input v-model="resourceSearch.cloudsaver.username" placeholder="用户名" />
-              </el-form-item>
-              <el-form-item label="密码（留空表示不修改）">
-                <el-input v-model="resourceSearch.cloudsaver.passwordInput" type="password" show-password placeholder="请输入新密码" />
-              </el-form-item>
-              <el-form-item label="Token（自动维护）">
-                <el-input v-model="resourceSearch.cloudsaver.token" disabled placeholder="自动登录后会写入 token" />
-              </el-form-item>
-            </template>
-          </el-form>
-        </el-card>
 
         <el-card class="page__card" shadow="never">
           <template #header>
@@ -909,26 +702,6 @@ onMounted(() => {
           </el-form>
         </el-card>
 
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>HDHive 影巢设置</div>
-              <el-button text :loading="hive.loading" @click="loadHiveSettings">刷新</el-button>
-            </div>
-          </template>
-          <div style="margin-bottom: 12px; color: var(--el-text-color-secondary); font-size: 13px">
-            配置HDHive服务地址，用于影巢任务获取最新分享链接。
-          </div>
-          <el-form label-position="top" :disabled="hive.loading">
-            <el-form-item label="HDHive服务地址">
-              <el-input v-model="hive.api_url" placeholder="例如：http://192.168.50.41:8080" />
-              <div class="form-item-hint">HDHive项目的访问地址，需要包含端口号</div>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="hive.saving" :disabled="!canWrite" @click="saveHiveSettings">保存配置</el-button>
-            </el-form-item>
-          </el-form>
-        </el-card>
       </el-tab-pane>
 
       <el-tab-pane label="TMDB" name="tmdb">
@@ -968,38 +741,6 @@ onMounted(() => {
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="OpenList" name="openlist">
-        <div class="page__hint">
-          <div>用于同步任务等功能的 OpenList 连接配置。</div>
-          <div>Token 不回显；留空保存表示不修改。</div>
-        </div>
-
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>OpenList 配置</div>
-              <div>
-                <el-button text :loading="openlist.loading" @click="refreshOpenList">刷新</el-button>
-                <el-button type="primary" :loading="openlist.saving" :disabled="!canWrite" @click="saveOpenList">保存</el-button>
-              </div>
-            </div>
-          </template>
-
-          <el-form label-position="top" :disabled="openlist.loading">
-            <el-form-item label="地址（url）">
-              <el-input v-model="openlist.url" placeholder="例如：http://172.17.0.1:5244" />
-            </el-form-item>
-            <el-form-item label="Token（留空不修改）">
-              <el-input
-                v-model="openlist.tokenInput"
-                type="password"
-                show-password
-                :placeholder="openlist.hasToken ? '已配置（留空不修改）' : '请输入 OpenList Token'"
-              />
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="dialog.visible" :title="dialog.isEdit ? '编辑规则' : '新增规则'" width="720px">

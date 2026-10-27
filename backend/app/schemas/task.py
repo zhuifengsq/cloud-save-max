@@ -11,7 +11,6 @@ class TaskBase(BaseModel):
     taskname: str = Field(min_length=1, max_length=255)
     shareurl: str = Field(min_length=1)
     savepath: str = Field(min_length=1, max_length=255)
-    sync_task_uids: list[str] | None = None
     pattern: str | None = Field(default=None, max_length=255)
     replace: str | None = Field(default=None, max_length=255)
     ignore_extension: bool = False
@@ -32,7 +31,6 @@ class TaskUpdateIn(BaseModel):
     taskname: str | None = Field(default=None, min_length=1, max_length=255)
     shareurl: str | None = None
     savepath: str | None = Field(default=None, min_length=1, max_length=255)
-    sync_task_uids: list[str] | None = None
     pattern: str | None = Field(default=None, max_length=255)
     replace: str | None = Field(default=None, max_length=255)
     ignore_extension: bool | None = None
@@ -48,6 +46,17 @@ class TaskStatusIn(BaseModel):
     enabled: bool
 
 
+class TaskShareLinkOut(BaseModel):
+    share_url: str
+    share_id: str = ""
+    title: str = ""
+    drive_type: str
+    account_name: str
+    passcode: str | None = None
+    expires_in_days: int | None = None
+    saved_at: str | None = None
+
+
 class TaskExecutionOut(BaseModel):
     id: int
     task_id: int
@@ -59,7 +68,6 @@ class TaskExecutionOut(BaseModel):
     stage: str | None = None
     run_log: str | None = None
     adapter_snapshot: dict[str, Any] = {}
-    plugins_snapshot: list[dict[str, Any]] = []
 
 
 class DramaUpdateProgressOut(BaseModel):
@@ -103,39 +111,3 @@ class StopCompletedDramaTasksOut(BaseModel):
     matched: int = 0
     stopped: int = 0
     task_ids: list[int] = []
-
-
-class SavepathSnapshotSyncItemOut(BaseModel):
-    task_id: int
-    task_uid: str
-    taskname: str
-    ok: bool
-    message: str | None = None
-
-
-class SavepathSnapshotSyncOut(BaseModel):
-    checked: int = 0
-    synced: int = 0
-    skipped: int = 0
-    failed: int = 0
-    items: list[SavepathSnapshotSyncItemOut] = []
-
-
-class HiveResourceOut(BaseModel):
-    """HDHive资源输出"""
-    item_id: int
-    resource_id: int | None = None
-    title: str | None = None
-    media_type: str | None = None
-    tmdb_id: str | None = None
-    full_url: str | None = None
-    access_code: str | None = None
-    validate_status: str | None = None
-    uploader_name: str | None = None
-
-
-class HiveResourceListOut(BaseModel):
-    """HDHive资源列表输出"""
-    success: bool
-    data: list[HiveResourceOut] = []
-    message: str | None = None

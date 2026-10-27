@@ -645,6 +645,18 @@ onMounted(() => {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+@media (max-width: 1440px) {
+  .dashboard-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .dashboard-metrics { grid-template-columns: minmax(0, 1fr); }
+}
+
 .dot,
 .meta-dot {
   margin: 0 6px;
@@ -657,9 +669,19 @@ onMounted(() => {
 
 .updates-row {
   display: grid;
-  grid-template-columns: 1.55fr 0.85fr;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 0.85fr);
   gap: 20px;
   align-items: start;
+  min-width: 0;
+}
+
+.updates-row > * {
+  min-width: 0;
+}
+
+.updates-card,
+.upcoming-card {
+  min-width: 0;
 }
 
 .update-list {

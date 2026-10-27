@@ -10,45 +10,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.errors import bad_request, not_found
 from app.extensions.runtime.adapter_registry import AdapterRegistry
 from app.extensions.runtime.task_executor import TaskExecutor
-from app.models.sync_task import SyncTask
-from app.models.sync_task_drama_link import SyncTaskDramaLink
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
+from app.services.task_share_links import drop_task_share_link, merge_task_extra
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_uids(value: list[str] | None) -> list[str]:
-    if not value:
-        return []
-    seen: set[str] = set()
-    out: list[str] = []
-    for raw in value:
-        uid = str(raw or "").strip()
-        if not uid or uid in seen:
-            continue
-        seen.add(uid)
-        out.append(uid)
-    return out
-
-
-def _validate_sync_task_uids(db: Session, uids: list[str]) -> None:
-    if not uids:
-        return
-    rows = db.execute(select(SyncTask.uid).where(SyncTask.uid.in_(uids))).scalars().all()
-    existing = {str(x) for x in rows if x}
-    missing = [uid for uid in uids if uid not in existing]
-    if missing:
-        raise bad_request("TASK_SYNC_TASK_NOT_FOUND", "关联同步任务不存在", detail=",".join(missing[:20]))
-
-
-def _replace_sync_links_for_drama(db: Session, *, task_uid: str, sync_task_uids: list[str] | None) -> None:
-    uids = _normalize_uids(sync_task_uids)
-    _validate_sync_task_uids(db, uids)
-    db.query(SyncTaskDramaLink).filter(SyncTaskDramaLink.task_uid == str(task_uid)).delete(synchronize_session=False)
-    if uids:
-        db.add_all([SyncTaskDramaLink(sync_task_uid=str(uid), task_uid=str(task_uid)) for uid in uids])
-    db.flush()
 
 
 def list_tasks(db: Session) -> list[Task]:
@@ -150,20 +116,14 @@ def create_task(db: Session, **payload) -> Task:
     )
     db.add(task)
     db.flush()
-    sync_task_uids = payload.get("sync_task_uids")
-    if str(getattr(task, "task_type", "") or "") == "drama":
-        if sync_task_uids is not None:
-            _replace_sync_links_for_drama(db, task_uid=str(task.task_uid), sync_task_uids=sync_task_uids)
-    else:
-        if _normalize_uids(sync_task_uids):
-            raise bad_request("TASK_SYNC_LINK_NOT_ALLOWED", "仅追剧任务可关联同步任务")
     return task
 
 
 def update_task(db: Session, task_id: int, **payload) -> Task:
     task = get_task(db, task_id)
-    sync_task_uids_present = "sync_task_uids" in payload
-    sync_task_uids = payload.get("sync_task_uids") if sync_task_uids_present else None
+    previous_shareurl = str(getattr(task, "shareurl", "") or "").strip()
+    previous_savepath = str(getattr(task, "savepath", "") or "").strip()
+    previous_account_name = str(getattr(task, "account_name", "") or "").strip()
     clearable_fields = {'pattern', 'replace', 'account_name', 'tmdb_id', 'tmdb_media_type'}
     for key in [
         'task_type',
@@ -208,21 +168,19 @@ def update_task(db: Session, task_id: int, **payload) -> Task:
     if payload.get('addition') is not None:
         task.addition_json = json.dumps(payload['addition'], ensure_ascii=False)
     if payload.get('extra') is not None:
-        task.extra_json = json.dumps(payload['extra'], ensure_ascii=False)
+        merge_task_extra(task, payload['extra'])
+    if any(key in payload for key in ('shareurl', 'savepath', 'account_name')):
+        link_target_changed = (
+            str(getattr(task, "shareurl", "") or "").strip() != previous_shareurl
+            or str(getattr(task, "savepath", "") or "").strip() != previous_savepath
+            or str(getattr(task, "account_name", "") or "").strip() != previous_account_name
+        )
+        if link_target_changed:
+            # The saved share link points at the previous source/path, so it must not be reused.
+            drop_task_share_link(task)
     if "shareurl" in payload:
         new_shareurl = str(getattr(task, "shareurl", "") or "").strip()
 
-    if "task_type" in payload and str(getattr(task, "task_type", "") or "") != "drama":
-        db.query(SyncTaskDramaLink).filter(SyncTaskDramaLink.task_uid == str(task.task_uid)).delete(synchronize_session=False)
-        if _normalize_uids(sync_task_uids):
-            raise bad_request("TASK_SYNC_LINK_NOT_ALLOWED", "仅追剧任务可关联同步任务")
-
-    if sync_task_uids_present:
-        if str(getattr(task, "task_type", "") or "") != "drama":
-            if _normalize_uids(sync_task_uids):
-                raise bad_request("TASK_SYNC_LINK_NOT_ALLOWED", "仅追剧任务可关联同步任务")
-        else:
-            _replace_sync_links_for_drama(db, task_uid=str(task.task_uid), sync_task_uids=sync_task_uids)
     db.flush()
     return task
 
@@ -235,7 +193,6 @@ def set_task_enabled(db: Session, task_id: int, enabled: bool) -> Task:
 
 def delete_task(db: Session, task_id: int) -> None:
     task = get_task(db, task_id)
-    db.query(SyncTaskDramaLink).filter(SyncTaskDramaLink.task_uid == str(task.task_uid)).delete(synchronize_session=False)
     db.delete(task)
     db.flush()
 

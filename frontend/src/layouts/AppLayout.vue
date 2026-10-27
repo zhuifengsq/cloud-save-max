@@ -1,10 +1,27 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { ArrowRight, Bell, Calendar, Film, HomeFilled, Menu, Setting, User } from '@element-plus/icons-vue'
+import { computed, ref, watch } from 'vue'
+import {
+  ArrowRight,
+  Bell,
+  Calendar,
+  Cloudy,
+  Document,
+  Film,
+  FolderOpened,
+  HomeFilled,
+  Link,
+  Menu,
+  Picture,
+  Search,
+  Setting,
+  User,
+  VideoPlay,
+} from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { resetDynamicRoutes } from '@/router'
 import { useAuthStore } from '@/stores/auth'
+import logoCat from '@/assets/logo-cat.png'
 
 
 const route = useRoute()
@@ -15,11 +32,18 @@ const iconMap = {
   ArrowRight,
   Bell,
   Calendar,
+  Cloudy,
+  Document,
   Film,
+  FolderOpened,
   HomeFilled,
+  Link,
   Menu,
+  Picture,
+  Search,
   Setting,
   User,
+  VideoPlay,
 }
 
 const breadcrumbs = computed(() =>
@@ -34,15 +58,6 @@ const isDark = computed({
   set: (val: boolean) => {
     theme.value = val ? 'dark' : 'light'
   },
-})
-
-const buildTag = ref<string | null>(null)
-const buildSha = ref<string | null>(null)
-const versionText = computed(() => {
-  const tag = (buildTag.value || '').trim() || 'dev'
-  const sha = (buildSha.value || '').trim()
-  if (sha) return `${tag} (${sha.slice(0, 7)})`
-  return tag
 })
 
 function getInitialTheme(): 'light' | 'dark' {
@@ -92,11 +107,6 @@ async function handleLogout() {
   router.replace('/login')
 }
 
-onMounted(async () => {
-  buildTag.value = 'v26.9.6'
-  buildSha.value = '7ac2864'
-})
-
 watch(
   theme,
   (value) => {
@@ -117,10 +127,12 @@ watch(
     <aside class="app-aside">
       <div class="glass-panel app-nav-card">
         <div class="app-logo">
-          <div class="app-logo__mark"> CASX </div>
+          <div class="app-logo__mark">
+            <img :src="logoCat" alt="追剧一体化平台" />
+          </div>
           <div>
             <div class="app-logo__title">追剧一体化平台</div>
-            <div class="app-logo__subtitle">全自动化追剧平台</div>
+            <div class="app-logo__subtitle">Automation Console</div>
           </div>
         </div>
 
@@ -159,18 +171,6 @@ watch(
             <el-switch v-model="isDark" inline-prompt active-text="暗" inactive-text="亮" />
           </div>
           <div class="app-aside-actions__row">
-            <span class="app-aside-actions__label">版本</span>
-            <a
-              class="app-version app-version-link"
-              :title="`${buildTag || ''} ${buildSha || ''}`.trim()"
-              href="https://github.com/wuanqicll-del/cloud-save-max"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {{ versionText }} <span class="app-github-text">GitHub</span>
-            </a>
-          </div>
-          <div class="app-aside-actions__row">
             <span class="app-aside-actions__label">账号</span>
             <el-button type="primary" @click="handleLogout">退出登录</el-button>
           </div>
@@ -187,15 +187,12 @@ watch(
     >
       <template #header>
         <div class="app-logo app-logo--drawer">
-          <div class="app-logo__mark">XM</div>
+          <div class="app-logo__mark">
+            <img :src="logoCat" alt="追剧一体化平台" />
+          </div>
           <div>
             <div class="app-logo__title">追剧一体化平台</div>
-            <a
-              class="app-logo__subtitle app-version-link"
-              href="https://github.com/wuanqicll-del/cloud-save-max"
-              target="_blank"
-              rel="noopener noreferrer"
-            >{{ versionText }} <span class="app-github-text">GitHub</span></a>
+            <div class="app-logo__subtitle">全自动化追剧平台</div>
           </div>
         </div>
       </template>

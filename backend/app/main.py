@@ -21,7 +21,6 @@ from app.extensions.runtime.telegram_bot_manager import telegram_bot_manager
 from app.extensions.runtime.task_scheduler import task_scheduler_manager
 from app.middlewares.timing import TimingMiddleware
 from app.services.proxy_image_cache import ensure_dir, resolve_proxy_image_cache_dir
-from app.services.sync_execution_recovery import abort_running_sync_executions_on_startup, release_all_sync_task_locks_on_startup
 from app.services.setup import ensure_permissions_and_roles
 
 
@@ -69,11 +68,19 @@ def create_app() -> FastAPI:
         try:
             with SessionLocal() as db:
                 ensure_permissions_and_roles(db)
-                abort_running_sync_executions_on_startup(db)
-                release_all_sync_task_locks_on_startup(db)
                 db.commit()
         except Exception as e:
             logger.warning("权限初始化失败: %s", e, exc_info=True)
+        try:
+            with SessionLocal() as db:
+                from app.services.task_executions import prune_all_task_executions
+
+                removed = prune_all_task_executions(db)
+                db.commit()
+                if removed:
+                    logger.info("已清理旧任务执行记录: %s 条", removed)
+        except Exception as e:
+            logger.warning("清理旧任务执行记录失败: %s", e, exc_info=True)
         if bool(getattr(settings, "scheduler_enabled", True)):
             task_scheduler_manager.start()
         telegram_bot_manager.start()

@@ -1306,6 +1306,78 @@ class BaiduAdapter(BaseCloudDriveAdapter):
 
         return results
 
+    def create_share_link(self, file_path: str, title: str) -> Dict[str, str]:
+        """Create a Baidu share for the exact saved folder, permanent when possible."""
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+        path = "/" + "/".join(part for part in str(file_path or "").replace("\\", "/").split("/") if part)
+        if path == "/":
+            raise ValueError("不能分享网盘根目录")
+        parent = path.rsplit("/", 1)[0] or "/"
+        folder_info = self._api_list(parent)
+        if int(folder_info.get("errno") or 0) != 0:
+            raise RuntimeError("无法读取保存目录")
+        folder = next((item for item in folder_info.get("list", []) if str(item.get("path") or "") == path), None)
+        fs_id = str((folder or {}).get("fs_id") or "").strip()
+        if not fs_id or str(folder.get("isdir")) != "1":
+            raise ValueError("保存目录不存在，请先执行转存任务")
+        listing = self.ls_dir(path, max_items=1)
+        if not isinstance(listing, dict) or listing.get("code") != 0:
+            raise RuntimeError("无法读取保存目录")
+        if not (((listing.get("data") or {}).get("list")) or []):
+            raise ValueError("保存目录为空，请先执行转存任务")
+
+        passcode = "6666"
+        params = {"channel": "chunlei", "web": "1", "clienttype": "0"}
+        bdstoken = self._get_bdstoken()
+        if bdstoken:
+            params["bdstoken"] = bdstoken
+
+        def _create_share(period: str) -> dict:
+            data = {
+                "fid_list": json.dumps([fs_id], separators=(",", ":")),
+                "schannel": "4",
+                "channel_list": "[]",
+                "pwd": passcode,
+                # period: 0=永久有效，7=7天
+                "period": period,
+            }
+            return self._request(
+                "POST", PanNode.url(PanNode.SHARE), params=params,
+                headers={**PAN_HEADERS, "Referer": "https://pan.baidu.com/disk/home", "X-Requested-With": "XMLHttpRequest"},
+                data=data,
+            ).json() or {}
+
+        # 优先创建永久分享；个别账号或旧接口不支持时退回 7 天
+        response = _create_share("0")
+        errno = int(response.get("errno") or 0) if isinstance(response, dict) else -1
+        permanent = errno == 0
+        if not permanent:
+            response = _create_share("7")
+            errno = int(response.get("errno") or 0) if isinstance(response, dict) else -1
+        if not isinstance(response, dict):
+            raise RuntimeError("百度网盘没有返回分享结果")
+        if errno != 0:
+            raise RuntimeError(str(response.get("errmsg") or response.get("error_msg") or self._get_error_message(errno)))
+        share_url = str(response.get("link") or response.get("shorturl") or "").strip()
+        if share_url.startswith("http://pan.baidu.com/"):
+            share_url = "https://" + share_url[len("http://"):]
+        if not share_url.startswith("https://pan.baidu.com/"):
+            raise RuntimeError("百度网盘没有返回有效分享链接")
+        parts = urlsplit(share_url)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query["pwd"] = passcode
+        share_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+        result = {
+            "share_url": share_url,
+            "share_id": str(response.get("shareid") or response.get("share_id") or ""),
+            "title": str(title or path.rsplit("/", 1)[-1]),
+            "passcode": passcode,
+        }
+        if not permanent:
+            result["expires_in_days"] = "7"
+        return result
+
     def extract_url(self, url: str) -> Tuple[Optional[str], str, Any, List]:
         """解析百度网盘分享链接"""
         pwd_id = None

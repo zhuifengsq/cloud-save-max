@@ -15,7 +15,6 @@ from app.core.permissions import (
     PLUGIN_WRITE,
     ROLE_READ,
     ROLE_WRITE,
-    SYNC_READ,
     TASK_READ,
     TASK_RUN,
     TASK_WRITE,
@@ -73,7 +72,6 @@ def main() -> None:
             perms_by_code[PLUGIN_READ],
             perms_by_code[NOTIFY_READ],
             perms_by_code[TASK_READ],
-            perms_by_code[SYNC_READ],
         ]
 
         admin_user = db.execute(select(User).where(User.username == admin_username)).scalars().first()

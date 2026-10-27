@@ -1,16 +1,40 @@
-export type ResourceSearchSourceKey = 'cloudsaver' | 'pansou'
-
-export type ResourceSearchSourceItem = {
-  key: ResourceSearchSourceKey
+export type ApiSearchSource = {
+  id: string | number
+  name: string
   enabled: boolean
-  server?: string | null
-  username?: string | null
-  password?: string | null
-  token?: string | null
+  method: 'GET' | 'POST'
+  url: string
+  headers: Record<string, string>
+  query_params: Record<string, unknown>
+  body: Record<string, unknown> | null
+  response_rule?: string
+  items_path: string
+  title_path: string
+  url_path: string
+  password_path: string
+  datetime_path: string
 }
 
-export type ResourceSearchSourceListResponse = {
-  sources: ResourceSearchSourceItem[]
+export type ApiSearchSourceInput = Omit<ApiSearchSource, 'id'>
+
+export type PythonSearchPlugin = {
+  key: string
+  name: string
+  description?: string
+  version?: string
+  enabled: boolean
+  status?: string
+  error?: string | null
+}
+
+export type SearchTestResult = {
+  results?: TaskSuggestionItem[]
+  items?: TaskSuggestionItem[]
+  data?: TaskSuggestionItem[]
+  count?: number
+  message?: string
+  error?: string | null
+  success?: boolean
 }
 
 export type TaskSuggestionItem = {

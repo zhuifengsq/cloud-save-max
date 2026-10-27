@@ -35,9 +35,6 @@ from app.services.telegram_bot.formatters import (
     settings_domains_keyboard,
     settings_domains_message,
     status_message,
-    sync_detail_keyboard,
-    sync_detail_message,
-    sync_tasks_message,
     task_detail_keyboard,
     task_detail_message,
     tasks_message,
@@ -68,26 +65,8 @@ TASK_FIELDS: list[dict[str, Any]] = [
     {"key": "__tmdb_bind__", "label": "TMDB 关联", "type": "action", "default": "", "display_key": "__tmdb_label__", "transient": True},
     {"key": "tmdb_id", "label": "TMDB ID", "type": "int", "default": None, "editor": False},
     {"key": "tmdb_media_type", "label": "TMDB 类型", "type": "enum", "options": ["", "tv", "movie"], "default": "", "editor": False},
-    {"key": "sync_task_uids", "label": "关联同步任务", "type": "list", "default": [], "display_key": "sync_task_names"},
     {"key": "enabled", "label": "启用任务", "type": "bool", "default": True, "editor": False},
     {"key": "ignore_extension", "label": "忽略扩展名", "type": "bool", "default": False},
-]
-
-SYNC_FIELDS: list[dict[str, Any]] = [
-    {"key": "name", "label": "同步名称", "type": "str", "default": ""},
-    {"key": "enabled", "label": "启用同步", "type": "bool", "default": True, "editor": False},
-    {"key": "source.type", "label": "源类型", "type": "enum", "options": ["local", "openlist"], "default": "local"},
-    {"key": "source.path", "label": "源路径", "type": "str", "default": ""},
-    {"key": "target.type", "label": "目标类型", "type": "enum", "options": ["local", "openlist"], "default": "openlist"},
-    {"key": "target.path", "label": "目标路径", "type": "str", "default": ""},
-    {"key": "mode", "label": "同步模式", "type": "enum", "options": ["one_way", "two_way"], "default": "one_way"},
-    {"key": "strategy.overwrite", "label": "允许覆盖", "type": "bool", "default": False},
-    {"key": "strategy.one_way_delete_extras", "label": "单向删除多余文件", "type": "bool", "default": False},
-    {"key": "strategy.force_refresh", "label": "强制刷新目录", "type": "bool", "default": False},
-    {"key": "strategy.concurrency", "label": "并发数", "type": "int", "default": 4},
-    {"key": "strategy.request_interval_seconds", "label": "请求间隔秒数", "type": "float", "default": 0.0},
-    {"key": "strategy.openlist_copy_batch_size", "label": "OpenList 批量拷贝数", "type": "int", "default": 200},
-    {"key": "drama_task_uids", "label": "关联追剧任务", "type": "list", "default": [], "display_key": "drama_task_names"},
 ]
 
 ACCOUNT_FIELDS: list[dict[str, Any]] = [
@@ -118,19 +97,6 @@ SETTING_FIELD_MAP: dict[str, dict[str, dict[str, Any]]] = {
         "language": {"label": "元数据语言", "type": "str"},
         "poster_language": {"label": "海报语言", "type": "str"},
     },
-    "openlist": {
-        "url": {"label": "OpenList 地址", "type": "str"},
-        "token": {"label": "访问令牌", "type": "str"},
-        "has_token": {"label": "已配置访问令牌", "type": "bool", "editor": False},
-    },
-}
-
-RESOURCE_SOURCE_FIELD_MAP: dict[str, dict[str, dict[str, Any]]] = {
-    "enabled": {"label": "启用", "type": "bool"},
-    "server": {"label": "服务地址", "type": "str"},
-    "username": {"label": "用户名", "type": "str"},
-    "password": {"label": "密码", "type": "str"},
-    "token": {"label": "访问令牌", "type": "str"},
 }
 
 NOTIFICATION_FIELD_MAP: dict[str, dict[str, Any]] = {
@@ -209,29 +175,7 @@ def _setting_field_meta(domain: str, field: str, current: Any) -> dict[str, Any]
     return meta
 
 
-def _resource_source_fields(values: dict[str, Any]) -> list[dict[str, Any]]:
-    fields: list[dict[str, Any]] = []
-    for item in values.get("sources") or []:
-        source_key = str(item.get("key") or "").strip()
-        if not source_key:
-            continue
-        source_name = source_key.upper() if source_key.islower() else source_key
-        for inner_key, meta in RESOURCE_SOURCE_FIELD_MAP.items():
-            if inner_key not in item:
-                continue
-            fields.append(
-                {
-                    "key": f"{source_key}.{inner_key}",
-                    "label": f"{source_name} · {meta.get('label')}",
-                    "type": meta.get("type") or _infer_setting_type(item.get(inner_key), inner_key),
-                }
-            )
-    return fields
-
-
 def _setting_fields(actions: TelegramBotActions, domain: str, values: dict[str, Any], *, page: int = 1) -> tuple[list[dict[str, Any]], int | None, int | None]:
-    if domain == "resource_sources":
-        return _resource_source_fields(values), None, None
     if domain == "notifications":
         keys = actions.raw_notification_keys()
         page_size = 12
@@ -245,19 +189,7 @@ def _setting_fields(actions: TelegramBotActions, domain: str, values: dict[str, 
 
 
 def _setting_display_values(domain: str, values: dict[str, Any]) -> dict[str, Any]:
-    if domain != "resource_sources":
-        return dict(values or {})
-    display: dict[str, Any] = {}
-    for item in values.get("sources") or []:
-        source_key = str(item.get("key") or "").strip()
-        if not source_key:
-            continue
-        display[source_key] = {}
-        for inner_key, inner_value in item.items():
-            if inner_key == "key":
-                continue
-            display[source_key][str(inner_key)] = inner_value
-    return display
+    return dict(values or {})
 
 
 def _set_nested(target: dict[str, Any], path: str, value: Any) -> None:
@@ -360,28 +292,7 @@ def _field_prompt(meta: dict[str, Any]) -> str:
 def _editor_title(kind: str, target_id: int | None = None) -> str:
     if kind == "task":
         return f"编辑任务 #{target_id}" if target_id else "新建任务"
-    if kind == "sync":
-        return f"编辑同步 #{target_id}" if target_id else "新建同步任务"
     return f"编辑账号 #{target_id}" if target_id else "新建账号"
-
-
-def _sync_task_name_list(options: list[dict[str, Any]], uids: list[str]) -> list[str]:
-    name_map = {str(item.get("uid") or ""): str(item.get("name") or item.get("uid") or "") for item in options}
-    return [name_map.get(str(uid), str(uid)) for uid in uids if str(uid).strip()]
-
-
-def _drama_task_name_list(options: list[dict[str, Any]], uids: list[str]) -> list[str]:
-    name_map = {str(item.get("task_uid") or ""): str(item.get("taskname") or item.get("task_uid") or "") for item in options}
-    return [name_map.get(str(uid), str(uid)) for uid in uids if str(uid).strip()]
-
-
-def _local_parent_path(path: str) -> str:
-    normalized = str(path or "").strip().replace("\\", "/").strip("/")
-    if not normalized:
-        return ""
-    if "/" not in normalized:
-        return ""
-    return normalized.rsplit("/", 1)[0]
 
 
 def _remote_parent_path(path: str) -> str:
@@ -639,34 +550,6 @@ class TelegramBotHandler:
         )
         db.commit()
 
-    def _show_sync_tasks(self, db: Session, chat_id: int, *, page: int = 1, message_id: int | None = None) -> None:
-        payload = self._actions(db).list_sync_tasks(page=page)
-        rows = [[button(f"#{item['id']} {item['name'][:20]}", "syn", "detail", item["id"])] for item in payload["items"]]
-        rows.append([button("➕ 新建同步", "syn", "new")])
-        rows.append(pagination_row("syn:list", payload["page"], payload["total"], payload["page_size"]))
-        mid = self._edit_or_send(chat_id, sync_tasks_message(payload), message_id=message_id, reply_markup=keyboard(rows))
-        save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, scene="sync", step="idle", context={"page": page}, last_message_id=mid)
-        db.commit()
-
-    def _show_sync_detail(self, db: Session, chat_id: int, sync_task_id: int, *, message_id: int | None = None, back_page: int = 1) -> None:
-        item = self._actions(db).get_sync_task_detail(sync_task_id)
-        mid = self._edit_or_send(
-            chat_id,
-            sync_detail_message(item),
-            message_id=message_id,
-            reply_markup=sync_detail_keyboard(sync_task_id, bool(item.get("enabled")), back_page=back_page),
-        )
-        save_session_data(
-            db,
-            chat_id=chat_id,
-            user_id=self.config.user_id,
-            scene="sync_detail",
-            step="idle",
-            context={"sync_task_id": sync_task_id, "page": back_page},
-            last_message_id=mid,
-        )
-        db.commit()
-
     def _show_accounts(self, db: Session, chat_id: int, *, page: int = 1, message_id: int | None = None) -> None:
         payload = self._actions(db).list_accounts(page=page)
         rows = [[button(f"#{item['id']} {item['name'][:20]}", "acc", "detail", item["id"])] for item in payload["items"]]
@@ -841,7 +724,7 @@ class TelegramBotHandler:
 
     def _resume_editor(self, db: Session, chat_id: int, *, kind: str, ctx: dict[str, Any], message_id: int | None = None) -> None:
         draft = dict(ctx.get("draft") or {})
-        fields = TASK_FIELDS if kind == "task" else SYNC_FIELDS if kind == "sync" else ACCOUNT_FIELDS
+        fields = TASK_FIELDS if kind == "task" else ACCOUNT_FIELDS
         self._start_editor(
             db,
             chat_id,
@@ -1149,132 +1032,6 @@ class TelegramBotHandler:
         save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, scene="task_share_browser", step="idle", context=ctx, last_message_id=mid)
         db.commit()
 
-    def _show_task_sync_selector(self, db: Session, chat_id: int, *, message_id: int | None = None) -> None:
-        session = load_session_data(db, chat_id=chat_id, user_id=self.config.user_id)
-        ctx = dict(session.context or {})
-        draft = dict(ctx.get("draft") or {})
-        page = max(1, int(ctx.get("sync_selector_page") or 1))
-        options = self._actions(db).list_sync_task_options()
-        selected = [str(x) for x in (_get_nested(draft, "sync_task_uids") or []) if str(x).strip()]
-        _set_nested(draft, "sync_task_names", _sync_task_name_list(options, selected))
-        ctx["draft"] = draft
-
-        page_size = 8
-        total = len(options)
-        max_page = max(1, (total + page_size - 1) // page_size)
-        page = min(page, max_page)
-        start = (page - 1) * page_size
-        items = options[start : start + page_size]
-
-        rows: list[list[dict[str, str]]] = []
-        for item in items:
-            uid = str(item.get("uid") or "")
-            checked = "✓" if uid in selected else "○"
-            status = "" if item.get("enabled") else " [停用]"
-            rows.append([button(f"{checked} {item.get('name') or uid}{status}", "msel", "sync", "toggle", uid)])
-        rows.append([button("🧹 清空已选", "msel", "sync", "clear"), button("✅ 完成", "msel", "sync", "done")])
-        rows.append(pagination_row("msel:sync:list", page, total, page_size))
-        rows.append([button("✏️ 返回编辑器", "msel", "sync", "done"), button("🏠 首页", "home")])
-        selected_names = _sync_task_name_list(options, selected)
-        lines = [
-            "选择关联同步任务",
-            f"已选: {', '.join(selected_names) if selected_names else '-'}",
-            f"页码: {page}/{max_page}",
-            "点击任务可切换选中状态。",
-        ]
-        mid = self._edit_or_send(chat_id, "\n".join(lines), message_id=message_id or session.last_message_id, reply_markup=keyboard(rows))
-        save_session_data(
-            db,
-            chat_id=chat_id,
-            user_id=self.config.user_id,
-            scene="task_sync_selector",
-            step="idle",
-            context={**ctx, "draft": draft, "sync_selector_page": page},
-            last_message_id=mid,
-        )
-        db.commit()
-
-    def _show_sync_drama_selector(self, db: Session, chat_id: int, *, message_id: int | None = None) -> None:
-        session = load_session_data(db, chat_id=chat_id, user_id=self.config.user_id)
-        ctx = dict(session.context or {})
-        draft = dict(ctx.get("draft") or {})
-        page = max(1, int(ctx.get("drama_selector_page") or 1))
-        options = self._actions(db).list_drama_task_options()
-        selected = [str(x) for x in (_get_nested(draft, "drama_task_uids") or []) if str(x).strip()]
-        _set_nested(draft, "drama_task_names", _drama_task_name_list(options, selected))
-        ctx["draft"] = draft
-
-        page_size = 8
-        total = len(options)
-        max_page = max(1, (total + page_size - 1) // page_size)
-        page = min(page, max_page)
-        start = (page - 1) * page_size
-        items = options[start : start + page_size]
-
-        rows: list[list[dict[str, str]]] = []
-        for item in items:
-            uid = str(item.get("task_uid") or "")
-            checked = "✓" if uid in selected else "○"
-            status = "" if item.get("enabled") else " [停用]"
-            rows.append([button(f"{checked} {item.get('taskname') or uid}{status}", "msel", "drama", "toggle", uid)])
-        rows.append([button("🧹 清空已选", "msel", "drama", "clear"), button("✅ 完成", "msel", "drama", "done")])
-        rows.append(pagination_row("msel:drama:list", page, total, page_size))
-        rows.append([button("✏️ 返回编辑器", "msel", "drama", "done"), button("🏠 首页", "home")])
-        selected_names = _drama_task_name_list(options, selected)
-        lines = [
-            "选择关联追剧任务",
-            f"已选: {', '.join(selected_names) if selected_names else '-'}",
-            f"页码: {page}/{max_page}",
-            "点击任务可切换选中状态。",
-        ]
-        mid = self._edit_or_send(chat_id, "\n".join(lines), message_id=message_id or session.last_message_id, reply_markup=keyboard(rows))
-        save_session_data(
-            db,
-            chat_id=chat_id,
-            user_id=self.config.user_id,
-            scene="sync_drama_selector",
-            step="idle",
-            context={**ctx, "draft": draft, "drama_selector_page": page},
-            last_message_id=mid,
-        )
-        db.commit()
-
-    def _show_sync_path_browser(self, db: Session, chat_id: int, *, field: str, message_id: int | None = None) -> None:
-        session = load_session_data(db, chat_id=chat_id, user_id=self.config.user_id)
-        ctx = dict(session.context or {})
-        draft = dict(ctx.get("draft") or {})
-        path_type = str(_get_nested(draft, field.replace(".path", ".type")) or "")
-        browse_key = f"browse_path:{field}"
-        browse_path = str(ctx.get(browse_key) or _get_nested(draft, field) or ("" if path_type == "local" else "/"))
-        payload = self._actions(db).browse_sync_path(path_type=path_type, dir_path=browse_path, max_items=20)
-        rows: list[list[dict[str, str]]] = []
-        dir_path = str(payload.get("dir_path") or "")
-        is_root = dir_path in {"", "/"}
-        if not is_root:
-            rows.append([button("⬆️ 上一级", "brw", "sync", "up")])
-        if not (path_type == "local" and dir_path == ""):
-            rows.append([button("✅ 选择当前目录", "brw", "sync", "sel"), button("🔄 刷新", "brw", "sync", "refresh")])
-        else:
-            rows.append([button("🔄 刷新", "brw", "sync", "refresh")])
-        for idx, item in enumerate(payload.get("items") or []):
-            prefix = "[DIR] " if item.get("is_dir") else "[FILE] "
-            rows.append([button(f"{prefix}{str(item.get('name') or '')[:26]}", "brw", "sync", "open", idx)])
-        rows.append([button("✏️ 返回编辑器", "brw", "sync", "back"), button("🏠 首页", "home")])
-        text_lines = [
-            f"选择同步路径: {field}",
-            f"类型: {path_type}",
-            f"路径: {dir_path or '/'}",
-        ]
-        if path_type == "local" and dir_path == "":
-            text_lines.append("本地根目录仅用于浏览，请继续进入子目录后再选择。")
-        if not payload.get("exists"):
-            text_lines.append("当前路径不存在，可先返回后手动输入。")
-        mid = self._edit_or_send(chat_id, "\n".join(text_lines), message_id=message_id or session.last_message_id, reply_markup=keyboard(rows))
-        ctx["browse_field"] = field
-        ctx[browse_key] = dir_path
-        save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, scene="sync_browser", step="idle", context=ctx, last_message_id=mid)
-        db.commit()
-
     def _show_account_auth(self, db: Session, chat_id: int, auth_payload: dict[str, Any], *, message_id: int | None = None, back_page: int = 1) -> None:
         account_id = int(auth_payload.get("account_id") or 0)
         method = str(auth_payload.get("method") or "")
@@ -1333,7 +1090,7 @@ class TelegramBotHandler:
     ) -> None:
         active_fields = _editor_fields(fields)
         field_order = [str(x.get("key") or "") for x in active_fields]
-        prefix = {"task": "tsk", "sync": "syn", "account": "acc"}[kind]
+        prefix = {"task": "tsk", "account": "acc"}[kind]
         if kind == "task":
             draft = self._decorate_task_draft(draft, ctx=extras)
         mid = self._edit_or_send(
@@ -1617,8 +1374,6 @@ class TelegramBotHandler:
             self._show_home(db, chat_id, message_id=message_id)
         elif cmd == "/tasks":
             self._show_tasks(db, chat_id, page=1, message_id=message_id)
-        elif cmd == "/sync":
-            self._show_sync_tasks(db, chat_id, page=1, message_id=message_id)
         elif cmd == "/accounts":
             self._show_accounts(db, chat_id, page=1, message_id=message_id)
         elif cmd == "/search":
@@ -1674,8 +1429,6 @@ class TelegramBotHandler:
             target = parts[1] if len(parts) > 1 else "home"
             if target == "tasks":
                 self._show_tasks(db, chat_id, page=1, message_id=message_id)
-            elif target == "sync":
-                self._show_sync_tasks(db, chat_id, page=1, message_id=message_id)
             elif target == "accounts":
                 self._show_accounts(db, chat_id, page=1, message_id=message_id)
             elif target == "search":
@@ -1689,9 +1442,6 @@ class TelegramBotHandler:
             return
         if head == "tsk":
             self._dispatch_task(db, chat_id, message_id, parts[1:])
-            return
-        if head == "syn":
-            self._dispatch_sync(db, chat_id, message_id, parts[1:])
             return
         if head == "acc":
             self._dispatch_account(db, chat_id, message_id, parts[1:])
@@ -1707,9 +1457,6 @@ class TelegramBotHandler:
             return
         if head == "brw":
             self._dispatch_browser(db, chat_id, message_id, parts[1:])
-            return
-        if head == "msel":
-            self._dispatch_multi_select(db, chat_id, message_id, parts[1:])
             return
         if head == "auth":
             self._dispatch_auth(db, chat_id, message_id, parts[1:])
@@ -1827,69 +1574,6 @@ class TelegramBotHandler:
         elif action == "delete":
             task_id = int(parts[1])
             self._edit_or_send(chat_id, f"⚠️ 确认删除任务 #{task_id} 吗？", message_id=message_id, reply_markup=keyboard([[button("🗑️ 确认删除", "confirm", "taskdel", task_id)], [button("✖️ 取消", "tsk", "detail", task_id)]]))
-
-    def _dispatch_sync(self, db: Session, chat_id: int, message_id: int, parts: list[str]) -> None:
-        session = load_session_data(db, chat_id=chat_id, user_id=self.config.user_id)
-        ctx = dict(session.context or {})
-        action = parts[0] if parts else "list"
-        if action == "list":
-            page = int(parts[1]) if len(parts) > 1 and str(parts[1]).isdigit() else 1
-            self._show_sync_tasks(db, chat_id, page=page, message_id=message_id)
-        elif action == "detail":
-            self._show_sync_detail(db, chat_id, int(parts[1]), message_id=message_id, back_page=int(ctx.get("page") or 1))
-        elif action == "run":
-            sync_task_id = int(parts[1])
-            self._run_async(chat_id, message_id, f"同步任务 #{sync_task_id} 执行中...", lambda adb: self._actions(adb).run_sync_task(sync_task_id), "同步执行完成")
-        elif action == "cancel":
-            sync_task_id = int(parts[1])
-            result = self._actions(db).cancel_sync_task(sync_task_id)
-            text = f"已请求取消同步任务 #{sync_task_id}" if result else "当前没有运行中的同步执行"
-            self._edit_or_send(chat_id, text, message_id=message_id, reply_markup=keyboard([[button("🔄 返回同步详情", "syn", "detail", sync_task_id)], [button("🏠 首页", "home")]]))
-        elif action == "toggle":
-            item = self._actions(db).toggle_sync_task(int(parts[1]))
-            self._show_sync_detail(db, chat_id, int(item["id"]), message_id=message_id, back_page=int(ctx.get("page") or 1))
-        elif action == "edit":
-            sync_task_id = int(parts[1])
-            item = self._actions(db).get_sync_task_detail(sync_task_id)
-            self._start_editor(
-                db,
-                chat_id,
-                kind="sync",
-                title=_editor_title("sync", sync_task_id),
-                fields=SYNC_FIELDS,
-                draft=_flatten_seed(SYNC_FIELDS, item),
-                target_id=sync_task_id,
-                message_id=message_id,
-                extras={"page": int(ctx.get("page") or 1)},
-            )
-        elif action == "new":
-            self._start_editor(
-                db,
-                chat_id,
-                kind="sync",
-                title=_editor_title("sync"),
-                fields=SYNC_FIELDS,
-                draft=_flatten_seed(SYNC_FIELDS),
-                message_id=message_id,
-                extras={"page": int(ctx.get("page") or 1)},
-            )
-        elif action == "field":
-            target_id = None if parts[1] == "new" else int(parts[1])
-            field = parts[2]
-            self._handle_editor_field_click(db, chat_id, message_id, kind="sync", fields=SYNC_FIELDS, target_id=target_id, field=field)
-        elif action == "save":
-            target_id = None if parts[1] == "new" else int(parts[1])
-            self._handle_editor_save(db, chat_id, message_id, kind="sync", fields=SYNC_FIELDS, target_id=target_id)
-        elif action == "execs":
-            sync_task_id = int(parts[1])
-            rows = self._actions(db).list_sync_executions(sync_task_id, limit=5)
-            lines = [f"同步 #{sync_task_id} 最近执行"]
-            for item in rows:
-                lines.append(f"#{item.get('id')} {item.get('status')} {item.get('message') or '-'}")
-            self._edit_or_send(chat_id, "\n".join(lines), message_id=message_id, reply_markup=keyboard([[button("🔄 返回同步详情", "syn", "detail", sync_task_id)], [button("🏠 首页", "home")]]))
-        elif action == "delete":
-            sync_task_id = int(parts[1])
-            self._edit_or_send(chat_id, f"⚠️ 确认删除同步任务 #{sync_task_id} 吗？", message_id=message_id, reply_markup=keyboard([[button("🗑️ 确认删除", "confirm", "syncdel", sync_task_id)], [button("✖️ 取消", "syn", "detail", sync_task_id)]]))
 
     def _dispatch_account(self, db: Session, chat_id: int, message_id: int, parts: list[str]) -> None:
         session = load_session_data(db, chat_id=chat_id, user_id=self.config.user_id)
@@ -2252,166 +1936,7 @@ class TelegramBotHandler:
                     return
                 self._show_task_share_browser(db, chat_id, message_id=message_id)
                 return
-        if mode == "sync":
-            field = str(ctx.get("browse_field") or "")
-            if not field:
-                raise ValueError("缺少浏览字段")
-            browse_key = f"browse_path:{field}"
-            current_path = str(ctx.get(browse_key) or "")
-            if action == "up":
-                draft = dict(ctx.get("draft") or {})
-                path_type = str(_get_nested(draft, field.replace(".path", ".type")) or "")
-                ctx[browse_key] = _local_parent_path(current_path) if path_type == "local" else _remote_parent_path(current_path)
-                save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, context=ctx)
-                db.commit()
-                self._show_sync_path_browser(db, chat_id, field=field, message_id=message_id)
-                return
-            if action == "open":
-                idx = int(parts[2]) if len(parts) > 2 else -1
-                draft = dict(ctx.get("draft") or {})
-                path_type = str(_get_nested(draft, field.replace(".path", ".type")) or "")
-                payload = self._actions(db).browse_sync_path(path_type=path_type, dir_path=current_path, max_items=20)
-                items = list(payload.get("items") or [])
-                if idx < 0 or idx >= len(items):
-                    raise ValueError("目录项不存在")
-                item = items[idx]
-                if not item.get("is_dir"):
-                    raise ValueError("只能选择目录")
-                ctx[browse_key] = str(item.get("path") or "")
-                save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, context=ctx)
-                db.commit()
-                self._show_sync_path_browser(db, chat_id, field=field, message_id=message_id)
-                return
-            if action == "sel":
-                draft = dict(ctx.get("draft") or {})
-                path_type = str(_get_nested(draft, field.replace(".path", ".type")) or "")
-                if path_type == "local" and current_path == "":
-                    raise ValueError("请先进入本地子目录后再选择")
-                _set_nested(draft, field, current_path)
-                ctx["draft"] = draft
-                ctx.pop(browse_key, None)
-                ctx.pop("browse_field", None)
-                save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, scene="sync_editor", step="idle", context=ctx, last_message_id=message_id)
-                db.commit()
-                self._start_editor(
-                    db,
-                    chat_id,
-                    kind="sync",
-                    title=_editor_title("sync", int(ctx.get("target_id") or 0) or None),
-                    fields=SYNC_FIELDS,
-                    draft=draft,
-                    target_id=int(ctx.get("target_id") or 0) or None,
-                    message_id=message_id,
-                    extras={k: v for k, v in ctx.items() if k != "draft"},
-                )
-                return
-            if action in {"refresh", "back"}:
-                if action == "back":
-                    ctx.pop(browse_key, None)
-                    ctx.pop("browse_field", None)
-                    save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, scene="sync_editor", step="idle", context=ctx, last_message_id=message_id)
-                    db.commit()
-                    self._start_editor(
-                        db,
-                        chat_id,
-                        kind="sync",
-                        title=_editor_title("sync", int(ctx.get("target_id") or 0) or None),
-                        fields=SYNC_FIELDS,
-                        draft=dict(ctx.get("draft") or {}),
-                        target_id=int(ctx.get("target_id") or 0) or None,
-                        message_id=message_id,
-                        extras={k: v for k, v in ctx.items() if k != "draft"},
-                    )
-                    return
-                self._show_sync_path_browser(db, chat_id, field=field, message_id=message_id)
-                return
         raise ValueError("不支持的浏览动作")
-
-    def _dispatch_multi_select(self, db: Session, chat_id: int, message_id: int, parts: list[str]) -> None:
-        session = load_session_data(db, chat_id=chat_id, user_id=self.config.user_id)
-        ctx = dict(session.context or {})
-        draft = dict(ctx.get("draft") or {})
-        mode = parts[0] if parts else ""
-        action = parts[1] if len(parts) > 1 else "list"
-        if mode == "sync":
-            options = self._actions(db).list_sync_task_options()
-            value_key = "sync_task_uids"
-            display_key = "sync_task_names"
-            page_key = "sync_selector_page"
-            kind = "task"
-            fields = TASK_FIELDS
-            title = _editor_title("task", int(ctx.get("target_id") or 0) or None)
-            selected = [str(x) for x in (_get_nested(draft, value_key) or []) if str(x).strip()]
-        elif mode == "drama":
-            options = self._actions(db).list_drama_task_options()
-            value_key = "drama_task_uids"
-            display_key = "drama_task_names"
-            page_key = "drama_selector_page"
-            kind = "sync"
-            fields = SYNC_FIELDS
-            title = _editor_title("sync", int(ctx.get("target_id") or 0) or None)
-            selected = [str(x) for x in (_get_nested(draft, value_key) or []) if str(x).strip()]
-        else:
-            raise ValueError("不支持的多选动作")
-        if action == "list":
-            page = int(parts[2]) if len(parts) > 2 and str(parts[2]).isdigit() else 1
-            ctx[page_key] = page
-            save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, context={**ctx, "draft": draft}, last_message_id=message_id)
-            db.commit()
-            if mode == "sync":
-                self._show_task_sync_selector(db, chat_id, message_id=message_id)
-            else:
-                self._show_sync_drama_selector(db, chat_id, message_id=message_id)
-            return
-        if action == "toggle":
-            uid = str(parts[2] or "") if len(parts) > 2 else ""
-            if uid:
-                if uid in selected:
-                    selected = [x for x in selected if x != uid]
-                else:
-                    selected.append(uid)
-            _set_nested(draft, value_key, selected)
-            if mode == "sync":
-                _set_nested(draft, display_key, _sync_task_name_list(options, selected))
-            else:
-                _set_nested(draft, display_key, _drama_task_name_list(options, selected))
-            ctx["draft"] = draft
-            save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, context=ctx, last_message_id=message_id)
-            db.commit()
-            if mode == "sync":
-                self._show_task_sync_selector(db, chat_id, message_id=message_id)
-            else:
-                self._show_sync_drama_selector(db, chat_id, message_id=message_id)
-            return
-        if action == "clear":
-            _set_nested(draft, value_key, [])
-            _set_nested(draft, display_key, [])
-            ctx["draft"] = draft
-            save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, context=ctx, last_message_id=message_id)
-            db.commit()
-            if mode == "sync":
-                self._show_task_sync_selector(db, chat_id, message_id=message_id)
-            else:
-                self._show_sync_drama_selector(db, chat_id, message_id=message_id)
-            return
-        if action == "done":
-            ctx.pop(page_key, None)
-            ctx["draft"] = draft
-            save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, scene=f"{kind}_editor", step="idle", context=ctx, last_message_id=message_id)
-            db.commit()
-            self._start_editor(
-                db,
-                chat_id,
-                kind=kind,
-                title=title,
-                fields=fields,
-                draft=draft,
-                target_id=int(ctx.get("target_id") or 0) or None,
-                message_id=message_id,
-                extras={k: v for k, v in ctx.items() if k != "draft"},
-            )
-            return
-        raise ValueError("不支持的多选动作")
 
     def _dispatch_auth(self, db: Session, chat_id: int, message_id: int, parts: list[str]) -> None:
         session = load_session_data(db, chat_id=chat_id, user_id=self.config.user_id)
@@ -2461,9 +1986,6 @@ class TelegramBotHandler:
         if action == "taskdel":
             self._actions(db).delete_task(target_id)
             self._show_tasks(db, chat_id, page=int(ctx.get("page") or 1), task_type=str(ctx.get("task_type") or "") or None, message_id=message_id)
-        elif action == "syncdel":
-            self._actions(db).delete_sync_task(target_id)
-            self._show_sync_tasks(db, chat_id, page=int(ctx.get("page") or 1), message_id=message_id)
 
     def _dispatch_back(self, db: Session, chat_id: int, message_id: int) -> None:
         session = load_session_data(db, chat_id=chat_id, user_id=self.config.user_id)
@@ -2486,7 +2008,7 @@ class TelegramBotHandler:
                 db.commit()
                 self._show_setting_domain(db, chat_id, str(ctx.get("domain") or ""), page=int(ctx.get("page") or 1), message_id=message_id)
                 return
-            if kind in {"task", "sync", "account"}:
+            if kind in {"task", "account"}:
                 save_session_data(db, chat_id=chat_id, user_id=self.config.user_id, scene=f"{kind}_editor", step="idle", context=ctx, last_message_id=message_id)
                 db.commit()
                 self._resume_editor(db, chat_id, kind=kind, ctx=ctx, message_id=message_id)
@@ -2649,15 +2171,6 @@ class TelegramBotHandler:
         if kind == "task" and field == "__tmdb_bind__":
             self._show_task_tmdb_prompt(db, chat_id, message_id=message_id)
             return
-        if kind == "task" and field == "sync_task_uids":
-            self._show_task_sync_selector(db, chat_id, message_id=message_id)
-            return
-        if kind == "sync" and field == "drama_task_uids":
-            self._show_sync_drama_selector(db, chat_id, message_id=message_id)
-            return
-        if kind == "sync" and field in {"source.path", "target.path"}:
-            self._show_sync_path_browser(db, chat_id, field=field, message_id=message_id)
-            return
         meta = _field_meta(fields, field)
         field_type = meta["type"]
         if field_type == "bool":
@@ -2736,10 +2249,6 @@ class TelegramBotHandler:
                 task_type=str(ctx.get("task_type") or "") or None,
             )
             return
-        if kind == "sync":
-            item = actions.save_sync_task(sync_task_id=target_id, payload=payload)
-            self._show_sync_detail(db, chat_id, int(item["id"]), message_id=message_id, back_page=int(ctx.get("page") or 1))
-            return
         if kind == "account":
             item = actions.save_account(account_id=target_id, payload=payload)
             self._show_account_detail(db, chat_id, int(item["id"]), message_id=message_id, back_page=int(ctx.get("page") or 1))
@@ -2753,15 +2262,7 @@ class TelegramBotHandler:
             domain = str(ctx.get("domain") or "")
             current_domain = self._actions(db).get_setting_domain(domain)
             current_values = current_domain.get("values") or {}
-            current = None
-            if domain == "resource_sources":
-                source_key, _, source_field = field.partition(".")
-                for item in current_values.get("sources") or []:
-                    if str(item.get("key") or "") == source_key:
-                        current = item.get(source_field)
-                        break
-            else:
-                current = current_values.get(field)
+            current = current_values.get(field)
             meta = _setting_field_meta(domain, field, current)
             value = _parse_scalar(text, str(meta.get("type") or "str"))
             self._actions(db).update_setting_value(domain, field, value)
@@ -2772,7 +2273,7 @@ class TelegramBotHandler:
             return
         target_id = int(ctx.get("target_id") or 0) or None
         draft = dict(ctx.get("draft") or {})
-        fields = TASK_FIELDS if kind == "task" else SYNC_FIELDS if kind == "sync" else ACCOUNT_FIELDS
+        fields = TASK_FIELDS if kind == "task" else ACCOUNT_FIELDS
         meta = _field_meta(fields, field)
         try:
             value = _parse_scalar(text, meta["type"])
@@ -2820,15 +2321,7 @@ class TelegramBotHandler:
         page = int((session.context or {}).get("page") or 1)
         domain_data = self._actions(db).get_setting_domain(domain)
         values = domain_data.get("values") or {}
-        if domain == "resource_sources":
-            source_key, _, source_field = field.partition(".")
-            current = None
-            for item in values.get("sources") or []:
-                if str(item.get("key") or "") == source_key:
-                    current = item.get(source_field)
-                    break
-        else:
-            current = values.get(field)
+        current = values.get(field)
         meta = _setting_field_meta(domain, field, current)
         if str(meta.get("type") or "") == "bool":
             self._actions(db).update_setting_value(domain, field, not current)

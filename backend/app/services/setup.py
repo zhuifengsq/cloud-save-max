@@ -33,6 +33,15 @@ def seed_permissions(db: Session) -> dict[str, Permission]:
 def ensure_permissions_and_roles(db: Session) -> None:
     perms_by_code = seed_permissions(db)
 
+    # Clear permissions left by older installations after removing sync tasks.
+    obsolete = db.execute(
+        select(Permission).where(Permission.code.in_(("sync:read", "sync:write", "sync:run")))
+    ).scalars().all()
+    for permission in obsolete:
+        permission.roles = []
+        db.delete(permission)
+    db.flush()
+
     admin_role = db.execute(select(Role).where(Role.name == "admin")).scalars().first()
     if admin_role is None:
         admin_role = Role(name="admin", description="系统管理员")

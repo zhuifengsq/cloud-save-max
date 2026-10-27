@@ -23,3 +23,5 @@ docs
 backend/data/sync/*
 .dbg
 .github_token
+.pnpm-store/
+node_modules/
