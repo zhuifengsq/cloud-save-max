@@ -474,9 +474,12 @@ onMounted(refreshAll)
 </script>
 
 <template>
-  <div class="page">
-    <div class="page__header">
-      <div class="page__title">TMDB 缓存管理</div>
+  <div class="shell-page">
+    <div class="section-header">
+            <div class="section-header__title">
+        <h2>TMDB 缓存管理</h2>
+        <div class="section-header__desc">管理 TMDB 详情缓存：定时刷新、TTL、清理与强制更新。</div>
+      </div>
     </div>
 
     <el-alert
@@ -873,20 +876,6 @@ onMounted(refreshAll)
 </template>
 
 <style scoped>
-.page {
-  padding: 16px;
-}
-.page__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.page__title {
-  font-size: 18px;
-  font-weight: 600;
-}
 .page__actions {
   display: flex;
   gap: 8px;
@@ -1034,7 +1023,7 @@ onMounted(refreshAll)
 }
 .payload__box {
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 16px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   overflow: hidden;
 }

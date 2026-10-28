@@ -695,9 +695,8 @@ class DramaTaskExecutor:
                 week = set()
             week = {int(x) for x in week if 1 <= int(x) <= 7}
             if not week:
-                self._line("跳过: 无法自动识别运行星期")
-                raise SkipTask("无法自动识别运行星期")
-            if now.isoweekday() not in week:
+                self._line("未识别到更新日，按每天执行")
+            elif now.isoweekday() not in week:
                 self._line(f"跳过: 星期 {now.isoweekday()} 不在 {sorted(list(week))}")
                 raise SkipTask("不在允许运行的星期范围内")
         else:

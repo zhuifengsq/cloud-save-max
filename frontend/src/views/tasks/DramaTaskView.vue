@@ -917,7 +917,7 @@ onBeforeUnmount(() => {
     </div>
 
     <section v-if="scheduler" class="glass-panel dashboard-section task-scheduler">
-      <div class="task-card-head">
+      <div class="task-card-head task-card-head--scheduler">
         <div class="task-card-head__title">全局调度</div>
         <div class="task-card-head__hint">cron 定时触发全部启用任务</div>
       </div>
@@ -1420,7 +1420,7 @@ onBeforeUnmount(() => {
 }
 
 .task-card {
-  border-radius: 18px;
+  border-radius: var(--panel-radius);
   border: 1px solid var(--el-border-color-lighter);
   background: var(--el-fill-color-blank);
 }
@@ -1461,7 +1461,7 @@ onBeforeUnmount(() => {
   line-height: 1.5;
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 16px;
+  border-radius: var(--panel-radius);
   padding: 12px;
   max-height: 45vh;
   overflow: auto;
@@ -1625,7 +1625,7 @@ onBeforeUnmount(() => {
 
 .task-scheduler .toolbar {
   align-items: flex-end;
-  padding: 16px 20px 18px;
+  padding: 24px;
 }
 
 .task-scheduler {
@@ -1638,12 +1638,12 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 20px;
+  padding: 20px 24px;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
 .task-card-head__title {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--el-text-color-primary);
@@ -1655,9 +1655,13 @@ onBeforeUnmount(() => {
 }
 
 .task-table-card {
-  padding: 0;
+  padding: 0 24px 24px;
   overflow: hidden;
 }
+
+.task-card-head--scheduler { flex-direction: column; align-items: flex-start; gap: 6px; }
+
+.task-table-card > .task-card-head { padding-inline: 0; border-bottom: 0; justify-content: flex-start; }
 
 .task-table-card :deep(.el-table__inner-wrapper::before) {
   display: none;
@@ -1737,7 +1741,7 @@ onBeforeUnmount(() => {
   width: 64px;
   height: 64px;
   margin-bottom: 8px;
-  border-radius: 18px;
+  border-radius: var(--panel-radius);
   color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
 }
@@ -1804,7 +1808,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 767px) {
   .drama-task-page > .section-header { min-height: 0; }
-  .drama-task-page .section-header__title h2 { font-size: 21px; }
+  .drama-task-page .section-header__title h2 { font-size: 19px; }
   .drama-task-page .task-scheduler .toolbar { padding: 16px; }
   .task-scheduler__timezone-label { display: none; }
 }

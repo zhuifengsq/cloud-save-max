@@ -324,7 +324,7 @@ function toggleSeries(key: string) {
   min-width: 200px;
   max-width: 240px;
   padding: 10px 12px;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   background: var(--el-bg-color-overlay);
   color: var(--el-text-color-primary);
   border: 1px solid var(--el-border-color-lighter);

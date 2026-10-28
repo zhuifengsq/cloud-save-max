@@ -519,9 +519,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page__header">
-      <div class="page__title">系统设置</div>
+  <div class="shell-page">
+    <div class="section-header">
+            <div class="section-header__title">
+        <h2>系统设置</h2>
+        <div class="section-header__desc">任务模板、魔法重命名、搜索源与缓存策略集中配置。</div>
+      </div>
     </div>
 
     <el-tabs v-model="activeTab">
@@ -848,20 +851,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page {
-  padding: 16px;
-}
-.page__header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.page__title {
-  font-size: 22px;
-  font-weight: 700;
-}
 .page__hint {
   margin: 12px 0 16px;
   color: var(--el-text-color-regular);
@@ -893,37 +882,6 @@ onMounted(() => {
   color: var(--el-text-color-placeholder);
 }
 
-/* 标签栏居中、大字号 */
-:deep(.el-tabs__nav-wrap) {
-  overflow: visible !important;
-  display: flex;
-  justify-content: center;
-}
-:deep(.el-tabs__nav-wrap::after) {
-  display: none;
-}
-:deep(.el-tabs__nav-prev),
-:deep(.el-tabs__nav-next) {
-  display: none !important;
-}
-:deep(.el-tabs__item) {
-  padding: 0 14px;
-  font-size: 15px;
-  height: 44px;
-  line-height: 44px;
-}
-:deep(.el-tabs__nav) {
-  white-space: nowrap;
-  float: none;
-  display: inline-flex;
-}
-:deep(.el-tabs__header) {
-  display: flex;
-  justify-content: center;
-}
-:deep(.el-tabs__active-bar) {
-  height: 3px;
-}
 .drawer-form__hint {
   font-size: 12px;
   color: var(--el-text-color-secondary);

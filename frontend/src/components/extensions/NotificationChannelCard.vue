@@ -220,7 +220,7 @@ const statusLabel = computed(() => {
 
 .channel-card__summary {
   padding: 10px 12px;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }
@@ -228,7 +228,7 @@ const statusLabel = computed(() => {
 .channel-card__error {
   margin-top: auto;
   padding: 10px 12px;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   background: rgba(239, 68, 68, 0.14);
   border: 1px solid rgba(239, 68, 68, 0.22);
   color: var(--el-color-danger);

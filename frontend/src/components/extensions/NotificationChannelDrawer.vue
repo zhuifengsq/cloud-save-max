@@ -128,7 +128,7 @@ function submit() {
 
 .drawer-form__section {
   padding: 18px;
-  border-radius: 20px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }

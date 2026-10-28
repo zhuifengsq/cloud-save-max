@@ -228,6 +228,7 @@ onBeforeUnmount(stopPoll)
     <div class="section-header">
       <div class="section-header__title">
         <h2>账号二次认证</h2>
+        <div class="section-header__desc">完成扫码或短信验证后，账号即可恢复自动转存。</div>
       </div>
       <div class="toolbar__right">
         <el-button @click="router.replace('/extensions/drives')">返回列表</el-button>
@@ -321,7 +322,7 @@ onBeforeUnmount(stopPoll)
   justify-content: center;
   min-height: 220px;
   border: 1px dashed var(--el-border-color);
-  border-radius: 16px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
 }
 

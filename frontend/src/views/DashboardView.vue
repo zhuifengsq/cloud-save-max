@@ -696,7 +696,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 14px;
   padding: 14px;
-  border-radius: 18px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }
@@ -734,7 +734,7 @@ onMounted(() => {
 .failures-card {
   margin-top: 14px;
   padding: 14px;
-  border-radius: 18px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }
@@ -768,7 +768,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 14px;
   padding: 12px 14px;
-  border-radius: 16px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }
@@ -810,7 +810,7 @@ onMounted(() => {
   align-items: center;
   gap: 14px;
   padding: 14px;
-  border-radius: 18px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }

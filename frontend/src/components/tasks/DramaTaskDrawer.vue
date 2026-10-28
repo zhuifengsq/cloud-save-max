@@ -92,6 +92,7 @@ const state = reactive({
 
 const manualRunweekBackup = ref([] as number[])
 const autoRunweekDays = ref([] as number[])
+const autoRunweekChecked = ref(false)
 
 const sharerFilterConfig = reactive({
   preferred: [] as string[],
@@ -337,12 +338,17 @@ async function applyRunweekFromTmdbUpdateWeekdays(tmdbId: number, mediaType: 'mo
   if (mediaType !== 'tv') return
   const id = Number(tmdbId) || 0
   if (id <= 0) return
+  autoRunweekChecked.value = false
   try {
     const res: any = await fetchTMDBDetail('tv', id)
-    const days = normalizeWeekdays(res?.episode_weekdays || res?.update_weekdays)
-    autoRunweekDays.value = days
+    // 优先取第一个非空数组（空数组在 JS 里是真值，不能直接用 ||）
+    const candidates = [res?.episode_weekdays, res?.update_weekdays]
+    const picked = candidates.find((arr: any) => Array.isArray(arr) && arr.length > 0) || []
+    autoRunweekDays.value = normalizeWeekdays(picked)
   } catch {
-    return
+    autoRunweekDays.value = []
+  } finally {
+    autoRunweekChecked.value = true
   }
 }
 
@@ -1270,6 +1276,7 @@ function syncState() {
   state.runweek_mode = mode === 'auto' ? 'auto' : 'manual'
   manualRunweekBackup.value = clone(state.runweek || [])
   autoRunweekDays.value = []
+  autoRunweekChecked.value = false
 
   const additionValue: any = state.addition
   if (!additionValue || typeof additionValue !== 'object' || Array.isArray(additionValue)) {
@@ -1705,6 +1712,7 @@ watch(
       return
     }
     autoRunweekDays.value = []
+    autoRunweekChecked.value = false
     if (!state.runweek.length && manualRunweekBackup.value.length) {
       state.runweek = clone(manualRunweekBackup.value)
     }
@@ -2202,6 +2210,7 @@ async function submitSaveTemplate() {
           <div v-if="state.runweek_mode === 'auto'" class="drawer-form__hint runweek-hint">
             <span v-if="!tmdbLink.configured">请先在系统设置配置 TMDB</span>
             <span v-else-if="autoRunweekText">已识别：{{ autoRunweekText }}</span>
+            <span v-else-if="autoRunweekChecked">未识别到更新日（执行时按每天处理）</span>
             <span v-else>识别中…</span>
           </div>
           <el-checkbox-group v-if="state.runweek_mode === 'manual'" v-model="state.runweek" class="runweek-days">
@@ -2287,10 +2296,9 @@ async function submitSaveTemplate() {
           <el-button type="primary" @click="useCurrentDrivePath(false)">当前文件夹</el-button>
           <el-button v-if="state.taskname.trim()" type="primary" @click="useCurrentDrivePath(true)">当前文件夹/{{ driveSavepathHint() }}</el-button>
         </div>
-        <div class="drawer-form__hint" style="margin-top: 10px">当前路径：{{ currentDrivePathLabel() }}</div>
-        <el-breadcrumb v-if="drivePicker.paths.length" separator="/">
+        <el-breadcrumb separator="/" class="drive-breadcrumb">
           <el-breadcrumb-item>
-            <a href="#" @click.prevent="driveGoRoot">/</a>
+            <a href="#" @click.prevent="driveGoRoot">根目录</a>
           </el-breadcrumb-item>
           <el-breadcrumb-item v-for="(item, idx) in drivePicker.paths" :key="item.fid">
             <a
@@ -2436,7 +2444,7 @@ async function submitSaveTemplate() {
   position: relative;
   margin-top: 48px;
   padding: 18px;
-  border-radius: 20px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }
@@ -2550,7 +2558,7 @@ async function submitSaveTemplate() {
 .task-suggestions {
   margin-top: 10px;
   padding: 10px;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   border: 1px solid var(--el-border-color-lighter);
   background: var(--el-fill-color-blank);
   max-height: 260px;
@@ -2876,6 +2884,19 @@ async function submitSaveTemplate() {
 
 @media (max-width: 768px) {
   .task-suggestions__copy { opacity: 1; }
+}
+
+.drive-breadcrumb {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  font-size: 13px;
+}
+
+.drive-breadcrumb :deep(.el-breadcrumb__inner) {
+  font-weight: 500;
 }
 
 </style>

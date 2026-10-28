@@ -350,15 +350,17 @@ onMounted(loadProbeScheduler)
 </script>
 
 <template>
-  <div class="shell-page" v-loading="loading">
+  <div class="shell-page drive-accounts-page" v-loading="loading">
     <div class="section-header">
       <div class="section-header__title">
+        <div class="section-header__eyebrow">DRIVE ACCOUNTS</div>
         <h2>账号管理</h2>
+        <div class="section-header__desc">集中管理网盘账号、容量状态与自动签到。</div>
       </div>
       <div class="toolbar__right">
         <el-button :loading="refreshing" @click="handleRefreshProfiles">刷新全部容量</el-button>
-        <el-button type="primary" @click="loadData">刷新列表</el-button>
-        <el-button v-if="canWrite" type="success" @click="openCreateDrawer">新增账号</el-button>
+        <el-button @click="loadData">刷新列表</el-button>
+        <el-button v-if="canWrite" type="primary" @click="openCreateDrawer">新增账号</el-button>
       </div>
     </div>
 
@@ -407,8 +409,8 @@ onMounted(loadProbeScheduler)
       </div>
     </section>
 
-    <section class="glass-panel dashboard-section" style="margin-bottom: 18px">
-      <div class="dashboard-section__title">自动探测/签到</div>
+    <section class="glass-panel dashboard-section account-scheduler">
+      <div class="account-scheduler__head"><div class="dashboard-section__title">自动探测 / 签到</div><span>按计划检查账号状态并执行签到</span></div>
       <div class="toolbar">
         <div class="toolbar__left">
           <el-switch v-model="probeScheduler.data.enabled" active-text="启用调度" inactive-text="暂停调度" />
@@ -427,7 +429,7 @@ onMounted(loadProbeScheduler)
       </div>
     </section>
 
-    <section v-if="filteredAccounts.length" class="card-grid">
+    <section v-if="filteredAccounts.length" class="card-grid account-list">
       <CapacityAccountCard v-for="item in filteredAccounts" :key="item.id" :account="item">
         <template #actions>
           <el-button v-if="canWrite" text bg @click="openEditDrawer(item)">编辑</el-button>
@@ -551,6 +553,34 @@ onMounted(loadProbeScheduler)
 </template>
 
 <style scoped>
+.drive-accounts-page { gap: 18px; }
+.drive-accounts-page > .section-header { min-height: 0; margin-bottom: 2px; }
+.drive-accounts-page .section-header__title { gap: 0; }
+.drive-accounts-page .section-header__title h2 { margin-top: 3px; font-size: 22px; }
+.drive-accounts-page .section-header__desc { margin-top: 6px; }
+.drive-accounts-page > .section-header .toolbar__right { gap: 8px; }
+.drive-accounts-page > .section-header .el-button { margin: 0; }
+.drive-accounts-page .metric-strip { gap: 14px; }
+.drive-accounts-page .metric-tile { min-height: 118px; }
+.drive-accounts-page .filter-strip { padding: 16px 18px; }
+.drive-accounts-page .filter-strip :deep(.el-input__wrapper),
+.drive-accounts-page .filter-strip :deep(.el-select__wrapper) { min-height: 40px; }
+.account-scheduler { padding: 0; overflow: hidden; }
+.account-scheduler__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 16px 22px; border-bottom: 1px solid var(--panel-border); }
+.account-scheduler__head .dashboard-section__title { margin: 0; font-size: 15px; }
+.account-scheduler__head span { color: var(--el-text-color-secondary); font-size: 12px; }
+.account-scheduler .toolbar { padding: 18px 22px; }
+.account-scheduler .toolbar__left { gap: 12px; }
+.account-scheduler :deep(.el-input__wrapper) { min-height: 40px; }
+.account-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; }
+@media (max-width: 767px) {
+  .drive-accounts-page > .section-header { min-height: 0; }
+  .drive-accounts-page .section-header__title h2 { font-size: 19px; }
+  .drive-accounts-page .metric-tile { min-height: 0; }
+  .account-scheduler__head { align-items: flex-start; flex-direction: column; }
+  .account-scheduler .toolbar { padding: 16px; }
+  .account-list { grid-template-columns: 1fr; }
+}
 .del__alert {
   margin-bottom: 12px;
 }

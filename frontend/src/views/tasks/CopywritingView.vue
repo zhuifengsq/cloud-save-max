@@ -437,7 +437,7 @@ function goBack() {
 .copy-poster__frame {
   width: 100%;
   aspect-ratio: 2 / 3;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   overflow: hidden;
   background: var(--el-fill-color-light);
   border: 1px solid var(--el-border-color-lighter);

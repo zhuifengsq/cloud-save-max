@@ -119,6 +119,12 @@ onMounted(async () => {
 
 <template>
   <div class="page-stack">
+    <div class="section-header">
+            <div class="section-header__title">
+        <h2>用户管理</h2>
+        <div class="section-header__desc">管理登录账号、角色与权限分配。</div>
+      </div>
+    </div>
     <el-card shadow="never">
       <div class="toolbar">
         <div class="toolbar__left">

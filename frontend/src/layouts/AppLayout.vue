@@ -234,7 +234,7 @@ watch(
     <main class="app-content">
       <header class="glass-panel app-header">
         <div class="app-header__left">
-          <el-button text class="app-header__menu" @click="mobileNavVisible = true">
+          <el-button text aria-label="打开导航菜单" class="app-header__menu" @click="mobileNavVisible = true">
             <el-icon><Menu /></el-icon>
           </el-button>
           <div class="app-header__meta">
@@ -255,7 +255,7 @@ watch(
           </div>
           <el-button type="primary" class="desktop-only" @click="handleLogout">退出登录</el-button>
           <el-dropdown class="mobile-only" @command="handleLogout">
-            <el-button type="primary" class="app-header__user">
+            <el-button type="primary" aria-label="账号菜单" class="app-header__user">
               <el-icon><User /></el-icon>
             </el-button>
             <template #dropdown>

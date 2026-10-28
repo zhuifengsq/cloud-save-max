@@ -169,6 +169,7 @@ onMounted(async () => {
     <div class="section-header">
       <div class="section-header__title">
         <h2>分享链接缓存</h2>
+        <div class="section-header__desc">预览与校验结果缓存，命中后免去重复解析。</div>
       </div>
       <div class="toolbar__right">
         <el-button type="primary" @click="refreshActive">刷新</el-button>

@@ -62,6 +62,7 @@ onMounted(loadData)
     <div class="section-header">
       <div class="section-header__title">
         <h2>代理图片缓存</h2>
+        <div class="section-header__desc">缓存 TMDB 海报等远程图片，减少外链加载失败。</div>
       </div>
       <div class="toolbar__right">
         <el-button type="primary" @click="loadData">刷新</el-button>

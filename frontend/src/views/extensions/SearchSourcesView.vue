@@ -244,10 +244,17 @@ onMounted(() => { if (canRead.value) refresh() })
   <section class="search-sources-page">
     <div class="page-heading">
       <div>
+        <div class="page-heading__eyebrow">SEARCH SOURCES</div>
         <h1>搜索源管理</h1>
         <p>搜索结果会出现在新增追剧任务时，选择链接后再保存任务。</p>
       </div>
       <el-button :loading="loading" @click="refresh">刷新全部</el-button>
+    </div>
+
+    <div class="source-overview">
+      <div class="source-overview__item"><span>API 搜索源</span><strong>{{ apiSources.length }}</strong></div>
+      <div class="source-overview__item"><span>Python 插件</span><strong>{{ plugins.length }}</strong></div>
+      <div class="source-overview__item"><span>已启用</span><strong>{{ apiSources.filter(item => item.enabled).length + plugins.filter(item => item.enabled).length }}</strong></div>
     </div>
 
     <el-alert v-if="!canRead" title="搜索源配置仅限管理员查看" type="warning" :closable="false" />
@@ -261,9 +268,12 @@ onMounted(() => { if (canRead.value) refresh() })
         <div v-else class="source-list">
           <el-card v-for="item in apiSources" :key="String(item.id)" shadow="never" class="source-card">
             <div class="source-card__main">
-              <div>
-                <div class="source-card__title">{{ item.name }} <el-tag size="small" effect="plain">{{ item.method }}</el-tag></div>
-                <div class="source-card__url">{{ item.url }}</div>
+              <div class="source-card__identity">
+                <div class="source-card__icon">API</div>
+                <div>
+                  <div class="source-card__title">{{ item.name }} <el-tag size="small" effect="plain">{{ item.method }}</el-tag><el-tag size="small" :type="item.enabled ? 'success' : 'info'" effect="light">{{ item.enabled ? '已启用' : '已停用' }}</el-tag></div>
+                  <div class="source-card__url">{{ item.url }}</div>
+                </div>
               </div>
               <el-switch :model-value="item.enabled" :disabled="!canWrite || busyKey === `api:${item.id}`" @change="(value: string | number | boolean) => toggleApi(item, Boolean(value))" />
             </div>
@@ -301,10 +311,13 @@ class MySearchPlugin(BaseSearchPlugin):
         <div v-else class="source-list">
           <el-card v-for="item in plugins" :key="item.key" shadow="never" class="source-card">
             <div class="source-card__main">
-              <div>
-                <div class="source-card__title">{{ item.name || item.key }} <el-tag size="small" effect="plain">{{ item.key }}</el-tag></div>
-                <div class="source-card__url">{{ item.description || '未填写插件说明' }}</div>
-                <div v-if="item.error" class="source-card__error">{{ item.error }}</div>
+              <div class="source-card__identity">
+                <div class="source-card__icon source-card__icon--python">PY</div>
+                <div>
+                  <div class="source-card__title">{{ item.name || item.key }} <el-tag size="small" effect="plain">{{ item.key }}</el-tag><el-tag size="small" :type="item.status !== 'ready' ? 'danger' : item.enabled ? 'success' : 'info'" effect="light">{{ item.status !== 'ready' ? '异常' : item.enabled ? '已启用' : '已停用' }}</el-tag></div>
+                  <div class="source-card__url">{{ item.description || '未填写插件说明' }}</div>
+                  <div v-if="item.error" class="source-card__error">{{ item.error }}</div>
+                </div>
               </div>
               <el-switch :model-value="item.enabled" :disabled="!canWrite || item.status !== 'ready' || busyKey === `plugin:${item.key}`" @change="(value: string | number | boolean) => togglePlugin(item, Boolean(value))" />
             </div>
@@ -383,25 +396,42 @@ class MySearchPlugin(BaseSearchPlugin):
 </template>
 
 <style scoped>
-.search-sources-page { max-width: 1120px; margin: 0 auto; display: grid; gap: 20px; }
+.search-sources-page { width: 100%; max-width: 1380px; margin: 0 auto; display: grid; gap: 20px; }
 .page-heading, .tab-heading, .source-card__main, .source-card__actions, .test-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.page-heading h1 { margin: 0 0 8px; font-size: 26px; }
-.page-heading p, .tab-heading p { margin: 0; color: var(--el-text-color-secondary); line-height: 1.6; }
-.source-tabs { padding: 22px; border: 1px solid var(--el-border-color-lighter); border-radius: 20px; background: var(--el-bg-color); }
-.tab-heading { margin: 12px 0 22px; }
+.page-heading { padding: 0; }
+.page-heading__eyebrow { display: none; margin-bottom: 6px; color: var(--el-color-primary); font-size: 11px; font-weight: 750; letter-spacing: .18em; }
+.page-heading h1 { margin: 0 0 6px; font-size: 22px; font-weight: 700; line-height: 1.3; letter-spacing: -.02em; }
+.page-heading p, .tab-heading p { margin: 0; font-size: 13px; color: var(--el-text-color-secondary); line-height: 1.6; }
+.source-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.source-overview__item { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border: 1px solid var(--panel-border); border-radius: var(--panel-radius); background: var(--panel-bg); box-shadow: var(--panel-shadow); color: var(--el-text-color-secondary); font-size: 13px; }
+.source-overview__item strong { color: var(--el-text-color-primary); font-size: 24px; line-height: 1; }
+.source-tabs { padding: 20px 24px 28px; border: 1px solid var(--panel-border); border-radius: var(--panel-radius); background: var(--panel-bg); box-shadow: var(--panel-shadow); }
+.source-tabs :deep(.el-tabs__item) { height: 48px; font-size: 14px; font-weight: 650; }
+.source-tabs :deep(.el-tabs__header) { margin-bottom: 22px; }
+.tab-heading { margin: 0 0 20px; padding: 2px 0 20px; border-bottom: 1px solid var(--panel-border); }
+.tab-heading p { max-width: 75ch; font-size: 13px; }
+.tab-heading code { padding: 2px 5px; border-radius: 5px; background: var(--el-fill-color-light); color: var(--el-color-primary); }
 .source-list { display: grid; gap: 12px; }
-.source-card__main { align-items: flex-start; }
-.source-card__title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-weight: 700; }
-.source-card__url, .source-card__error { margin-top: 7px; color: var(--el-text-color-secondary); overflow-wrap: anywhere; }
+.source-card { border-color: var(--panel-border) !important; border-radius: 13px !important; box-shadow: none !important; transition: border-color .18s, box-shadow .18s; }
+.source-card:hover { border-color: var(--el-color-primary-light-7) !important; box-shadow: var(--panel-shadow) !important; }
+.source-card :deep(.el-card__body) { padding: 18px 20px 14px; }
+.source-card__main { align-items: center; }
+.source-card__identity { display: flex; align-items: center; min-width: 0; gap: 14px; }
+.source-card__identity > div:last-child { min-width: 0; }
+.source-card__icon { flex: 0 0 42px; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 11px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+.source-card__icon--python { background: var(--el-color-success-light-9); color: var(--el-color-success); }
+.source-card__title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--el-text-color-primary); font-size: 16px; font-weight: 700; }
+.source-card__url, .source-card__error { margin-top: 6px; color: var(--el-text-color-secondary); font-size: 12.5px; overflow-wrap: anywhere; }
 .source-card__error { color: var(--el-color-danger); }
-.source-card__actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 14px; }
+.source-card__actions { justify-content: flex-start; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--panel-border); }
+.source-card__actions :deep(.el-button) { margin: 0; }
 .file-input { display: none; }
 .plugin-help { margin: 0 0 18px; color: var(--el-text-color-secondary); }
 .plugin-help summary { cursor: pointer; color: var(--el-color-primary); }
 .plugin-help pre { margin: 10px 0; padding: 12px; overflow-x: auto; border-radius: 8px; background: var(--el-fill-color-light); color: var(--el-text-color-primary); }
 .mapping-help { margin: 0 0 14px; color: var(--el-text-color-secondary); line-height: 1.6; }
 .editor-form { max-height: min(72vh, 760px); overflow-y: auto; padding: 4px 8px 4px 0; display: grid; gap: 18px; }
-.editor-card { padding: 20px; border: 1px solid var(--el-border-color-lighter); border-radius: 18px; background: var(--el-fill-color-extra-light); }
+.editor-card { padding: 20px; border: 1px solid var(--el-border-color-lighter); border-radius: var(--panel-radius); background: var(--el-fill-color-extra-light); }
 .editor-card :deep(.el-form-item) { margin-bottom: 14px; }
 .editor-card :deep(.el-form-item__label) { font-weight: 700; }
 .editor-card :deep(.el-input__wrapper), .editor-card :deep(.el-select__wrapper) { min-height: 46px; border-radius: 13px; }
@@ -424,6 +454,13 @@ class MySearchPlugin(BaseSearchPlugin):
 @media (max-width: 700px) {
   .page-heading, .tab-heading, .source-card__main { align-items: flex-start; }
   .page-heading, .tab-heading { flex-direction: column; }
+  .page-heading h1 { font-size: 19px; }
+  .source-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .source-overview__item { display: block; padding: 12px; font-size: 11px; }
+  .source-overview__item strong { display: block; margin-top: 7px; font-size: 21px; }
+  .source-card__identity { align-items: flex-start; gap: 10px; }
+  .source-card__icon { flex-basis: 36px; width: 36px; height: 36px; }
+  .source-card :deep(.el-card__body) { padding: 15px; }
   .mapping-grid { grid-template-columns: 1fr; }
   .editor-top-grid { grid-template-columns: 1fr; gap: 0; }
   .editor-card { padding: 14px; }

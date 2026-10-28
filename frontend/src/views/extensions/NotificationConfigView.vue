@@ -522,6 +522,7 @@ onMounted(loadData)
     <div class="section-header">
       <div class="section-header__title">
         <h2>通知配置</h2>
+        <div class="section-header__desc">通知渠道、触发规则与测试发送。</div>
       </div>
       <div class="toolbar__right">
         <el-button @click="loadData">刷新</el-button>
@@ -674,7 +675,7 @@ onMounted(loadData)
 <style scoped>
 .notify-card {
   padding: 18px;
-  border-radius: 22px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }
@@ -692,7 +693,7 @@ onMounted(loadData)
 
 .channel-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
   gap: 16px;
 }
 
@@ -794,7 +795,7 @@ onMounted(loadData)
 
 .global-card__summary {
   padding: 10px 12px;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
   font-size: 13px;
@@ -821,7 +822,7 @@ onMounted(loadData)
 
 .drawer-form__section {
   padding: 18px;
-  border-radius: 20px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }

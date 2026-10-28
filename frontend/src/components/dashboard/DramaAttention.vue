@@ -168,7 +168,7 @@ function tagTypeOfStatus(status: string) {
   justify-content: space-between;
   gap: 14px;
   padding: 14px;
-  border-radius: 18px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
 }

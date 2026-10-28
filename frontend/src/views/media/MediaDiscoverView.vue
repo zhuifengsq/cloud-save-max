@@ -570,9 +570,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page__header">
-      <div class="page__title">影视发现</div>
+  <div class="shell-page">
+    <div class="section-header">
+            <div class="section-header__title">
+        <h2>影视发现</h2>
+        <div class="section-header__desc">搜索 TMDB 资源，一键添加为追剧任务。</div>
+      </div>
     </div>
 
     <el-card class="page__card search-card" shadow="never">
@@ -626,8 +629,8 @@ onMounted(async () => {
     </template>
 
     <template v-else>
-      <div class="page__hint">
-        <div v-if="listState.notice">{{ listState.notice }}</div>
+      <div v-if="Boolean(listState.notice && listState.notice.trim()) || listState.isMockData" class="page__hint">
+        <div v-if="listState.notice && listState.notice.trim()">{{ listState.notice }}</div>
         <div v-if="listState.isMockData">当前为模拟数据：{{ listState.mockReason || '豆瓣接口不可用' }}</div>
       </div>
 
@@ -825,22 +828,8 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.page {
-  padding: 12px;
-}
-.page__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.page__title {
-  font-size: 18px;
-  font-weight: 600;
-}
 .page__hint {
-  margin: 10px 0 14px;
+  margin: 0 0 10px;
   color: var(--el-text-color-regular);
   font-size: 13px;
   line-height: 1.7;
@@ -857,6 +846,10 @@ onMounted(async () => {
 .page__card--compact :deep(.el-card__header) {
   padding: 10px 12px;
 }
+.search-card {
+  margin-bottom: 0;
+}
+
 .search-card :deep(.el-card__body) {
   padding: 10px 12px;
 }

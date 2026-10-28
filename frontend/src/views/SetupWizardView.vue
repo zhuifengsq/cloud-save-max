@@ -445,7 +445,7 @@ onBeforeUnmount(() => {
 
 .setup__section {
   margin-top: 14px;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
 }
 
 .setup__section-title {
@@ -457,7 +457,7 @@ onBeforeUnmount(() => {
 
 .setup__subsection {
   margin-top: 12px;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
 }
 
 .setup__subsection-title {

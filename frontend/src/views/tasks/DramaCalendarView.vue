@@ -22,6 +22,7 @@ type CalendarEntry = {
   predictedPercent: number | null
   totalEpisodes: number | null
   nextAirDate: string | null
+  confirmed: boolean
 }
 
 const weekdays: Array<{ key: WeekdayKey; label: string }> = [
@@ -662,7 +663,7 @@ const weekEntriesByDate = computed(() => {
   const start = weekDates.value[0] ? dateOnly(weekDates.value[0]) : dateOnly(new Date())
   const end = weekDates.value[6] ? dateOnly(weekDates.value[6]) : addDays(start, 6)
 
-  const push = (d: Date, s: (typeof schedules.value)[number]) => {
+  const push = (d: Date, s: (typeof schedules.value)[number], confirmed: boolean) => {
     const endAir = s.endAirDate ? parseDateOnly(s.endAirDate) : null
     if (endAir && d.getTime() > endAir.getTime()) return
 
@@ -702,19 +703,20 @@ const weekEntriesByDate = computed(() => {
       predictedPercent,
       totalEpisodes: s.totalEpisodes,
       nextAirDate: s.nextAirDate,
+      confirmed,
     })
     by.set(key, map)
   }
 
   for (const s of schedules.value) {
-    const keys = new Set<string>()
+    const keys = new Map<string, boolean>()
     const hasEpisodes = s.episodeDates.length > 0
 
     if (hasEpisodes) {
       for (const ed of s.episodeDates) {
         const dd = dateOnly(ed)
         if (dd.getTime() < start.getTime() || dd.getTime() > end.getTime()) continue
-        keys.add(formatYYYYMMDD(dd))
+        keys.set(formatYYYYMMDD(dd), true)
       }
 
       const total = s.totalEpisodes
@@ -728,24 +730,28 @@ const weekEntriesByDate = computed(() => {
             else cursor = nextDateByWeekdays(cursor, s.weekdays)
             knownEpisodes += 1
             if (cursor.getTime() > end.getTime()) break
-            if (cursor.getTime() >= start.getTime()) keys.add(formatYYYYMMDD(cursor))
+            if (cursor.getTime() >= start.getTime()) {
+              const k = formatYYYYMMDD(cursor)
+              if (!keys.has(k)) keys.set(k, false)
+            }
           }
         }
       }
     } else {
       const air = s.nextAirDate
       const airDate = air ? parseDateOnly(air) : null
-      if (airDate && airDate.getTime() >= start.getTime() && airDate.getTime() <= end.getTime()) keys.add(formatYYYYMMDD(airDate))
+      if (airDate && airDate.getTime() >= start.getTime() && airDate.getTime() <= end.getTime()) keys.set(formatYYYYMMDD(airDate), true)
       for (const d of weekDates.value) {
         const wd = isoWeekdayFromDate(d)
         if (!s.weekdays.includes(wd)) continue
-        keys.add(formatYYYYMMDD(d))
+        const k = formatYYYYMMDD(d)
+        if (!keys.has(k)) keys.set(k, false)
       }
     }
 
-    for (const k of keys) {
+    for (const [k, confirmed] of keys) {
       const d = parseDateOnly(k)
-      if (d) push(d, s)
+      if (d) push(d, s, confirmed)
     }
   }
 
@@ -792,7 +798,7 @@ const monthEntriesByDate = computed(() => {
   const ym = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`
   const by = new Map<string, Map<number, CalendarEntry>>()
 
-  const push = (d: Date, s: (typeof schedules.value)[number]) => {
+  const push = (d: Date, s: (typeof schedules.value)[number], confirmed: boolean) => {
     if (d.getFullYear() !== cur.getFullYear() || d.getMonth() !== cur.getMonth()) return
     const end = s.endAirDate ? parseDateOnly(s.endAirDate) : null
     if (end && d.getTime() > end.getTime()) return
@@ -836,6 +842,7 @@ const monthEntriesByDate = computed(() => {
       predictedPercent,
       totalEpisodes: s.totalEpisodes,
       nextAirDate: s.nextAirDate,
+      confirmed,
     })
     by.set(key, map)
   }
@@ -846,10 +853,10 @@ const monthEntriesByDate = computed(() => {
 
     const hasEpisodes = s.episodeDates && s.episodeDates.length
     if (hasEpisodes) {
-      const keys = new Set<string>()
+      const keys = new Map<string, boolean>()
       for (const ed of s.episodeDates) {
         if (ed.getTime() < monthStart.getTime() || ed.getTime() > monthEnd.getTime()) continue
-        keys.add(formatYYYYMMDD(ed))
+        keys.set(formatYYYYMMDD(ed), true)
       }
 
       const total = s.totalEpisodes
@@ -863,27 +870,36 @@ const monthEntriesByDate = computed(() => {
             else cursor = nextDateByWeekdays(cursor, s.weekdays)
             knownEpisodes += 1
             if (cursor.getTime() > monthEnd.getTime()) break
-            if (cursor.getTime() >= monthStart.getTime()) keys.add(formatYYYYMMDD(cursor))
+            if (cursor.getTime() >= monthStart.getTime()) {
+              const k = formatYYYYMMDD(cursor)
+              if (!keys.has(k)) keys.set(k, false)
+            }
           }
         }
       }
 
-      for (const k of keys) {
+      for (const [k, confirmed] of keys) {
         const d = parseDateOnly(k)
-        if (d) push(d, s)
+        if (d) push(d, s, confirmed)
       }
       continue
     }
 
     const air = s.nextAirDate
     const airDate = air ? parseDateOnly(air) : null
+    const keys = new Map<string, boolean>()
     for (const d of monthGridDates.value) {
       if (d.getFullYear() !== cur.getFullYear() || d.getMonth() !== cur.getMonth()) continue
       const wd = isoWeekdayFromDate(d)
       if (!s.weekdays.includes(wd)) continue
-      push(d, s)
+      const k = formatYYYYMMDD(d)
+      if (!keys.has(k)) keys.set(k, false)
     }
-    if (airDate) push(airDate, s)
+    if (airDate) keys.set(formatYYYYMMDD(airDate), true)
+    for (const [k, confirmed] of keys) {
+      const d = parseDateOnly(k)
+      if (d) push(d, s, confirmed)
+    }
   }
 
   const out = new Map<string, CalendarEntry[]>()
@@ -1034,7 +1050,10 @@ watch(
 <template>
   <div class="page">
     <div class="header">
-      <div class="title">追剧日历</div>
+      <div class="title-wrap">
+        <div class="title">追剧日历</div>
+        <div class="subtitle">按更新星期查看本周与本月排期，预计日期会标注。</div>
+      </div>
       <div class="actions">
         <el-radio-group v-model="viewMode" size="small" class="mode">
           <el-radio-button label="week">周视图</el-radio-button>
@@ -1065,10 +1084,11 @@ watch(
 
         <div v-if="!sec.items.length" class="weekday-empty">无更新</div>
         <div v-else class="weekday-grid">
-          <el-card v-for="it in sec.items" :key="`${it.taskId}-${it.weekday}-${it.tmdbId || 0}`" shadow="hover" class="show-card">
+          <el-card v-for="it in sec.items" :key="`${it.taskId}-${it.weekday}-${it.tmdbId || 0}`" shadow="hover" class="show-card" :class="{ 'show-card--predicted': !it.confirmed }">
             <div class="poster-card">
               <img v-if="it.posterUrl" class="poster-img" :src="it.posterUrl" alt="poster" />
               <div v-else class="poster-fallback">TMDB</div>
+              <span v-if="!it.confirmed" class="poster-badge">预计</span>
 
               <div class="poster-overlay">
                 <div class="overlay-title" :title="it.title">{{ it.title }}</div>
@@ -1092,6 +1112,9 @@ watch(
     <div v-else v-loading="loading" class="month">
       <div class="month-bar">
         <div class="month-title">{{ monthTitle }}</div>
+        <div class="month-legend">
+          <span class="month-legend__dot" />预计 = 按更新星期推测
+        </div>
         <div class="month-nav">
           <el-button text bg @click="goToday">回今天</el-button>
           <el-button circle text bg @click="prevMonth">
@@ -1121,7 +1144,13 @@ watch(
             <span v-if="cell.total" class="month-count">{{ cell.total }}</span>
           </div>
           <div v-else class="month-items">
-            <div v-for="it in cell.items" :key="`${cell.key}-${it.taskId}`" class="month-item">
+            <div
+              v-for="it in cell.items"
+              :key="`${cell.key}-${it.taskId}`"
+              class="month-item"
+              :class="{ 'is-predicted': !it.confirmed }"
+              :title="it.confirmed ? it.title : `${it.title}（预计更新）`"
+            >
               <img v-if="it.posterUrl" class="month-poster" :src="it.posterUrl" alt="poster" />
               <div v-else class="month-poster-fallback">TMDB</div>
               <div class="month-name" :title="it.title">{{ it.title }}</div>
@@ -1180,7 +1209,7 @@ watch(
 
 <style scoped>
 .page {
-  padding: 16px;
+  padding: 0;
 }
 
 .header {
@@ -1188,12 +1217,31 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+.title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subtitle {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
 }
 
 .title {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 767px) {
+  .title {
+    font-size: 19px;
+  }
 }
 
 .warn {
@@ -1266,7 +1314,7 @@ watch(
   width: 100%;
   aspect-ratio: 2 / 3;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   background: rgba(148, 163, 184, 0.14);
 }
 
@@ -1385,7 +1433,7 @@ watch(
 
 .month-cell {
   min-height: 120px;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
   padding: 10px;
@@ -1438,7 +1486,7 @@ watch(
 
 .month-detail {
   margin-top: 10px;
-  border-radius: 14px;
+  border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
   padding: 12px;
@@ -1693,4 +1741,53 @@ watch(
     padding: 7px;
   }
 }
+.show-card--predicted {
+  opacity: 0.8;
+}
+
+.show-card--predicted :deep(.el-card__body) {
+  box-shadow: inset 0 0 0 1px var(--el-border-color);
+  border-radius: var(--panel-radius);
+}
+
+.poster-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(6px);
+}
+
+.month-item.is-predicted {
+  opacity: 0.62;
+}
+
+.month-item.is-predicted .month-name {
+  font-style: italic;
+}
+
+.month-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.month-legend__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px dashed var(--el-text-color-secondary);
+  opacity: 0.7;
+}
+
 </style>

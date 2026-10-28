@@ -126,6 +126,7 @@ onMounted(() => {
     <div class="section-header">
       <div class="section-header__title">
         <h2>审计日志</h2>
+        <div class="section-header__desc">记录登录、任务操作与配置变更，便于追溯。</div>
       </div>
       <div class="toolbar__right">
         <el-button type="primary" @click="loadData">刷新</el-button>
