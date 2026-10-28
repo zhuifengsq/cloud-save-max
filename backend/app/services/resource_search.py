@@ -17,7 +17,7 @@ from app.services.invalid_share_links import list_invalid_shareurls
 
 logger = logging.getLogger(__name__)
 
-_search_cache_ttl = 300
+_search_cache_ttl = 3
 _search_cache: TTLCache[str, tuple[list[dict[str, Any]], bool, str | None]] = TTLCache(maxsize=500, ttl=_search_cache_ttl)
 _search_cache_lock = threading.Lock()
 
@@ -27,12 +27,12 @@ def _get_search_cache_ttl() -> int:
         from app.models.system_setting import SystemSetting
         from app.db.session import SessionLocal
         with SessionLocal() as db:
-            row = db.query(SystemSetting).filter(SystemSetting.key == "preview_cache_ttl_seconds").first()
+            row = db.query(SystemSetting).filter(SystemSetting.key == "search_cache_ttl_seconds").first()
             if row and row.value:
-                return max(30, min(3600, int(row.value)))
+                return max(1, min(3600, int(row.value)))
     except Exception:
         pass
-    return 300
+    return 3
 
 
 def _update_search_cache_ttl() -> None:

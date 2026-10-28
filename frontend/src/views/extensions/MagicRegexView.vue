@@ -68,6 +68,7 @@ const sharerFilter = reactive({
   blocked: [] as string[],
   validate_batch_size: 5,
   preview_cache_ttl_seconds: 300,
+  search_cache_ttl_seconds: 3,
 })
 
 const sharerDialog = reactive({
@@ -171,6 +172,7 @@ async function loadSharerFilter() {
     sharerFilter.blocked = (data.blocked_sharers || '').split('|').map((s: string) => s.trim()).filter(Boolean)
     sharerFilter.validate_batch_size = data.validate_batch_size || 5
     sharerFilter.preview_cache_ttl_seconds = data.preview_cache_ttl_seconds || 300
+    sharerFilter.search_cache_ttl_seconds = data.search_cache_ttl_seconds ?? 3
   } finally {
     sharerFilter.loading = false
   }
@@ -186,12 +188,14 @@ async function saveSharerFilter() {
       blocked_sharers: sharerFilter.blocked.join('|') || null,
       validate_batch_size: Number(sharerFilter.validate_batch_size) || 5,
       preview_cache_ttl_seconds: Number(sharerFilter.preview_cache_ttl_seconds) || 300,
+      search_cache_ttl_seconds: Number(sharerFilter.search_cache_ttl_seconds) || 3,
     }
     const data = await updateSharerFilterSettings(payload)
     sharerFilter.preferred = (data.preferred_sharers || '').split('|').map((s: string) => s.trim()).filter(Boolean)
     sharerFilter.blocked = (data.blocked_sharers || '').split('|').map((s: string) => s.trim()).filter(Boolean)
     sharerFilter.validate_batch_size = data.validate_batch_size || 5
     sharerFilter.preview_cache_ttl_seconds = data.preview_cache_ttl_seconds || 300
+    sharerFilter.search_cache_ttl_seconds = data.search_cache_ttl_seconds ?? 3
     ElMessage.success('已保存')
   } finally {
     sharerFilter.saving = false
@@ -692,9 +696,13 @@ onMounted(() => {
               <el-input-number v-model="sharerFilter.validate_batch_size" :min="1" :max="20" :disabled="!canWrite" />
               <div class="form-item-hint">每批同时验证的链接数量，默认 5。越大验证越快，但对网盘账号压力越大。</div>
             </el-form-item>
-            <el-form-item label="缓存时长（秒）">
+            <el-form-item label="链接验证缓存（秒）">
               <el-input-number v-model="sharerFilter.preview_cache_ttl_seconds" :min="30" :max="3600" :disabled="!canWrite" />
-              <div class="form-item-hint">文件列表缓存时长，默认 300 秒。越短越实时，但请求越多。</div>
+              <div class="form-item-hint">分享链接有效性校验结果的缓存时长，默认 300 秒。搜索验证、自动换链都会复用它。</div>
+            </el-form-item>
+            <el-form-item label="搜索缓存（秒）">
+              <el-input-number v-model="sharerFilter.search_cache_ttl_seconds" :min="1" :max="3600" :disabled="!canWrite" />
+              <div class="form-item-hint">「深度搜索」结果的缓存时长，默认 3 秒。调大可以少打搜索源，调小更实时。</div>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="sharerFilter.saving" :disabled="!canWrite" @click="saveSharerFilter">保存配置</el-button>

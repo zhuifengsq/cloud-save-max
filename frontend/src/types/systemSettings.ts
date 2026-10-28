@@ -3,6 +3,7 @@ export type SystemSettingOut = {
   blocked_sharers: string
   validate_batch_size: number
   preview_cache_ttl_seconds: number
+  search_cache_ttl_seconds: number
 }
 
 export type SystemSettingUpdateIn = {
@@ -10,4 +11,5 @@ export type SystemSettingUpdateIn = {
   blocked_sharers?: string | null
   validate_batch_size?: number | null
   preview_cache_ttl_seconds?: number | null
+  search_cache_ttl_seconds?: number | null
 }

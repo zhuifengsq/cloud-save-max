@@ -19,6 +19,7 @@ _SETTINGS_DEFAULTS = {
     "blocked_sharers": "",
     "validate_batch_size": "5",
     "preview_cache_ttl_seconds": "300",
+    "search_cache_ttl_seconds": "3",
 }
 
 
@@ -42,6 +43,7 @@ def get_sharer_filter_settings(db: Session = Depends(get_db)) -> SystemSettingOu
         blocked_sharers=_get_setting(db, "blocked_sharers"),
         validate_batch_size=int(_get_setting(db, "validate_batch_size") or "5"),
         preview_cache_ttl_seconds=int(_get_setting(db, "preview_cache_ttl_seconds") or "300"),
+        search_cache_ttl_seconds=int(_get_setting(db, "search_cache_ttl_seconds") or "3"),
     )
 
 
@@ -60,6 +62,9 @@ def update_sharer_filter_settings(
     if payload.preview_cache_ttl_seconds is not None:
         v = max(30, min(3600, int(payload.preview_cache_ttl_seconds)))
         _set_setting(db, "preview_cache_ttl_seconds", str(v), "文件列表缓存时长（秒）")
+    if payload.search_cache_ttl_seconds is not None:
+        v = max(1, min(3600, int(payload.search_cache_ttl_seconds)))
+        _set_setting(db, "search_cache_ttl_seconds", str(v), "搜索缓存时长（秒）")
 
     db.commit()
 
@@ -68,6 +73,7 @@ def update_sharer_filter_settings(
         blocked_sharers=_get_setting(db, "blocked_sharers"),
         validate_batch_size=int(_get_setting(db, "validate_batch_size") or "5"),
         preview_cache_ttl_seconds=int(_get_setting(db, "preview_cache_ttl_seconds") or "300"),
+        search_cache_ttl_seconds=int(_get_setting(db, "search_cache_ttl_seconds") or "3"),
     )
 
 

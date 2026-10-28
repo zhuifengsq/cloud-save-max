@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
 
 import { fetchTMDBDetail, searchTMDB } from '@/api/media'
 import { browseDrive, fetchMagicRegex, fetchTasks, mkdirDrive, previewShare, validateShareLinksStream } from '@/api/tasks'
@@ -56,6 +57,8 @@ const props = withDefaults(
     autoDeepSuggest: false,
   },
 )
+
+const router = useRouter()
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -767,6 +770,125 @@ function scheduleLightSearch() {
   taskSuggestions.searchTimer = setTimeout(() => {
     searchSuggestions(0)
   }, 1000)
+}
+
+function formatSuggestionTime(value: string | null | undefined): string {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return raw.slice(0, 16).replace('T', ' ')
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+async function copySuggestionUrl(item: TaskSuggestionItemExt) {
+  const url = String(item.shareurl || '').trim()
+  if (!url) return
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = url
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+    ElMessage.success('链接已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选中链接复制')
+  }
+}
+
+async function openCopywriting() {
+  if (!state.tmdb_id) {
+    ElMessage.info('请先关联 TMDB')
+    return
+  }
+  const mediaType: 'movie' | 'tv' = state.tmdb_media_type === 'movie' ? 'movie' : 'tv'
+  let posterPath = ''
+  let overview = ''
+  let title = state.taskname || ''
+  let year = ''
+  let tmdbEpisode = ''
+  try {
+    const detail = await fetchTMDBDetail(mediaType, Number(state.tmdb_id))
+    const data = (detail as any)?.data || {}
+    posterPath = String(data.poster_path || '')
+    overview = String(data.overview || '')
+    title = String(data.name || data.title || title)
+    year = String(data.first_air_date || data.release_date || '').slice(0, 4)
+    if (mediaType === 'tv') {
+      const lastEpisode = data.last_episode_to_air
+      const lastNumber = lastEpisode && Number(lastEpisode.episode_number)
+      if (lastNumber > 0) {
+        tmdbEpisode = String(lastNumber)
+      } else if (Number(data.number_of_episodes) > 0) {
+        tmdbEpisode = String(Number(data.number_of_episodes))
+      }
+    }
+  } catch {
+    /* 忽略：拿不到详情也能生成纯文本 */
+  }
+
+  const links: { drive: string; url: string; account: string }[] = []
+  const seenUrls = new Set<string>()
+  const pushLink = (url: string, drive: string, account: string) => {
+    const value = String(url || '').trim()
+    if (!value || seenUrls.has(value)) return
+    seenUrls.add(value)
+    links.push({
+      drive: String(drive || '').trim().toLowerCase() || String(detectDriveTypeByUrl(value) || ''),
+      url: value,
+      account: String(account || ''),
+    })
+  }
+
+  // 当前任务已生成的分享链接
+  const currentShare = (state.extra?.share_link || {}) as Record<string, any>
+  pushLink(String(currentShare.share_url || ''), String(currentShare.drive_type || ''), String(state.account_choice || ''))
+
+  // 同名任务的分享链接（百度/夸克等），按 夸克 → 百度 → 其他 排序
+  const baseName = String(state.taskname || '').trim()
+  try {
+    if (baseName) {
+      const all = await fetchTasks()
+      const sameName = all.filter(
+        (item) => item.task_type === 'drama' && String(item.taskname || '').trim() === baseName,
+      )
+      for (const item of sameName) {
+        const rec = (item.extra?.share_link || {}) as Record<string, any>
+        const url = String(rec.share_url || '')
+        const account = String(item.account_name || '')
+        const acc = props.accounts.find((x) => String(x.name) === account)
+        const drive = String(rec.drive_type || acc?.drive_type || detectDriveTypeByUrl(url) || '')
+        pushLink(url, drive, account)
+      }
+      const order: Record<string, number> = { quark: 0, baidu: 1 }
+      links.sort((a, b) => (order[a.drive] ?? 9) - (order[b.drive] ?? 9))
+    }
+  } catch {
+    /* 忽略：拿不到任务列表时只带当前任务的链接 */
+  }
+
+  const savedLatest = (state.extra?.saved_latest || {}) as Record<string, any>
+  const draft = {
+    title,
+    year,
+    tmdbId: Number(state.tmdb_id),
+    mediaType,
+    posterPath,
+    overview,
+    episode: tmdbEpisode || String(savedLatest.episode || ''),
+    links,
+    taskname: String(state.taskname || ''),
+    savedAt: Date.now(),
+  }
+  sessionStorage.setItem('copywriting:draft', JSON.stringify(draft))
+  router.push({ name: 'TaskCopywriting' })
 }
 
 function selectSuggestion(item: TaskSuggestionItemExt) {
@@ -1797,27 +1919,43 @@ async function submitSaveTemplate() {
               v-for="(item, idx) in taskSuggestions.items"
               :key="`${item.shareurl}-${idx}`"
               class="task-suggestions__item"
-              :class="{ 'task-suggestions__item--selected': taskSuggestions.selectedItem === item }"
-              :style="item.is_blocked_sharer ? { backgroundColor: '#fde8e8' } : item.is_preferred_sharer ? { backgroundColor: '#e8f5e9' } : {}"
+              :class="{
+                'task-suggestions__item--selected': taskSuggestions.selectedItem === item,
+                'task-suggestions__item--preferred': Boolean(item.is_preferred_sharer),
+                'task-suggestions__item--blocked': Boolean(item.is_blocked_sharer),
+              }"
             >
-              <span
-                v-if="item.datetime"
-                class="task-suggestions__time"
-              >{{ item.datetime }}</span>
-              <div class="task-suggestions__row">
+              <div class="task-suggestions__meta">
                 <span
                   v-if="item.share_author_name"
                   class="task-suggestions__author"
                   :class="{ 'task-suggestions__author--active': authorMenu.visible && authorMenu.item === item }"
                   @click.stop="openAuthorMenu($event, item)"
                 >{{ item.share_author_name }}</span>
+                <span v-if="item.datetime" class="task-suggestions__time">{{ formatSuggestionTime(item.datetime) }}</span>
+                <span v-if="item.is_preferred_sharer" class="task-suggestions__flag task-suggestions__flag--ok">优选</span>
+                <span v-if="item.is_blocked_sharer" class="task-suggestions__flag task-suggestions__flag--bad">已屏蔽</span>
+              </div>
+              <div class="task-suggestions__main">
                 <span
                   class="task-suggestions__name"
+                  :title="item.taskname"
                   @mousedown.prevent
                   @click="selectSuggestion(item)"
                 >{{ item.taskname }}</span>
+                <button
+                  type="button"
+                  class="task-suggestions__copy"
+                  @mousedown.prevent
+                  @click.stop="copySuggestionUrl(item)"
+                >复制链接</button>
               </div>
-              <div class="task-suggestions__link">{{ item.shareurl }}</div>
+              <div
+                class="task-suggestions__link"
+                :title="item.shareurl"
+                @mousedown.prevent
+                @click.stop="copySuggestionUrl(item)"
+              >{{ item.shareurl }}</div>
             </div>
             <!-- 分享者右键菜单（浮层，独立于搜索结果行） -->
             <teleport to="body">
@@ -1843,6 +1981,7 @@ async function submitSaveTemplate() {
             <el-tag v-else type="info" effect="plain">未关联</el-tag>
             <el-button size="small" @click="openTmdbLinkDialog">搜索关联</el-button>
             <el-button size="small" type="danger" plain :disabled="!state.tmdb_id" @click="clearTmdbLink">解除关联</el-button>
+            <el-button size="small" type="primary" :disabled="!state.tmdb_id" @click="openCopywriting">生成文案</el-button>
           </div>
         </el-form-item>
         <!-- 分享链接输入框 -->
@@ -1868,6 +2007,29 @@ async function submitSaveTemplate() {
           <el-select v-model="selectedTemplateId" placeholder="选择模板自动填充配置" clearable style="width: 100%" @change="applyTemplate">
             <el-option v-for="t in templateList" :key="t.id" :label="t.name" :value="t.id" />
           </el-select>
+        </el-form-item>
+      </div>
+
+      <div class="drawer-form__section">
+        <div class="drawer-form__section-title">转存模式</div>
+        <el-form-item label="文件夹模式">
+          <el-radio-group v-model="state.addition.folder_mode">
+            <el-radio-button value="normal">普通（平铺）</el-radio-button>
+            <el-radio-button value="folder_diff">文件夹对比</el-radio-button>
+          </el-radio-group>
+          <div class="drawer-form__hint">
+            普通：文件平铺到保存目录，同名跳过；文件夹对比：保留分享里的子文件夹，白名单文件夹按「相对路径 + 文件名」增量，其它文件夹只在缺失时整包存一次（不重命名）
+          </div>
+        </el-form-item>
+        <el-form-item v-if="state.addition.folder_mode === 'folder_diff'" label="白名单文件夹">
+          <el-input v-model="state.addition.whitelist_folders" placeholder="可选，用 | 分隔，如：1080p|4k">
+            <template #append>
+              <el-button @click="state.addition.whitelist_mode = state.addition.whitelist_mode === 'all' ? 'any' : 'all'">{{ state.addition.whitelist_mode === 'all' ? '包含所有' : '包含任意' }}</el-button>
+            </template>
+          </el-input>
+          <div class="drawer-form__hint">
+            匹配的文件夹持续增量；不匹配的文件夹只在目标目录缺少同名文件夹时整包存一次。留空则所有文件夹都按增量处理
+          </div>
         </el-form-item>
       </div>
 
@@ -1940,29 +2102,6 @@ async function submitSaveTemplate() {
         <el-form-item label="文件时间过滤">
           <el-date-picker v-model="state.addition.file_min_date" type="date" value-format="YYYY-MM-DD" placeholder="可选，早于此日期的文件将被跳过" style="width: 100%" clearable :editable="false" />
           <div class="drawer-form__hint">修改时间早于此日期的文件不会被转存</div>
-        </el-form-item>
-      </div>
-
-      <div class="drawer-form__section">
-        <div class="drawer-form__section-title">转存模式</div>
-        <el-form-item label="文件夹模式">
-          <el-radio-group v-model="state.addition.folder_mode">
-            <el-radio-button value="normal">普通（平铺）</el-radio-button>
-            <el-radio-button value="folder_diff">文件夹对比</el-radio-button>
-          </el-radio-group>
-          <div class="drawer-form__hint">
-            普通：文件平铺到保存目录，同名跳过；文件夹对比：保留分享里的子文件夹，白名单文件夹按「相对路径 + 文件名」增量，其它文件夹只在缺失时整包存一次（不重命名）
-          </div>
-        </el-form-item>
-        <el-form-item v-if="state.addition.folder_mode === 'folder_diff'" label="白名单文件夹">
-          <el-input v-model="state.addition.whitelist_folders" placeholder="可选，用 | 分隔，如：1080p|4k">
-            <template #append>
-              <el-button @click="state.addition.whitelist_mode = state.addition.whitelist_mode === 'all' ? 'any' : 'all'">{{ state.addition.whitelist_mode === 'all' ? '包含所有' : '包含任意' }}</el-button>
-            </template>
-          </el-input>
-          <div class="drawer-form__hint">
-            匹配的文件夹持续增量；不匹配的文件夹只在目标目录缺少同名文件夹时整包存一次。留空则所有文件夹都按增量处理
-          </div>
         </el-form-item>
       </div>
 
@@ -2563,4 +2702,145 @@ async function submitSaveTemplate() {
 .author-menu__item--danger:hover {
   background-color: var(--el-color-danger-light-9);
 }
+
+/* ---------- 搜索结果卡片（重设计） ---------- */
+.task-suggestions {
+  padding: 8px;
+  border-radius: 12px;
+  overflow-x: hidden;
+}
+
+.task-suggestions__item {
+  min-width: 0;
+  gap: 7px;
+  margin: 4px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-bg-color);
+  pointer-events: auto;
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.task-suggestions__item:hover {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-fill-color-lighter);
+  box-shadow: 0 4px 12px -8px rgba(16, 24, 40, 0.35);
+}
+
+.task-suggestions__item--preferred {
+  background: rgba(16, 185, 129, 0.06);
+  border-color: rgba(16, 185, 129, 0.28);
+}
+
+.task-suggestions__item--blocked {
+  background: rgba(239, 68, 68, 0.06);
+  border-color: rgba(239, 68, 68, 0.28);
+}
+
+.task-suggestions__item--selected {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.task-suggestions__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-suggestions__main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.task-suggestions__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-suggestions__name:hover {
+  color: var(--el-color-primary);
+  background: transparent;
+}
+
+.task-suggestions__time {
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-suggestions__flag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.task-suggestions__flag--ok {
+  color: #0f9d6b;
+  background: rgba(16, 185, 129, 0.14);
+}
+
+.task-suggestions__flag--bad {
+  color: #d14343;
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.task-suggestions__copy {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-lighter);
+  color: var(--el-color-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+
+.task-suggestions__item:hover .task-suggestions__copy,
+.task-suggestions__item--selected .task-suggestions__copy {
+  opacity: 1;
+}
+
+.task-suggestions__copy:hover {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+
+.task-suggestions__link {
+  margin-top: 0;
+  font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--el-color-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.task-suggestions__link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  .task-suggestions__copy { opacity: 1; }
+}
+
 </style>

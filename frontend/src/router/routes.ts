@@ -60,6 +60,12 @@ export const appRoutes: RouteRecordRaw[] = [
         meta: { title: '影视发现', icon: 'Film', permissions: [TASK_READ] },
       },
       {
+        path: 'tasks/copywriting',
+        name: 'TaskCopywriting',
+        component: () => import('@/views/tasks/CopywritingView.vue'),
+        meta: { title: '生成文案', hidden: true, permissions: [TASK_READ] },
+      },
+      {
         path: 'tasks/drama',
         name: 'DramaTasks',
         component: () => import('@/views/tasks/DramaTaskView.vue'),
