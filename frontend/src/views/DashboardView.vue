@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import CapacityAccountCard from '@/components/dashboard/CapacityAccountCard.vue'
 import CapacityHero from '@/components/dashboard/CapacityHero.vue'
 import DramaTrend from '@/components/dashboard/DramaTrend.vue'
-import { fetchCapacityOverview, fetchDramaOverview } from '@/api/dashboard'
+import { clearDramaFailures, fetchCapacityOverview, fetchDramaOverview } from '@/api/dashboard'
 import { refreshDriveAccountProfiles } from '@/api/extensions'
 import { fetchTMDBDetail } from '@/api/media'
 import { fetchTasks } from '@/api/tasks'
@@ -83,6 +83,30 @@ async function loadDrama() {
     await loadTMDBDetails()
   } finally {
     dramaLoading.value = false
+  }
+}
+
+const clearingFailures = ref(false)
+
+async function clearFailures() {
+  try {
+    await ElMessageBox.confirm(
+      '将删除所有追剧任务的失败执行记录，失败率和趋势统计会同步变化，且无法恢复。',
+      '清理失败记录',
+      { type: 'warning', confirmButtonText: '全部清理', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
+    )
+  } catch {
+    return
+  }
+  clearingFailures.value = true
+  try {
+    const res = await clearDramaFailures(0)
+    ElMessage.success(`已清理 ${res.deleted} 条失败记录`)
+    await loadDrama()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || e?.message || '清理失败')
+  } finally {
+    clearingFailures.value = false
   }
 }
 
@@ -467,6 +491,9 @@ onMounted(() => {
               <span class="status-pill status-pill--danger">{{ failures.length }} 条</span>
               <el-button size="small" text @click="showAllFailures = !showAllFailures">
                 {{ showAllFailures ? '收起' : '展开' }}
+              </el-button>
+              <el-button size="small" text type="danger" :loading="clearingFailures" @click="clearFailures">
+                清理失败记录
               </el-button>
             </div>
           </div>

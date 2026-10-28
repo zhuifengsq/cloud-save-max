@@ -10,3 +10,10 @@ export async function fetchDramaOverview(days = 30) {
   const { data } = await http.get<DramaOverview>('/dashboard/drama-overview', { params: { days } })
   return data
 }
+
+export async function clearDramaFailures(days = 0) {
+  const { data } = await http.post<{ deleted: number }>('/dashboard/drama/clear-failures', null, {
+    params: { days },
+  })
+  return data
+}
