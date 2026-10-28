@@ -20,6 +20,7 @@ import { useAuthStore } from '@/stores/auth'
 import type { DriveAccountItem } from '@/types/extensions'
 import type { TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/tasks'
 import { validateCrontab5, validateTimezone, describeCrontab, getNextExecutions } from '@/utils/cron'
+import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 import type { DriveType } from '@/utils/driveType'
 
@@ -431,10 +432,9 @@ function regenerateShare() {
 async function copyStoredShareLink(row: TaskItem) {
   const url = storedShareLink(row)?.share_url
   if (!url) return
-  try {
-    await navigator.clipboard.writeText(url)
+  if (await copyText(url)) {
     ElMessage.success('分享链接已复制')
-  } catch {
+  } else {
     ElMessage.warning('复制失败，请点击「分享」查看完整链接')
   }
 }
@@ -442,10 +442,9 @@ async function copyStoredShareLink(row: TaskItem) {
 async function copyShareLink() {
   const url = String(shareDialog.result?.share_url || '')
   if (!url) return
-  try {
-    await navigator.clipboard.writeText(url)
+  if (await copyText(url)) {
     ElMessage.success('分享链接已复制')
-  } catch {
+  } else {
     ElMessage.warning('复制失败，请选中链接手动复制')
   }
 }
@@ -1030,9 +1029,23 @@ onBeforeUnmount(() => {
         <el-table-column prop="savepath" label="保存路径" min-width="200" show-overflow-tooltip />
         <el-table-column label="分享链接" width="160">
           <template #default="{ row }">
-            <el-tooltip v-if="storedShareUrl(row as TaskItem)" :content="storedShareUrl(row as TaskItem)" placement="top">
-              <span class="task-share-link" @click="copyStoredShareLink(row as TaskItem)">{{ storedShareUrl(row as TaskItem) }}</span>
-            </el-tooltip>
+            <div v-if="storedShareUrl(row as TaskItem)" class="task-share-cell">
+              <el-tooltip :content="storedShareUrl(row as TaskItem)" placement="top">
+                <a
+                  class="task-share-link"
+                  :href="storedShareUrl(row as TaskItem)"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  @click.stop
+                >{{ storedShareUrl(row as TaskItem) }}</a>
+              </el-tooltip>
+              <button
+                type="button"
+                class="task-share-copy"
+                title="复制链接"
+                @click.stop="copyStoredShareLink(row as TaskItem)"
+              >复制</button>
+            </div>
             <span v-else class="task-share-link task-share-link--empty">未生成</span>
           </template>
         </el-table-column>
@@ -1148,9 +1161,17 @@ onBeforeUnmount(() => {
             <div class="task-card__meta-row"><span class="task-card__label">路径</span>{{ row.savepath || '-' }}</div>
             <div v-if="storedShareUrl(row)" class="task-card__meta-row">
               <span class="task-card__label">分享</span>
-              <el-tooltip :content="storedShareUrl(row)" placement="top">
-                <span class="task-share-link" @click="copyStoredShareLink(row)">{{ storedShareUrl(row) }}</span>
-              </el-tooltip>
+              <div class="task-share-cell">
+                <el-tooltip :content="storedShareUrl(row)" placement="top">
+                  <a
+                    class="task-share-link"
+                    :href="storedShareUrl(row)"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >{{ storedShareUrl(row) }}</a>
+                </el-tooltip>
+                <button type="button" class="task-share-copy" @click.stop="copyStoredShareLink(row)">复制</button>
+              </div>
             </div>
             <div class="task-card__meta-row">
               <span class="task-card__label">完结</span>
@@ -1499,15 +1520,57 @@ onBeforeUnmount(() => {
   color: var(--el-text-color-secondary);
 }
 
+.task-share-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .task-share-link {
   display: inline-block;
   max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
   color: var(--el-color-primary);
   cursor: pointer;
+}
+
+.task-share-link:hover {
+  text-decoration: underline;
+}
+
+.task-share-copy {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-fill-color-lighter);
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.task-share-cell:hover .task-share-copy {
+  opacity: 1;
+}
+
+.task-share-copy:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
+}
+
+@media (max-width: 768px) {
+  .task-share-copy {
+    opacity: 1;
+  }
 }
 
 .task-share-link--empty {

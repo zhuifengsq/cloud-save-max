@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import { fetchTMDBDetail } from '@/api/media'
+import { copyText as writeClipboard } from '@/utils/clipboard'
 
 type Draft = {
   title: string
@@ -140,21 +141,9 @@ async function loadPosterFromTMDB() {
 
 async function copyText() {
   const text = editingText.value || buildCopyText()
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-    } else {
-      const textarea = document.createElement('textarea')
-      textarea.value = text
-      textarea.style.position = 'fixed'
-      textarea.style.opacity = '0'
-      document.body.appendChild(textarea)
-      textarea.select()
-      document.execCommand('copy')
-      document.body.removeChild(textarea)
-    }
+  if (await writeClipboard(text)) {
     ElMessage.success('文案已复制')
-  } catch {
+  } else {
     ElMessage.warning('复制失败，请手动选中复制')
   }
 }
@@ -169,85 +158,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   })
 }
 
-function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-  const out: string[] = []
-  for (const paragraph of text.split('\n')) {
-    if (!paragraph) {
-      out.push('')
-      continue
-    }
-    let current = ''
-    for (const char of Array.from(paragraph)) {
-      const next = current + char
-      if (ctx.measureText(next).width > maxWidth && current) {
-        out.push(current)
-        current = char
-      } else {
-        current = next
-      }
-    }
-    if (current) out.push(current)
-  }
-  return out
-}
-
-async function buildShareImage(): Promise<Blob | null> {
-  const width = 1080
-  const posterHeight = 760
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return null
-
-  const text = editingText.value || buildCopyText()
-  ctx.font = '30px "PingFang SC", "Microsoft YaHei", sans-serif'
-  const contentWidth = width - 96
-  const lines = wrapLines(ctx, text, contentWidth)
-  const lineHeight = 46
-  const textHeight = lines.length * lineHeight
-  const height = posterHeight + Math.max(260, textHeight + 96)
-  canvas.width = width
-  canvas.height = height
-
-  ctx.fillStyle = '#0b1526'
-  ctx.fillRect(0, 0, width, height)
-
-  if (fullPosterUrl.value) {
-    try {
-      const img = await loadImage(fullPosterUrl.value)
-      const scale = Math.max(width / img.width, posterHeight / img.height)
-      const drawWidth = img.width * scale
-      const drawHeight = img.height * scale
-      ctx.drawImage(img, (width - drawWidth) / 2, (posterHeight - drawHeight) / 2, drawWidth, drawHeight)
-      const gradient = ctx.createLinearGradient(0, posterHeight - 180, 0, posterHeight)
-      gradient.addColorStop(0, 'rgba(11, 21, 38, 0)')
-      gradient.addColorStop(1, '#0b1526')
-      ctx.fillStyle = gradient
-      ctx.fillRect(0, posterHeight - 180, width, 180)
-    } catch {
-      ctx.fillStyle = '#13233c'
-      ctx.fillRect(0, 0, width, posterHeight)
-      ctx.fillStyle = '#64748b'
-      ctx.font = '32px "PingFang SC", "Microsoft YaHei", sans-serif'
-      ctx.textAlign = 'center'
-      ctx.fillText('海报加载失败', width / 2, posterHeight / 2)
-      ctx.textAlign = 'left'
-    }
-  } else {
-    ctx.fillStyle = '#13233c'
-    ctx.fillRect(0, 0, width, posterHeight)
-  }
-
-  ctx.fillStyle = '#f8fafc'
-  ctx.font = '30px "PingFang SC", "Microsoft YaHei", sans-serif'
-  let y = posterHeight + 64
-  for (const line of lines) {
-    if (line) ctx.fillText(line, 48, y)
-    y += lineHeight
-  }
-
-  return await new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/png'))
-}
-
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -259,33 +169,68 @@ function downloadBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 2000)
 }
 
-async function copyImage() {
-  const blob = await buildShareImage()
-  if (!blob) {
-    ElMessage.error('图片生成失败')
-    return
-  }
-  const canClipboard = typeof window !== 'undefined' && window.isSecureContext && 'ClipboardItem' in window && navigator.clipboard?.write
-  if (canClipboard) {
-    try {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-      ElMessage.success('图片已复制')
-      return
-    } catch {
-      /* fallthrough */
-    }
-  }
-  downloadBlob(blob, `${draft.title || draft.taskname || '分享'}-分享卡.png`)
-  ElMessage.warning('当前页面不是 HTTPS，浏览器不允许直接复制图片，已改为下载')
+function posterFileName(ext: string): string {
+  const base = (draft.title || draft.taskname || '海报').replace(/[\\/:*?"<>|]/g, '').trim() || '海报'
+  return `${base}-海报.${ext}`
 }
 
-async function downloadImage() {
-  const blob = await buildShareImage()
-  if (!blob) {
-    ElMessage.error('图片生成失败')
+async function fetchPosterBlob(): Promise<{ blob: Blob; ext: string } | null> {
+  const url = fullPosterUrl.value
+  if (!url) return null
+  try {
+    const resp = await fetch(url, { mode: 'cors' })
+    if (!resp.ok) throw new Error(String(resp.status))
+    const blob = await resp.blob()
+    const type = blob.type || 'image/jpeg'
+    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg'
+    return { blob, ext }
+  } catch {
+    // fetch 失败（跨域限制等）时退回 img + canvas
+    try {
+      const img = await loadImage(url)
+      const canvas = document.createElement('canvas')
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      ctx.drawImage(img, 0, 0)
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.95))
+      return blob ? { blob, ext: 'jpg' } : null
+    } catch {
+      return null
+    }
+  }
+}
+
+async function copyPoster() {
+  const poster = await fetchPosterBlob()
+  if (!poster) {
+    ElMessage.error('海报获取失败')
     return
   }
-  downloadBlob(blob, `${draft.title || draft.taskname || '分享'}-分享卡.png`)
+  const canClipboard =
+    window.isSecureContext && 'ClipboardItem' in window && Boolean(navigator.clipboard?.write)
+  if (canClipboard) {
+    try {
+      const type = poster.blob.type || 'image/png'
+      await navigator.clipboard.write([new ClipboardItem({ [type]: poster.blob })])
+      ElMessage.success('海报已复制')
+      return
+    } catch {
+      /* 退回下载 */
+    }
+  }
+  downloadBlob(poster.blob, posterFileName(poster.ext))
+  ElMessage.warning('当前页面不是 HTTPS，无法直接复制图片，已改为下载海报')
+}
+
+async function downloadPoster() {
+  const poster = await fetchPosterBlob()
+  if (!poster) {
+    ElMessage.error('海报获取失败')
+    return
+  }
+  downloadBlob(poster.blob, posterFileName(poster.ext))
 }
 
 function goBack() {
@@ -299,7 +244,7 @@ function goBack() {
       <div class="section-header__title">
         <div class="section-header__eyebrow">Copywriting</div>
         <h2>生成文案</h2>
-        <div class="section-header__desc">修改内容后复制文案或分享卡，全部在本地完成，不上传服务器。</div>
+        <div class="section-header__desc">修改内容后复制文案或海报，全部在本地完成，不上传服务器。</div>
       </div>
       <div class="toolbar__right">
         <el-button @click="goBack">返回</el-button>
@@ -392,8 +337,8 @@ function goBack() {
 
         <div class="copy-actions">
           <el-button type="primary" @click="copyText">复制文案</el-button>
-          <el-button @click="copyImage">复制图片</el-button>
-          <el-button text @click="downloadImage">下载分享卡</el-button>
+          <el-button :disabled="!posterUrl" @click="copyPoster">复制海报</el-button>
+          <el-button text :disabled="!posterUrl" @click="downloadPoster">下载海报</el-button>
         </div>
       </section>
     </div>

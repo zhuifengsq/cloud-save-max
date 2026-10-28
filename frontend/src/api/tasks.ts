@@ -201,6 +201,15 @@ export async function browseDrive(payload: { dir_path: string; account_name?: st
   return data
 }
 
+export async function deleteDriveFiles(payload: {
+  fids: string[]
+  account_name?: string | null
+  shareurl?: string | null
+}) {
+  const { data } = await http.post<{ ok: boolean; message?: string | null; deleted: number }>('/tasks/drive/delete', payload)
+  return data
+}
+
 export async function mkdirDrive(payload: { dir_path: string; account_name?: string | null; shareurl?: string | null }) {
   const { data } = await http.post<{ account_name: string; dir_path: string; response: Record<string, any> }>('/tasks/drive/mkdir', payload)
   return data

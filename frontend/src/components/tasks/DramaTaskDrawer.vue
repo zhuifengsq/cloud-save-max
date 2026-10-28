@@ -3,7 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 
 import { fetchTMDBDetail, searchTMDB } from '@/api/media'
-import { browseDrive, fetchMagicRegex, fetchTasks, mkdirDrive, previewShare, validateShareLinksStream } from '@/api/tasks'
+import { browseDrive, deleteDriveFiles, fetchMagicRegex, fetchTasks, mkdirDrive, previewShare, validateShareLinksStream } from '@/api/tasks'
 import { fetchTMDBConfig } from '@/api/tmdb'
 import { fetchTaskSuggestions } from '@/api/resourceSearch'
 import { fetchSharerFilterSettings } from '@/api/systemSettings'
@@ -13,6 +13,7 @@ import type { DriveAccountItem } from '@/types/extensions'
 import type { TMDBBrief } from '@/types/media'
 import type { TaskSuggestionItem } from '@/types/resourceSearch'
 import type { DriveBrowseItem, MagicRegexRule, SharePreviewItem, TaskItem } from '@/types/tasks'
+import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w185'
@@ -198,6 +199,7 @@ const drivePicker = reactive({
   sortBy: 'file_name' as 'file_name' | 'updated_at',
   sortOrder: 'asc' as 'asc' | 'desc',
   mobileSort: 'file_name:asc' as string,
+  deletingFid: '' as string,
 })
 
 const sharePicker = reactive({
@@ -784,21 +786,9 @@ function formatSuggestionTime(value: string | null | undefined): string {
 async function copySuggestionUrl(item: TaskSuggestionItemExt) {
   const url = String(item.shareurl || '').trim()
   if (!url) return
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(url)
-    } else {
-      const textarea = document.createElement('textarea')
-      textarea.value = url
-      textarea.style.position = 'fixed'
-      textarea.style.opacity = '0'
-      document.body.appendChild(textarea)
-      textarea.select()
-      document.execCommand('copy')
-      document.body.removeChild(textarea)
-    }
+  if (await copyText(url)) {
     ElMessage.success('链接已复制')
-  } catch {
+  } else {
     ElMessage.warning('复制失败，请手动选中链接复制')
   }
 }
@@ -1441,6 +1431,40 @@ async function createSaveDir() {
     } else {
       ElMessage.error(e?.message || '创建失败')
     }
+  }
+}
+
+async function deleteDriveItem(row: any) {
+  const fid = String(row?.fid || '').trim()
+  const name = String(row?.file_name || row?.name || '该项目')
+  if (!fid) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除网盘里的「${name}」吗？删除后不可恢复。`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
+    )
+  } catch {
+    return
+  }
+  drivePicker.deletingFid = fid
+  try {
+    const res = await deleteDriveFiles({
+      fids: [fid],
+      account_name: state.account_choice || undefined,
+      shareurl: state.shareurl || undefined,
+    })
+    if (!res.ok) {
+      ElMessage.error(res.message || '删除失败')
+      return
+    }
+    ElMessage.success('已删除')
+    await browseDriveDir(drivePicker.dirPath || '/')
+  } catch (e: any) {
+    const msg = e?.response?.data?.message || e?.message || '删除失败'
+    ElMessage.error(msg)
+  } finally {
+    drivePicker.deletingFid = ''
   }
 }
 
@@ -2312,6 +2336,17 @@ async function submitSaveTemplate() {
         <el-table-column prop="updated_at" label="修改日期" width="170" sortable="custom">
           <template #default="{ row }">
             <span>{{ formatTs(row.updated_at) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              text
+              type="danger"
+              :loading="drivePicker.deletingFid === String(row.fid)"
+              @click.stop="deleteDriveItem(row)"
+            >删除</el-button>
           </template>
         </el-table-column>
       </el-table>

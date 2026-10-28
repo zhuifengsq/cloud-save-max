@@ -31,6 +31,8 @@ from app.extensions.runtime.task_scheduler import task_scheduler_manager
 from app.extensions.runtime.task_executor import TaskExecutor
 from app.schemas.task_browse import (
     DriveBrowseIn,
+    DriveDeleteIn,
+    DriveDeleteOut,
     DriveBrowseItemOut,
     DriveBrowseOut,
     DriveBrowsePathOut,
@@ -1482,3 +1484,77 @@ def post_drive_mkdir(payload: DriveMkdirIn, db: Session = Depends(get_db)):
         raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的驱动账号')
     response = adapter.mkdir(payload.dir_path)
     return DriveMkdirOut(account_name=str(payload.account_name), dir_path=payload.dir_path, response=response or {})
+
+
+@router.post('/drive/delete', response_model=DriveDeleteOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
+def post_drive_delete(
+    payload: DriveDeleteIn,
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DriveDeleteOut:
+    account_name = str(payload.account_name or "").strip()
+    drive_type: str | None = None
+    if account_name:
+        account = _get_active_account(db, account_name)
+        if account is None:
+            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '指定账号不存在或不可用')
+        drive_type = str(account.drive_type)
+    elif payload.shareurl:
+        drive_type = AdapterRegistry.detect_drive_type(payload.shareurl)
+        if not drive_type:
+            raise bad_request('TASK_SHAREURL_INVALID', '无法识别链接所属网盘')
+        account_name = _pick_default_account_name(db, drive_type)
+        account = _get_active_account(db, account_name) if account_name else None
+        if account is None:
+            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的网盘账号')
+    else:
+        any_default = _pick_any_default_account(db)
+        if any_default is None:
+            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的网盘账号')
+        account_name = any_default.name
+        drive_type = str(any_default.drive_type)
+
+    fids = [str(x).strip() for x in (payload.fids or []) if str(x).strip()]
+    if not fids:
+        raise bad_request('DRIVE_DELETE_EMPTY', '缺少要删除的文件')
+
+    manager = DatabaseAccountManager(db)
+    task_payload = {'shareurl': payload.shareurl or '', 'account_name': account_name}
+    manager.init_for_tasks([task_payload])
+    adapter = manager.get_adapter_for_task(task_payload)
+    if adapter is None:
+        raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的网盘账号')
+
+    try:
+        result = adapter.delete(fids)
+    except NotImplementedError as exc:
+        raise bad_request('DRIVE_DELETE_UNSUPPORTED', f'{drive_type or ""} 暂不支持删除') from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception('删除网盘文件失败 account=%s', account_name)
+        raise bad_request('DRIVE_DELETE_FAILED', str(exc) or '删除失败') from exc
+
+    if isinstance(result, dict):
+        code = result.get('code')
+        if code is not None:
+            ok = code in (0, '0')
+        else:
+            ok = bool(result.get('success'))
+        message = str(result.get('message') or '')
+    else:
+        ok = False
+        message = ''
+
+    audit.write_audit_log(
+        db,
+        actor_user_id=current.user.id,
+        action='task.drive.delete',
+        target_type='drive_file',
+        target_id=account_name,
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get('user-agent'),
+        success=bool(ok),
+        detail=f'drive_type={drive_type or ""} count={len(fids)}',
+    )
+    db.commit()
+    return DriveDeleteOut(ok=bool(ok), message=message or None, deleted=len(fids) if ok else 0)

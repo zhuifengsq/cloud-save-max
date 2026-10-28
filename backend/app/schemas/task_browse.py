@@ -151,3 +151,15 @@ class DriveMkdirOut(BaseModel):
     account_name: str
     dir_path: str
     response: dict[str, Any] = {}
+
+class DriveDeleteIn(BaseModel):
+    fids: list[str] = Field(min_length=1, max_length=200)
+    account_name: str | None = Field(default=None, max_length=128)
+    shareurl: str | None = None
+
+
+class DriveDeleteOut(BaseModel):
+    ok: bool
+    message: str | None = None
+    deleted: int = 0
+

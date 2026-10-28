@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { copyText } from '@/utils/clipboard'
 
 import {
   deleteTMDBCacheItem,
@@ -332,24 +333,9 @@ const drawerPayloadText = computed(() => {
 async function copyDrawerPayloadRaw() {
   const text = String(drawerPayloadRaw.value || '')
   if (!text) return
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text)
-    } else {
-      const textarea = document.createElement('textarea')
-      textarea.value = text
-      textarea.style.position = 'fixed'
-      textarea.style.top = '0'
-      textarea.style.left = '0'
-      textarea.style.opacity = '0'
-      document.body.appendChild(textarea)
-      textarea.select()
-      textarea.setSelectionRange(0, 99999)
-      document.execCommand('copy')
-      document.body.removeChild(textarea)
-    }
+  if (await copyText(text)) {
     ElMessage.success('缓存数据已复制')
-  } catch {
+  } else {
     ElMessage.error('复制失败')
   }
 }
