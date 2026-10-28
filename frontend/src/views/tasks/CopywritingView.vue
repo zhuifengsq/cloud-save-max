@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
@@ -174,6 +174,11 @@ function posterFileName(ext: string): string {
   return `${base}-海报.${ext}`
 }
 
+const posterRawBlob = ref<Blob | null>(null)
+const posterPngBlob = ref<Blob | null>(null)
+const posterPreparing = ref(false)
+const posterDialogVisible = ref(false)
+
 async function fetchPosterBlob(): Promise<{ blob: Blob; ext: string } | null> {
   const url = fullPosterUrl.value
   if (!url) return null
@@ -202,35 +207,87 @@ async function fetchPosterBlob(): Promise<{ blob: Blob; ext: string } | null> {
   }
 }
 
+async function blobToPng(blob: Blob): Promise<Blob | null> {
+  try {
+    const bitmap = await createImageBitmap(blob)
+    const canvas = document.createElement('canvas')
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(bitmap, 0, 0)
+    bitmap.close?.()
+    return await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+  } catch {
+    return null
+  }
+}
+
+async function preparePoster(): Promise<void> {
+  if (!fullPosterUrl.value) {
+    posterRawBlob.value = null
+    posterPngBlob.value = null
+    return
+  }
+  posterPreparing.value = true
+  try {
+    const poster = await fetchPosterBlob()
+    if (!poster) return
+    posterRawBlob.value = poster.blob
+    // 剪贴板只接受 image/png，先把 JPEG 转成 PNG 缓存好
+    posterPngBlob.value =
+      poster.blob.type === 'image/png' ? poster.blob : await blobToPng(poster.blob)
+  } finally {
+    posterPreparing.value = false
+  }
+}
+
+watch(
+  fullPosterUrl,
+  () => {
+    void preparePoster()
+  },
+  { immediate: true },
+)
+
+function canWriteImage(): boolean {
+  if (typeof window === 'undefined') return false
+  return (
+    window.isSecureContext &&
+    typeof ClipboardItem !== 'undefined' &&
+    Boolean(navigator.clipboard?.write)
+  )
+}
+
 async function copyPoster() {
-  const poster = await fetchPosterBlob()
-  if (!poster) {
+  if (!posterPngBlob.value && !posterPreparing.value && !posterRawBlob.value) {
+    await preparePoster()
+  }
+  const png = posterPngBlob.value
+  if (!png) {
     ElMessage.error('海报获取失败')
     return
   }
-  const canClipboard =
-    window.isSecureContext && 'ClipboardItem' in window && Boolean(navigator.clipboard?.write)
-  if (canClipboard) {
+  if (canWriteImage()) {
     try {
-      const type = poster.blob.type || 'image/png'
-      await navigator.clipboard.write([new ClipboardItem({ [type]: poster.blob })])
-      ElMessage.success('海报已复制')
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+      ElMessage.success('海报已复制，可以直接粘贴')
       return
     } catch {
-      /* 退回下载 */
+      /* 继续走弹窗兜底 */
     }
   }
-  downloadBlob(poster.blob, posterFileName(poster.ext))
-  ElMessage.warning('当前页面不是 HTTPS，无法直接复制图片，已改为下载海报')
+  posterDialogVisible.value = true
 }
 
 async function downloadPoster() {
-  const poster = await fetchPosterBlob()
-  if (!poster) {
+  if (!posterRawBlob.value) await preparePoster()
+  const blob = posterRawBlob.value || posterPngBlob.value
+  if (!blob) {
     ElMessage.error('海报获取失败')
     return
   }
-  downloadBlob(poster.blob, posterFileName(poster.ext))
+  downloadBlob(blob, posterFileName(blob.type.includes('png') ? 'png' : 'jpg'))
 }
 
 function goBack() {
@@ -343,6 +400,19 @@ function goBack() {
       </section>
     </div>
   </div>
+
+    <el-dialog v-model="posterDialogVisible" title="复制海报" width="520px" style="max-width: 94vw" append-to-body>
+      <div class="poster-copy-dialog">
+        <img v-if="posterUrl" :src="posterUrl" class="poster-copy-dialog__img" alt="海报" />
+        <div class="poster-copy-dialog__hint">
+          浏览器当前环境不允许直接写剪贴板，请<strong>右键图片 → 复制图片</strong>（手机上长按图片保存）。
+        </div>
+        <div class="poster-copy-dialog__actions">
+          <el-button type="primary" @click="downloadPoster">下载海报</el-button>
+          <el-button @click="posterDialogVisible = false">关闭</el-button>
+        </div>
+      </div>
+    </el-dialog>
 </template>
 
 <style scoped>
@@ -498,5 +568,31 @@ function goBack() {
   .copy-poster {
     max-width: 320px;
   }
+}
+
+.poster-copy-dialog {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.poster-copy-dialog__img {
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.poster-copy-dialog__hint {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+  text-align: center;
+}
+
+.poster-copy-dialog__actions {
+  display: flex;
+  gap: 10px;
 }
 </style>
