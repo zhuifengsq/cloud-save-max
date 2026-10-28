@@ -124,6 +124,7 @@ function onResize() {
 const filters = reactive({
   keyword: '',
   status: 'all',
+  drive: 'all' as 'all' | DriveType,
 })
 
 const accountByName = computed(() => new Map(accounts.value.map((item) => [item.name, item])))
@@ -187,6 +188,68 @@ function taskRowClass({ row }: { row: TaskItem }): string {
   return exec && exec.status === 'failed' ? 'task-row--failed' : ''
 }
 
+const DRIVE_FILTER_ORDER: DriveType[] = [
+  'quark',
+  'baidu',
+  'aliyun',
+  '115',
+  'uc',
+  '123pan',
+  'xunlei',
+  'cloud189',
+  'cloud139',
+  'guangya',
+]
+
+const driveFilterOptions = computed(() => {
+  const present = new Set<DriveType>()
+  for (const item of tasks.value) {
+    if (item.task_type !== 'drama') continue
+    const drive = taskDriveType(item)
+    if (drive) present.add(drive)
+  }
+  const labels: Record<DriveType, string> = {
+    quark: '夸克',
+    baidu: '百度',
+    aliyun: '阿里',
+    '115': '115',
+    uc: 'UC',
+    '123pan': '123',
+    xunlei: '迅雷',
+    cloud189: '天翼',
+    cloud139: '移动',
+    guangya: '光雅',
+  }
+  const picked = DRIVE_FILTER_ORDER.filter((drive) => present.has(drive)).map((drive) => ({
+    label: labels[drive],
+    value: drive as string,
+  }))
+  if (!picked.length) return []
+  return [{ label: '全部网盘', value: 'all' }, ...picked]
+})
+
+const taskSort = reactive({
+  prop: '' as '' | 'taskname',
+  order: '' as '' | 'ascending' | 'descending',
+})
+
+function driveSortRank(task: TaskItem): number {
+  const drive = taskDriveType(task)
+  if (!drive) return 99
+  const idx = DRIVE_FILTER_ORDER.indexOf(drive)
+  return idx < 0 ? 98 : idx
+}
+
+function onTaskSortChange({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
+  if (!order) {
+    taskSort.prop = ''
+    taskSort.order = ''
+    return
+  }
+  taskSort.prop = prop === 'taskname' ? 'taskname' : ''
+  taskSort.order = order
+}
+
 const filteredTasks = computed(() =>
   tasks.value
     .filter((item) => item.task_type === 'drama')
@@ -201,7 +264,22 @@ const filteredTasks = computed(() =>
         (filters.status === 'enabled' && item.enabled) ||
         (filters.status === 'disabled' && !item.enabled)
       const matchesFailed = !showFailedOnly.value || item.executions?.[0]?.status === 'failed'
-      return matchesKeyword && matchesStatus && matchesFailed
+      const matchesDrive = filters.drive === 'all' || taskDriveType(item) === filters.drive
+      return matchesKeyword && matchesStatus && matchesFailed && matchesDrive
+    })
+    .sort((a, b) => {
+      if (taskSort.prop !== 'taskname' || !taskSort.order) return 0
+      const factor = taskSort.order === 'descending' ? -1 : 1
+      const byName = String(a.taskname || '').localeCompare(String(b.taskname || ''), 'zh-Hans-CN', {
+        numeric: true,
+        sensitivity: 'base',
+      })
+      if (byName !== 0) return byName * factor
+      // 名字相同：夸克永远在上面，不随升降序翻转
+      const rankA = driveSortRank(a)
+      const rankB = driveSortRank(b)
+      if (rankA !== rankB) return rankA - rankB
+      return Number(a.id) - Number(b.id)
     }),
 )
 
@@ -210,11 +288,18 @@ const linkInvalidTasks = computed(() => failedTasks.value.filter((item) => isLin
 
 const showSkeleton = computed(() => loading.value && tasks.value.length === 0)
 
-const hasActiveFilter = computed(() => showFailedOnly.value || Boolean(filters.keyword.trim()) || filters.status !== 'all')
+const hasActiveFilter = computed(
+  () =>
+    showFailedOnly.value ||
+    Boolean(filters.keyword.trim()) ||
+    filters.status !== 'all' ||
+    filters.drive !== 'all',
+)
 
 function resetFilters() {
   filters.keyword = ''
   filters.status = 'all'
+  filters.drive = 'all'
   showFailedOnly.value = false
 }
 
@@ -951,6 +1036,12 @@ onBeforeUnmount(() => {
               { label: '禁用', value: 'disabled' },
             ]"
           />
+          <el-segmented
+            v-if="driveFilterOptions.length > 1"
+            v-model="filters.drive"
+            :options="driveFilterOptions"
+            class="task-drive-filter"
+          />
         </div>
       </div>
     </section>
@@ -990,6 +1081,7 @@ onBeforeUnmount(() => {
         style="width: 100%"
         row-key="id"
         :row-class-name="taskRowClass"
+        @sort-change="onTaskSortChange"
       >
         <el-table-column type="expand">
           <template #default="{ row }">
@@ -1009,7 +1101,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="任务名" min-width="200">
+        <el-table-column prop="taskname" label="任务名" min-width="200" sortable="custom">
           <template #default="{ row }">
             <div class="task-name">
               <DriveTypeIcon :type="taskDriveType(row as TaskItem)" />
@@ -1934,4 +2026,23 @@ onBeforeUnmount(() => {
   50% { transform: scale(1.1); }
 }
 
+
+.task-drive-filter {
+  max-width: 100%;
+}
+
+.filter-strip .toolbar__left {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+@media (max-width: 767px) {
+  .filter-strip .toolbar__left {
+    width: 100%;
+  }
+
+  .task-drive-filter {
+    overflow-x: auto;
+  }
+}
 </style>
