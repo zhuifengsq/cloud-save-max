@@ -158,6 +158,34 @@ function taskDriveType(task: TaskItem): DriveType | null {
   return detectDriveTypeByUrl(String(task.shareurl || ''))
 }
 
+const showFailedOnly = ref(false)
+
+function isLinkFailure(task: TaskItem): boolean {
+  const exec = task.executions?.[0]
+  if (!exec || exec.status !== 'failed') return false
+  const stage = String(exec.stage || '')
+  if (['share_parse', 'get_stoken', 'fetch_share_items'].includes(stage)) return true
+  return /失效|无效|解析失败|链接不存在|分享已取消|已取消分享/.test(String(exec.message || ''))
+}
+
+function autoSwapEnabled(task: TaskItem): boolean {
+  const extra = (task.extra || {}) as Record<string, unknown>
+  return Boolean(extra.auto_update_shareurl || extra.auto_update_115_shareurl)
+}
+
+function linkAlert(task: TaskItem): { tip: string; tone: string } | null {
+  if (!isLinkFailure(task)) return null
+  if (autoSwapEnabled(task)) {
+    return { tip: '源链接已失效，自动换链也没能找到可用链接', tone: 'swap-failed' }
+  }
+  return { tip: '源链接已失效（未开启自动换链）', tone: 'invalid' }
+}
+
+function taskRowClass({ row }: { row: TaskItem }): string {
+  const exec = row.executions?.[0]
+  return exec && exec.status === 'failed' ? 'task-row--failed' : ''
+}
+
 const filteredTasks = computed(() =>
   tasks.value
     .filter((item) => item.task_type === 'drama')
@@ -171,17 +199,22 @@ const filteredTasks = computed(() =>
         filters.status === 'all' ||
         (filters.status === 'enabled' && item.enabled) ||
         (filters.status === 'disabled' && !item.enabled)
-      return matchesKeyword && matchesStatus
+      const matchesFailed = !showFailedOnly.value || item.executions?.[0]?.status === 'failed'
+      return matchesKeyword && matchesStatus && matchesFailed
     }),
 )
 
+const failedTasks = computed(() => filteredTasks.value.filter((item) => item.executions?.[0]?.status === 'failed'))
+const linkInvalidTasks = computed(() => failedTasks.value.filter((item) => isLinkFailure(item)))
+
 const showSkeleton = computed(() => loading.value && tasks.value.length === 0)
 
-const hasActiveFilter = computed(() => Boolean(filters.keyword.trim()) || filters.status !== 'all')
+const hasActiveFilter = computed(() => showFailedOnly.value || Boolean(filters.keyword.trim()) || filters.status !== 'all')
 
 function resetFilters() {
   filters.keyword = ''
   filters.status = 'all'
+  showFailedOnly.value = false
 }
 
 async function loadData() {
@@ -929,6 +962,17 @@ onBeforeUnmount(() => {
         <div class="task-card-head__hint">共 {{ filteredTasks.length }} 条</div>
       </div>
 
+      <div v-if="failedTasks.length" class="task-alert">
+        <span class="task-alert__badge">!</span>
+        <span class="task-alert__text">
+          最近执行有 <b>{{ failedTasks.length }}</b> 个任务失败
+          <template v-if="linkInvalidTasks.length">，其中 <b>{{ linkInvalidTasks.length }}</b> 个疑似链接失效</template>
+        </span>
+        <el-button size="small" text @click="showFailedOnly = !showFailedOnly">
+          {{ showFailedOnly ? '显示全部' : '只看失败' }}
+        </el-button>
+      </div>
+
       <div v-if="showSkeleton" class="task-skeleton" aria-hidden="true">
         <div v-for="i in 6" :key="i" class="task-skeleton__row">
           <span class="task-skeleton__dot"></span>
@@ -941,7 +985,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <el-table v-else-if="!isMobile" :data="filteredTasks" style="width: 100%" row-key="id">
+      <el-table
+        v-else-if="!isMobile"
+        :data="filteredTasks"
+        style="width: 100%"
+        row-key="id"
+        :row-class-name="taskRowClass"
+      >
         <el-table-column type="expand">
           <template #default="{ row }">
             <div style="padding: 12px 18px">
@@ -965,6 +1015,10 @@ onBeforeUnmount(() => {
             <div class="task-name">
               <DriveTypeIcon :type="taskDriveType(row as TaskItem)" />
               <span class="task-name__text" :title="row.taskname">{{ row.taskname }}</span>
+              <el-tooltip v-if="linkAlert(row)" :content="linkAlert(row)!.tip" placement="top">
+                <span class="task-link-alert" :class="linkAlert(row)!.tone === 'swap-failed' ? 'task-link-alert--swap-failed' : 'task-link-alert--invalid'">!</span>
+              </el-tooltip>
+              <span v-else-if="row.executions?.[0]?.status === 'failed'" class="task-badge task-badge--warning">执行失败</span>
             </div>
           </template>
         </el-table-column>
@@ -1082,6 +1136,10 @@ onBeforeUnmount(() => {
             <div class="task-card__title">
               <DriveTypeIcon :type="taskDriveType(row)" />
               <span>{{ row.taskname }}</span>
+              <el-tooltip v-if="linkAlert(row)" :content="linkAlert(row)!.tip" placement="top">
+                <span class="task-link-alert" :class="linkAlert(row)!.tone === 'swap-failed' ? 'task-link-alert--swap-failed' : 'task-link-alert--invalid'">!</span>
+              </el-tooltip>
+              <span v-else-if="row.executions?.[0]?.status === 'failed'" class="task-badge task-badge--warning">执行失败</span>
             </div>
             <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
           </div>
@@ -1708,4 +1766,105 @@ onBeforeUnmount(() => {
     gap: 10px;
   }
 }
+/* 失败提示条 / 行内标记 */
+.task-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 16px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--el-color-danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.task-alert__badge {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  background: var(--el-color-danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.task-alert__text {
+  flex: 1;
+  min-width: 0;
+  color: var(--el-text-color-regular);
+}
+
+.task-alert__text b {
+  color: var(--el-color-danger);
+  font-weight: 700;
+}
+
+.task-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.task-badge--danger {
+  color: #fff;
+  background: #e5484d;
+}
+
+.task-badge--warning {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.16);
+}
+
+.task-table-card :deep(.task-row--failed) td.el-table__cell {
+  background: rgba(239, 68, 68, 0.045);
+}
+
+.task-table-card :deep(.task-row--failed:hover) td.el-table__cell {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.task-table-card :deep(.task-row--failed) td.el-table__cell:first-child {
+  box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.75);
+}
+
+.task-link-alert {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #e5484d;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: default;
+  box-shadow: 0 0 0 2px rgba(229, 72, 77, 0.18), 0 2px 6px rgba(229, 72, 77, 0.35);
+  animation: task-alert-pulse 2s ease-in-out infinite;
+}
+
+.task-link-alert--swap-failed {
+  background: #d92d20;
+  box-shadow: 0 0 0 2px rgba(217, 45, 32, 0.26), 0 2px 8px rgba(217, 45, 32, 0.45);
+}
+
+@keyframes task-alert-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
 </style>
