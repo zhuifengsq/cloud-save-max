@@ -6,6 +6,7 @@ import { fetchTMDBDetail, invalidateTMDBDetailCache } from '@/api/media'
 import { fetchTasks } from '@/api/tasks'
 import type { TMDBDetail } from '@/types/media'
 import type { TaskItem } from '@/types/tasks'
+import { DRIVE_TYPE_META, detectDriveTypeByUrl, type DriveType } from '@/utils/driveType'
 
 type WeekdayKey = 1 | 2 | 3 | 4 | 5 | 6 | 7
 
@@ -23,6 +24,7 @@ type CalendarEntry = {
   totalEpisodes: number | null
   nextAirDate: string | null
   confirmed: boolean
+  progressItems: Array<{ key: string; rank: number; label: string; percent: number | null; text: string }>
 }
 
 const weekdays: Array<{ key: WeekdayKey; label: string }> = [
@@ -35,7 +37,15 @@ const weekdays: Array<{ key: WeekdayKey; label: string }> = [
   { key: 7, label: '周日' },
 ]
 
-const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w185'
+const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
+
+const posterFailures = reactive<Record<string, 'small' | 'unavailable'>>({})
+function handlePosterError(url: string) {
+  posterFailures[url] = posterFailures[url] === 'small' ? 'unavailable' : 'small'
+}
+function posterSource(url: string) {
+  return posterFailures[url] === 'small' ? url.replace('/w500/', '/w185/') : url
+}
 
 const loading = ref(false)
 const tasks = ref<TaskItem[]>([])
@@ -528,6 +538,7 @@ const schedules = computed(() => {
     episodeDates: Date[]
     cycleDays: number | null
     weekdays: WeekdayKey[]
+    savedEpisode: number | null
   }> = []
 
   for (const task of enabledDramaTasks.value) {
@@ -615,6 +626,11 @@ const schedules = computed(() => {
       return brief || progressFromDetail(task, detail || null)
     })()
     const nextAirDate = nextAirDateFromDetail(detail || null)
+    const savedEpisode = (() => {
+      const latest = (task.extra as any)?.saved_latest
+      const ep = Number(latest?.episode)
+      return Number.isFinite(ep) && ep > 0 ? ep : null
+    })()
 
     list.push({
       task,
@@ -632,6 +648,7 @@ const schedules = computed(() => {
       episodeDates,
       cycleDays: days.length === 1 ? inferredCycleDaysById[Number(tmdbId)] || null : null,
       weekdays: days,
+      savedEpisode,
     })
   }
 
@@ -658,8 +675,38 @@ const weekDates = computed(() => {
   return out
 })
 
+
+const DRIVE_ORDER: DriveType[] = [
+  'quark',
+  'baidu',
+  'aliyun',
+  '115',
+  'uc',
+  '123pan',
+  'xunlei',
+  'cloud189',
+  'cloud139',
+  'guangya',
+]
+
+function scheduleGroupKey(s: { tmdbId: number | null; title: string }): string {
+  return s.tmdbId ? `tmdb:${s.tmdbId}` : `title:${String(s.title || '').toLowerCase()}`
+}
+
+function driveRankOf(task: TaskItem): number {
+  const drive = detectDriveTypeByUrl(String(task.shareurl || ''))
+  if (!drive) return 99
+  const idx = DRIVE_ORDER.indexOf(drive)
+  return idx < 0 ? 98 : idx
+}
+
+function driveLabelOf(task: TaskItem): string {
+  const drive = detectDriveTypeByUrl(String(task.shareurl || ''))
+  return drive ? DRIVE_TYPE_META[drive].label : '网盘'
+}
+
 const weekEntriesByDate = computed(() => {
-  const by = new Map<string, Map<number, CalendarEntry>>()
+  const by = new Map<string, Map<string, CalendarEntry>>()
   const start = weekDates.value[0] ? dateOnly(weekDates.value[0]) : dateOnly(new Date())
   const end = weekDates.value[6] ? dateOnly(weekDates.value[6]) : addDays(start, 6)
 
@@ -668,11 +715,8 @@ const weekEntriesByDate = computed(() => {
     if (endAir && d.getTime() > endAir.getTime()) return
 
     const key = formatYYYYMMDD(d)
-    const map = by.get(key) || new Map<number, CalendarEntry>()
-    if (map.has(s.task.id)) {
-      by.set(key, map)
-      return
-    }
+    const map = by.get(key) || new Map<string, CalendarEntry>()
+    const groupKey = scheduleGroupKey(s)
 
     const predictedAiredTotal = tvPredictedAiredTotalForDate(d, {
       weekdays: s.weekdays,
@@ -685,25 +729,48 @@ const weekEntriesByDate = computed(() => {
       predictedAiredTotal != null && s.totalEpisodes != null && Number(s.totalEpisodes) > 0
         ? Math.max(0, Math.min(100, Math.floor((predictedAiredTotal / Number(s.totalEpisodes)) * 100)))
         : null
-    const predictedText =
-      predictedAiredTotal != null && s.totalEpisodes != null && Number(s.totalEpisodes) > 0
-        ? `${predictedAiredTotal} / ${Number(s.totalEpisodes)}`
+    const totalCount = s.totalEpisodes != null && Number(s.totalEpisodes) > 0 ? Number(s.totalEpisodes) : null
+    const savedEpisode = s.savedEpisode
+    const savedPercent =
+      savedEpisode != null && totalCount != null
+        ? Math.max(0, Math.min(100, Math.floor((savedEpisode / totalCount) * 100)))
+        : null
+    const savedText =
+      savedEpisode != null
+        ? `已存 ${savedEpisode}${totalCount != null && totalCount >= savedEpisode ? ` / ${totalCount}` : ''}`
         : s.progressText
 
-    map.set(s.task.id, {
+    const progressItem = {
+      key: `${groupKey}:${s.task.id}`,
+      rank: driveRankOf(s.task),
+      label: driveLabelOf(s.task),
+      percent: savedPercent ?? predictedPercent ?? s.progressPercent,
+      text: savedText,
+    }
+
+    const existing = map.get(groupKey)
+    if (existing) {
+      existing.progressItems.push(progressItem)
+      existing.progressItems.sort((a, b) => a.rank - b.rank)
+      by.set(key, map)
+      return
+    }
+
+    map.set(groupKey, {
       weekday: isoWeekdayFromDate(d),
       taskId: s.task.id,
       tmdbId: s.tmdbId,
       task: s.task,
       title: s.title,
       posterUrl: s.posterUrl,
-      progressText: predictedText,
-      progressPercent: predictedPercent ?? s.progressPercent,
-      predictedAiredTotal,
-      predictedPercent,
+      progressText: savedText,
+      progressPercent: progressItem.percent,
+      predictedAiredTotal: savedEpisode ?? predictedAiredTotal,
+      predictedPercent: savedPercent ?? predictedPercent,
       totalEpisodes: s.totalEpisodes,
       nextAirDate: s.nextAirDate,
       confirmed,
+      progressItems: [progressItem],
     })
     by.set(key, map)
   }
@@ -796,7 +863,7 @@ const monthGridDates = computed(() => {
 const monthEntriesByDate = computed(() => {
   const cur = monthCursor.value
   const ym = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`
-  const by = new Map<string, Map<number, CalendarEntry>>()
+  const by = new Map<string, Map<string, CalendarEntry>>()
 
   const push = (d: Date, s: (typeof schedules.value)[number], confirmed: boolean) => {
     if (d.getFullYear() !== cur.getFullYear() || d.getMonth() !== cur.getMonth()) return
@@ -804,11 +871,8 @@ const monthEntriesByDate = computed(() => {
     if (end && d.getTime() > end.getTime()) return
     const key = formatYYYYMMDD(d)
     if (!key.startsWith(ym)) return
-    const map = by.get(key) || new Map<number, CalendarEntry>()
-    if (map.has(s.task.id)) {
-      by.set(key, map)
-      return
-    }
+    const map = by.get(key) || new Map<string, CalendarEntry>()
+    const groupKey = scheduleGroupKey(s)
 
     const predictedAiredTotal = s.episodeDates.length
       ? predictedAiredTotalForDateUsingTMDBEpisodes(d, {
@@ -829,20 +893,48 @@ const monthEntriesByDate = computed(() => {
         ? Math.max(0, Math.min(100, Math.floor((predictedAiredTotal / Number(s.totalEpisodes)) * 100)))
         : null
 
-    map.set(s.task.id, {
+    const totalCount = s.totalEpisodes != null && Number(s.totalEpisodes) > 0 ? Number(s.totalEpisodes) : null
+    const savedEpisode = s.savedEpisode
+    const savedPercent =
+      savedEpisode != null && totalCount != null
+        ? Math.max(0, Math.min(100, Math.floor((savedEpisode / totalCount) * 100)))
+        : null
+    const savedText =
+      savedEpisode != null
+        ? `已存 ${savedEpisode}${totalCount != null && totalCount >= savedEpisode ? ` / ${totalCount}` : ''}`
+        : s.progressText
+
+    const progressItem = {
+      key: `${groupKey}:${s.task.id}`,
+      rank: driveRankOf(s.task),
+      label: driveLabelOf(s.task),
+      percent: savedPercent ?? predictedPercent ?? s.progressPercent,
+      text: savedText,
+    }
+
+    const existing = map.get(groupKey)
+    if (existing) {
+      existing.progressItems.push(progressItem)
+      existing.progressItems.sort((a, b) => a.rank - b.rank)
+      by.set(key, map)
+      return
+    }
+
+    map.set(groupKey, {
       weekday: isoWeekdayFromDate(d),
       taskId: s.task.id,
       tmdbId: s.tmdbId,
       task: s.task,
       title: s.title,
       posterUrl: s.posterUrl,
-      progressText: s.progressText,
-      progressPercent: predictedPercent ?? s.progressPercent,
-      predictedAiredTotal,
-      predictedPercent,
+      progressText: savedText,
+      progressPercent: progressItem.percent,
+      predictedAiredTotal: savedEpisode ?? predictedAiredTotal,
+      predictedPercent: savedPercent ?? predictedPercent,
       totalEpisodes: s.totalEpisodes,
       nextAirDate: s.nextAirDate,
       confirmed,
+      progressItems: [progressItem],
     })
     by.set(key, map)
   }
@@ -1015,6 +1107,7 @@ async function loadData() {
 }
 
 async function handleRefresh() {
+  for (const url of Object.keys(posterFailures)) delete posterFailures[url]
   for (const k of Object.keys(detailsById)) delete detailsById[Number(k)]
   for (const k of Object.keys(detailPromises)) delete detailPromises[Number(k)]
   invalidateTMDBDetailCache()
@@ -1086,22 +1179,27 @@ watch(
         <div v-else class="weekday-grid">
           <el-card v-for="it in sec.items" :key="`${it.taskId}-${it.weekday}-${it.tmdbId || 0}`" shadow="hover" class="show-card" :class="{ 'show-card--predicted': !it.confirmed }">
             <div class="poster-card">
-              <img v-if="it.posterUrl" class="poster-img" :src="it.posterUrl" alt="poster" />
-              <div v-else class="poster-fallback">TMDB</div>
+              <img v-if="it.posterUrl && posterFailures[it.posterUrl] !== 'unavailable'" class="poster-img" :src="posterSource(it.posterUrl)" @error="handlePosterError(it.posterUrl)" :alt="`${it.title} 海报`" loading="lazy" decoding="async" />
+              <div v-else class="poster-fallback">暂无海报</div>
               <span v-if="!it.confirmed" class="poster-badge">预计</span>
 
               <div class="poster-overlay">
                 <div class="overlay-title" :title="it.title">{{ it.title }}</div>
-                <div class="overlay-progress">
-                  <el-progress
-                    v-if="it.progressPercent != null"
-                    :percentage="it.progressPercent"
-                    :stroke-width="6"
-                    :show-text="false"
-                  />
-                  <div class="percent">{{ it.progressPercent != null ? `${it.progressPercent}%` : '—' }}</div>
+                <div class="poster-progress-list" :tabindex="it.progressItems.length > 2 ? 0 : undefined" :aria-label="`${it.title} 网盘进度`">
+                  <div v-for="p in it.progressItems" :key="p.key" class="overlay-progress">
+                    <div class="overlay-progress__meta">
+                      <span class="overlay-drive">{{ p.label }}</span>
+                      <span class="percent">{{ p.text || (p.percent != null ? `${p.percent}%` : '暂无进度') }}</span>
+                    </div>
+                    <el-progress
+                      v-if="p.percent != null"
+                      :percentage="p.percent"
+                      :stroke-width="3"
+                      :show-text="false"
+                      :aria-label="`${p.label}：${p.text || `${p.percent}%`}`"
+                    />
+                  </div>
                 </div>
-                <div v-if="it.progressText" class="overlay-caption">{{ it.progressText }}</div>
               </div>
             </div>
           </el-card>
@@ -1155,7 +1253,8 @@ watch(
               <div v-else class="month-poster-fallback">TMDB</div>
               <div class="month-name" :title="it.title">{{ it.title }}</div>
               <div class="month-pct">
-                {{ it.predictedAiredTotal != null ? `E${it.predictedAiredTotal}` : it.progressPercent != null ? `${it.progressPercent}%` : '—' }}
+                <template v-if="it.progressItems.length > 1">{{ it.progressItems.length }} 盘</template>
+                <template v-else>{{ it.predictedAiredTotal != null ? `E${it.predictedAiredTotal}` : it.progressPercent != null ? `${it.progressPercent}%` : '—' }}</template>
               </div>
             </div>
             <el-button v-if="cell.more" text class="month-more" @click.stop="openMonthMore(cell.key)">+{{ cell.more }}部</el-button>
@@ -1301,13 +1400,17 @@ watch(
 
 .weekday-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 20px;
 }
 
-.show-card :deep(.el-card__body) {
-  padding: 0;
+.show-card {
+  min-width: 0;
+  overflow: hidden;
+  transition: transform 220ms ease, box-shadow 220ms ease;
 }
+
+.show-card :deep(.el-card__body) { padding: 0; }
 
 .poster-card {
   position: relative;
@@ -1315,7 +1418,8 @@ watch(
   aspect-ratio: 2 / 3;
   overflow: hidden;
   border-radius: var(--panel-radius);
-  background: rgba(148, 163, 184, 0.14);
+  background: #202734;
+  isolation: isolate;
 }
 
 .poster-img {
@@ -1323,70 +1427,62 @@ watch(
   height: 100%;
   object-fit: cover;
   display: block;
+  transition: transform 400ms ease;
 }
 
 .poster-fallback {
-  width: 100%;
+  display: grid;
+  place-items: center;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  opacity: 0.6;
+  color: #aebace;
+  font-size: 13px;
+  letter-spacing: .12em;
 }
 
 .poster-overlay {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 12px 12px 10px;
-  background: linear-gradient(to top, rgba(15, 23, 42, 0.9), rgba(15, 23, 42, 0.0));
-  color: rgba(255, 255, 255, 0.96);
+  inset: auto 0 0;
+  padding: 48px 14px 14px;
+  background: linear-gradient(180deg, transparent, rgba(8, 12, 21, .55) 30%, rgba(8, 12, 21, .9) 70%, rgba(8, 12, 21, .97));
+  color: #fff;
 }
 
 .overlay-title {
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.25;
+  margin-bottom: 10px;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.4;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, .35);
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
-.overlay-progress {
-  display: flex;
-  align-items: center;
+.poster-progress-list {
+  display: grid;
   gap: 10px;
-  margin-top: 8px;
+  max-height: 82px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, .35) transparent;
 }
 
-.overlay-progress :deep(.el-progress) {
-  flex: 1 1 auto;
-  min-width: 0;
+.overlay-progress { display: grid; gap: 7px; min-width: 0; }
+.overlay-progress__meta { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.overlay-drive { color: #d0d8e4; font-size: 11px; line-height: 1.4; }
+.percent { color: #fff; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.4; text-align: right; }
+.overlay-progress :deep(.el-progress-bar__outer) { background: rgba(255, 255, 255, .2); }
+.overlay-progress :deep(.el-progress-bar__inner) { background: #58c99a; }
+
+@media (hover: hover) and (pointer: fine) {
+  .show-card:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(15, 23, 42, .14) !important; }
+  .show-card:hover .poster-img { transform: scale(1.025); }
 }
 
-.overlay-progress :deep(.el-progress-bar__outer) {
-  background: rgba(255, 255, 255, 0.22);
-}
-
-.overlay-progress :deep(.el-progress-bar__inner) {
-  background: rgba(34, 197, 94, 0.92);
-}
-
-.percent {
-  flex: 0 0 auto;
-  font-size: 12px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.95;
-}
-
-.overlay-caption {
-  margin-top: 6px;
-  font-size: 12px;
-  opacity: 0.88;
+@media (prefers-reduced-motion: reduce) {
+  .show-card, .poster-img { transition: none; }
+  .show-card:hover, .show-card:hover .poster-img { transform: none; }
 }
 
 .month {
@@ -1698,13 +1794,14 @@ watch(
 
 @media (max-width: 1400px) {
   .weekday-grid {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   }
 }
 
 @media (max-width: 900px) {
   .weekday-grid {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 14px;
   }
 
   .month-weekdays {
@@ -1728,6 +1825,13 @@ watch(
 }
 
 @media (max-width: 520px) {
+  .header { flex-direction: column; align-items: stretch; gap: 12px; }
+  .actions { justify-content: space-between; }
+  .mode { display: inline-flex; flex-wrap: nowrap; }
+  .weekday-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .poster-overlay { padding: 36px 10px 12px; }
+  .overlay-title { font-size: 14px; margin-bottom: 8px; }
+  .poster-progress-list { max-height: 74px; gap: 8px; }
   .weekday-title__main {
     font-size: 20px;
   }
@@ -1741,15 +1845,6 @@ watch(
     padding: 7px;
   }
 }
-.show-card--predicted {
-  opacity: 0.8;
-}
-
-.show-card--predicted :deep(.el-card__body) {
-  box-shadow: inset 0 0 0 1px var(--el-border-color);
-  border-radius: var(--panel-radius);
-}
-
 .poster-badge {
   position: absolute;
   top: 8px;
@@ -1789,5 +1884,6 @@ watch(
   border: 1px dashed var(--el-text-color-secondary);
   opacity: 0.7;
 }
+
 
 </style>

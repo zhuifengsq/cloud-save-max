@@ -976,3 +976,84 @@ def validate_share_links(db: Session, shareurls: list[str]) -> ShareValidateOut:
     from app.schemas.task_browse import ShareValidateOut
     items = list(validate_share_links_streaming(db, shareurls))
     return ShareValidateOut(items=items)
+
+def fetch_share_root_dirs(db: Session, shareurl: str, account_name: str | None = None) -> list[tuple[str, str]]:
+    """返回分享根目录下的第一层子目录 [(fid, name)]，用于文件夹对比模式定位层级。"""
+    from app.extensions.runtime.account_manager import DatabaseAccountManager
+
+    drive_type = AdapterRegistry.detect_drive_type(shareurl)
+    if drive_type is None:
+        return []
+
+    if not account_name:
+        rows = (
+            db.execute(
+                select(DriveAccount)
+                .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type)
+                .order_by(DriveAccount.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        rows.sort(
+            key=lambda x: (
+                0 if bool(getattr(x, "is_default", False)) else 1,
+                0 if str(getattr(x, "runtime_status", "") or "") == "active" else 1,
+                int(getattr(x, "id", 0) or 0),
+            )
+        )
+        if not rows:
+            return []
+        account_name = str(getattr(rows[0], "name", "") or "").strip()
+
+    manager = DatabaseAccountManager(db, no_login=True)
+    adapter = manager.get_adapter_for_task(
+        {"shareurl": shareurl, "account_name": account_name}, allow_inactive=True
+    )
+    if adapter is None:
+        return []
+    if not bool(getattr(adapter, "is_active", False)):
+        try:
+            adapter.init()
+        except Exception:
+            return []
+
+    try:
+        pwd_id, passcode, extracted_pdir_fid, _ = adapter.extract_url(shareurl)
+    except Exception:
+        return []
+    if not pwd_id:
+        return []
+
+    try:
+        token_response = adapter.get_stoken(pwd_id, passcode or "")
+    except Exception:
+        return []
+    stoken = ((token_response or {}).get("data") or {}).get("stoken")
+    if not stoken:
+        return []
+
+    fid = str(extracted_pdir_fid or "").strip()
+    try:
+        detail = adapter.get_detail(pwd_id, stoken, fid)
+    except Exception:
+        return []
+
+    raw_items = (((detail or {}).get("data") or {}).get("list")) or []
+    out: list[tuple[str, str]] = []
+    has_root_files = False
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        if not _bool_is_dir(item):
+            has_root_files = True
+            continue
+        sub_fid = str(_pick_fid(item) or "").strip()
+        if not sub_fid:
+            continue
+        out.append((sub_fid, str(_pick_name(item) or "").strip()))
+    # 根目录本身就有文件时不再下钻，否则会漏掉根目录的文件
+    if has_root_files:
+        return []
+    return out
+

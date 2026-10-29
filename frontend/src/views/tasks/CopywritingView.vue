@@ -290,6 +290,84 @@ async function downloadPoster() {
   downloadBlob(blob, posterFileName(blob.type.includes('png') ? 'png' : 'jpg'))
 }
 
+const mode = ref<'weibo' | 'qq'>('weibo')
+const weiboQuality = ref('4K高码')
+const weiboGuide = ref('宝宝们自取点点攒攒[心][心]')
+
+const WEIBO_TAG: Record<string, string> = {
+  quark: '夸克',
+  baidu: '度',
+  aliyun: '阿',
+  '115': '115',
+  uc: 'UC',
+  '123pan': '123',
+  xunlei: '雷',
+  cloud189: '天',
+  cloud139: '移',
+  guangya: '光',
+}
+
+const WEIBO_PREFIX: Record<string, string> = {
+  quark: '垮',
+  baidu: '渡',
+  aliyun: '阿',
+  '115': '115',
+  uc: 'UC',
+  '123pan': '123',
+  xunlei: '雷',
+  cloud189: '天',
+  cloud139: '移',
+  guangya: '光',
+}
+
+const weiboDriveTags = computed(() => {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const link of draft.links) {
+    if (!link.url.trim()) continue
+    const tag = WEIBO_TAG[String(link.drive || '').toLowerCase()] || '链'
+    if (seen.has(tag)) continue
+    seen.add(tag)
+    out.push(tag)
+  }
+  return out
+})
+
+const weiboLine1 = computed(() => {
+  const title = draft.title.trim() || draft.taskname.trim() || '未命名'
+  const episode = draft.episode.trim() || '1'
+  const quality = weiboQuality.value.trim() || '4K高码'
+  return `${title} 更${episode}集资源${quality}【已更】`
+})
+
+const weiboText1 = computed(() => {
+  const drivePart = weiboDriveTags.value.length ? `（${weiboDriveTags.value.join('➕')}）` : ''
+  return `${weiboLine1.value}\n${drivePart}👍🏻攒取⬇️`
+})
+
+const weiboLinksText = computed(() => {
+  const lines: string[] = []
+  for (const link of draft.links) {
+    const url = link.url.trim()
+    if (!url) continue
+    const prefix = WEIBO_PREFIX[String(link.drive || '').toLowerCase()] || '链'
+    lines.push(`${prefix}：${url}`)
+  }
+  return lines.join('\n')
+})
+
+async function copyBlock(text: string, label: string) {
+  if (!text.trim()) {
+    ElMessage.warning('内容为空')
+    return
+  }
+  if (await writeClipboard(text)) {
+    ElMessage.success(`${label}已复制`)
+  } else {
+    ElMessage.warning('复制失败，请手动选中复制')
+  }
+}
+
 function goBack() {
   router.back()
 }
@@ -338,65 +416,137 @@ function goBack() {
       </section>
 
       <section class="glass-panel copy-card copy-main">
-        <div class="copy-fields">
-          <div class="copy-field copy-field--title">
-            <label>标题</label>
-            <el-input v-model="draft.title" placeholder="剧名" />
-          </div>
-          <div class="copy-field copy-field--year">
-            <label>年份</label>
-            <el-input v-model="draft.year" placeholder="2026" />
-          </div>
-          <div class="copy-field copy-field--episode">
-            <label>更新集数</label>
-            <el-input v-model="draft.episode" placeholder="4" />
-            <div class="copy-field__hint">默认取 TMDB 最新已播集</div>
-          </div>
+        <div class="copy-tabs">
+          <button type="button" class="copy-tab" :class="{ 'is-active': mode === 'weibo' }" @click="mode = 'weibo'">微博</button>
+          <button type="button" class="copy-tab" :class="{ 'is-active': mode === 'qq' }" @click="mode = 'qq'">QQ频道</button>
         </div>
 
-        <div class="copy-field">
-          <div class="copy-field__head">
-            <label>分享链接</label>
-            <div class="copy-field__actions">
-              <el-button size="small" text @click="addLink">+ 添加链接</el-button>
+        <template v-if="mode === 'weibo'">
+          <div class="copy-fields">
+            <div class="copy-field copy-field--title">
+              <label>剧名</label>
+              <el-input v-model="draft.title" placeholder="剧名" />
+            </div>
+            <div class="copy-field copy-field--episode">
+              <label>更几集</label>
+              <el-input v-model="draft.episode" placeholder="1" />
+              <div class="copy-field__hint">默认取 TMDB 最新已播集，可手动改</div>
+            </div>
+            <div class="copy-field copy-field--year">
+              <label>画质</label>
+              <el-input v-model="weiboQuality" placeholder="4K高码" />
             </div>
           </div>
-          <div v-if="draft.links.length" class="copy-links">
-            <div v-for="(link, idx) in draft.links" :key="idx" class="copy-link-row">
-              <span class="copy-link-tag">{{ driveLabel(link.drive) }}</span>
-              <el-input v-model="link.url" placeholder="https://pan.quark.cn/s/..." />
-              <el-button text size="small" @click="removeLink(idx)">删除</el-button>
+
+          <div class="copy-field">
+            <div class="copy-field__head">
+              <label>分享链接</label>
+              <div class="copy-field__actions">
+                <el-button size="small" text @click="addLink">+ 添加链接</el-button>
+              </div>
+            </div>
+            <div v-if="draft.links.length" class="copy-links">
+              <div v-for="(link, idx) in draft.links" :key="idx" class="copy-link-row">
+                <span class="copy-link-tag">{{ driveLabel(link.drive) }}</span>
+                <el-input v-model="link.url" placeholder="https://pan.quark.cn/s/..." />
+                <el-button text size="small" @click="removeLink(idx)">删除</el-button>
+              </div>
+            </div>
+            <div v-else class="copy-links__empty">还没有链接，点右上角「+ 添加链接」</div>
+          </div>
+
+          <div class="weibo-block">
+            <div class="weibo-block__head">
+              <span class="weibo-block__title">正文</span>
+              <el-button size="small" type="primary" text @click="copyBlock(weiboText1, '正文')">复制</el-button>
+            </div>
+            <pre class="weibo-block__body">{{ weiboText1 }}</pre>
+          </div>
+
+          <div class="weibo-block">
+            <div class="weibo-block__head">
+              <span class="weibo-block__title">互动</span>
+              <el-button size="small" type="primary" text @click="copyBlock(weiboGuide, '互动')">复制</el-button>
+            </div>
+            <el-input v-model="weiboGuide" type="textarea" :rows="2" class="weibo-guide" />
+          </div>
+
+          <div class="weibo-block">
+            <div class="weibo-block__head">
+              <span class="weibo-block__title">链接区</span>
+              <el-button size="small" type="primary" text @click="copyBlock(weiboLinksText, '链接')">复制</el-button>
+            </div>
+            <pre v-if="weiboLinksText" class="weibo-block__body">{{ weiboLinksText }}</pre>
+            <div v-else class="copy-links__empty">填好链接后自动生成</div>
+          </div>
+
+          <div class="copy-actions">
+            <el-button :disabled="!posterUrl" @click="copyPoster">复制海报</el-button>
+            <el-button text :disabled="!posterUrl" @click="downloadPoster">下载海报</el-button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="copy-fields">
+            <div class="copy-field copy-field--title">
+              <label>标题</label>
+              <el-input v-model="draft.title" placeholder="剧名" />
+            </div>
+            <div class="copy-field copy-field--year">
+              <label>年份</label>
+              <el-input v-model="draft.year" placeholder="2026" />
+            </div>
+            <div class="copy-field copy-field--episode">
+              <label>更新集数</label>
+              <el-input v-model="draft.episode" placeholder="4" />
+              <div class="copy-field__hint">默认取 TMDB 最新已播集</div>
             </div>
           </div>
-          <div v-else class="copy-links__empty">还没有链接，点右上角「+ 添加链接」</div>
-        </div>
 
-        <div class="copy-field">
-          <label>简介</label>
-          <el-input v-model="draft.overview" type="textarea" :rows="4" placeholder="剧情简介" />
-        </div>
-
-        <div class="copy-field">
-          <div class="copy-field__head">
-            <label>文案</label>
-            <div class="copy-field__actions">
-              <el-button size="small" text @click="regenerate">重新生成</el-button>
+          <div class="copy-field">
+            <div class="copy-field__head">
+              <label>分享链接</label>
+              <div class="copy-field__actions">
+                <el-button size="small" text @click="addLink">+ 添加链接</el-button>
+              </div>
             </div>
+            <div v-if="draft.links.length" class="copy-links">
+              <div v-for="(link, idx) in draft.links" :key="idx" class="copy-link-row">
+                <span class="copy-link-tag">{{ driveLabel(link.drive) }}</span>
+                <el-input v-model="link.url" placeholder="https://pan.quark.cn/s/..." />
+                <el-button text size="small" @click="removeLink(idx)">删除</el-button>
+              </div>
+            </div>
+            <div v-else class="copy-links__empty">还没有链接，点右上角「+ 添加链接」</div>
           </div>
-          <el-input
-            v-model="editingText"
-            type="textarea"
-            :rows="7"
-            class="copy-text"
-            @input="textEdited = true"
-          />
-        </div>
 
-        <div class="copy-actions">
-          <el-button type="primary" @click="copyText">复制文案</el-button>
-          <el-button :disabled="!posterUrl" @click="copyPoster">复制海报</el-button>
-          <el-button text :disabled="!posterUrl" @click="downloadPoster">下载海报</el-button>
-        </div>
+          <div class="copy-field">
+            <label>简介</label>
+            <el-input v-model="draft.overview" type="textarea" :rows="4" placeholder="剧情简介" />
+          </div>
+
+          <div class="copy-field">
+            <div class="copy-field__head">
+              <label>文案</label>
+              <div class="copy-field__actions">
+                <el-button size="small" text @click="regenerate">重新生成</el-button>
+              </div>
+            </div>
+            <el-input
+              v-model="editingText"
+              type="textarea"
+              :rows="7"
+              class="copy-text"
+              @input="textEdited = true"
+            />
+          </div>
+
+          <div class="copy-actions">
+            <el-button type="primary" @click="copyText">复制文案</el-button>
+            <el-button :disabled="!posterUrl" @click="copyPoster">复制海报</el-button>
+            <el-button text :disabled="!posterUrl" @click="downloadPoster">下载海报</el-button>
+          </div>
+        </template>
       </section>
     </div>
   </div>
@@ -594,5 +744,77 @@ function goBack() {
 .poster-copy-dialog__actions {
   display: flex;
   gap: 10px;
+}
+
+.copy-tabs {
+  display: flex;
+  gap: 24px;
+  margin: -4px 0 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.copy-tab {
+  position: relative;
+  padding: 8px 2px 10px;
+  border: 0;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+}
+
+.copy-tab.is-active {
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.copy-tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--el-color-primary);
+}
+
+.weibo-block {
+  margin-top: 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--el-fill-color-blank);
+}
+
+.weibo-block__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--el-fill-color-light);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.weibo-block__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+}
+
+.weibo-block__body {
+  margin: 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--el-text-color-primary);
+}
+
+.weibo-guide {
+  padding: 8px 10px;
 }
 </style>

@@ -353,8 +353,27 @@ def resolve_drama_shareurl_update(
             continue
 
         if folder_mode == "folder_diff":
-            # 文件夹对比模式需要分享根目录，不能定位到单个子目录
-            new_shareurl = _rewrite_shareurl_with_fid(shareurl, None)
+            # 文件夹对比模式：进入分享根目录下的第一层文件夹，保住原有目录结构
+            target_fid: str | None = None
+            try:
+                from app.services.share_preview_batch import fetch_share_root_dirs
+
+                root_dirs = fetch_share_root_dirs(db, shareurl)
+            except Exception:
+                root_dirs = []
+            if root_dirs:
+                lowered_names = [str(n).strip().lower() for n in names if str(n).strip()]
+
+                def _dir_score(entry: tuple[str, str]) -> int:
+                    name = str(entry[1] or "").lower()
+                    if lowered_names and any(item in name for item in lowered_names):
+                        return 1
+                    return 0
+
+                ranked = sorted(root_dirs, key=_dir_score, reverse=True)
+                target_fid = str(ranked[0][0] or "").strip() or None
+            new_shareurl = _rewrite_shareurl_with_fid(shareurl, target_fid)
+            logger.info("自动换链：文件夹对比定位目录 fid=%s", target_fid or "(根目录)")
         else:
             best_fid = _pick_fid_for_normal_mode(groups)
             new_shareurl = _rewrite_shareurl_with_fid(shareurl, best_fid)
