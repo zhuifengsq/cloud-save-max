@@ -248,7 +248,8 @@ def infer_tv_update_weekdays(tv_id: int, details: dict[str, Any], client: TMDBCl
             ad = str(ep.get("air_date") or "").strip()
             if ad:
                 air_dates.append(ad)
-        air_dates.sort()
+        # 同一天多集时先去重，避免播出日被重复加权
+        air_dates = sorted(set(air_dates))
         for ad in air_dates[-10:]:
             d = parse_weekday(ad)
             if d is not None:

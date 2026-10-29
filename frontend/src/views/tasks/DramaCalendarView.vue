@@ -24,6 +24,9 @@ type CalendarEntry = {
   totalEpisodes: number | null
   nextAirDate: string | null
   confirmed: boolean
+  dateKey: string
+  episodeNumbers: number[]
+  predictedEpisodes: number | null
   progressItems: Array<{ key: string; rank: number; label: string; percent: number | null; text: string }>
 }
 
@@ -52,6 +55,7 @@ const tasks = ref<TaskItem[]>([])
 const detailsById = reactive<Record<number, TMDBDetail | undefined>>({})
 const detailPromises = reactive<Record<number, Promise<TMDBDetail | null> | undefined>>({})
 const episodeDatesById = reactive<Record<number, Date[] | undefined>>({})
+const episodeNumbersById = reactive<Record<number, Record<string, number[]> | undefined>>({})
 const inferredWeekdaysById = reactive<Record<number, WeekdayKey[] | undefined>>({})
 const inferredCycleDaysById = reactive<Record<number, number | null | undefined>>({})
 const viewMode = ref<'week' | 'month'>('week')
@@ -268,6 +272,39 @@ function extractEpisodeDatesFromDetailData(data: any): Date[] {
   return out
 }
 
+function extractEpisodeNumbersByDate(data: any): Record<string, number[]> {
+  const out: Record<string, number[]> = {}
+  const seasonsFull = Array.isArray(data?.seasons_full) ? data.seasons_full : []
+  for (const s of seasonsFull) {
+    if (!s || typeof s !== 'object') continue
+    if ((Number(s?.season_number) || 0) <= 0) continue
+    const eps = Array.isArray(s?.episodes) ? s.episodes : []
+    for (const ep of eps) {
+      if (!ep || typeof ep !== 'object') continue
+      const ad = String(ep?.air_date || '').trim()
+      const num = Number(ep?.episode_number) || 0
+      if (!ad || num <= 0) continue
+      if (!out[ad]) out[ad] = []
+      out[ad].push(num)
+    }
+  }
+  for (const key of Object.keys(out)) out[key].sort((a, b) => a - b)
+  return out
+}
+
+function todayKey(): string {
+  return formatYYYYMMDD(new Date())
+}
+
+function formatEpisodeList(nums: number[]): string {
+  if (!nums.length) return ''
+  const sorted = [...nums].sort((a, b) => a - b)
+  if (sorted.length === 1) return `E${sorted[0]}`
+  const consecutive = sorted.every((n, i) => i === 0 || n === sorted[i - 1] + 1)
+  if (consecutive) return `E${sorted[0]}-${sorted[sorted.length - 1]}`
+  return sorted.map((n) => `E${n}`).join('、')
+}
+
 function formatMMDD(d: Date) {
   const mm = String(d.getMonth() + 1).padStart(2, '0')
   const dd = String(d.getDate()).padStart(2, '0')
@@ -340,6 +377,22 @@ function minEpisodeDateAfter(episodeDates: Date[], after: Date) {
   return null
 }
 
+const PREDICT_HORIZON_DAYS = 7
+
+function episodesPerDateAverage(episodeDates: Date[]): number {
+  if (!episodeDates.length) return 1
+  const counts = new Map<string, number>()
+  for (const d of episodeDates) {
+    const key = formatYYYYMMDD(d)
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+  const keys = Array.from(counts.keys()).sort()
+  const recent = keys.slice(-7)
+  if (!recent.length) return 1
+  const total = recent.reduce((sum, key) => sum + (counts.get(key) || 0), 0)
+  return Math.max(1, Math.round(total / recent.length))
+}
+
 function predictedAiredTotalForDateUsingTMDBEpisodes(
   date: Date,
   s: { episodeDates: Date[]; totalEpisodes: number | null; weekdays: WeekdayKey[]; cycleDays: number | null },
@@ -358,12 +411,15 @@ function predictedAiredTotalForDateUsingTMDBEpisodes(
   if (total == null) return known
 
   const capTotal = Number(total) || known
+  const perDay = episodesPerDateAverage(s.episodeDates)
+  const horizon = addDays(dateOnly(maxKnown), PREDICT_HORIZON_DAYS)
   let predicted = known
   let cursor = dateOnly(maxKnown)
   while (cursor.getTime() < target.getTime() && predicted < capTotal) {
     if (s.cycleDays && s.weekdays.length === 1) cursor = addDays(cursor, s.cycleDays)
     else cursor = nextDateByWeekdays(cursor, s.weekdays)
-    if (cursor.getTime() <= target.getTime()) predicted += 1
+    if (cursor.getTime() > horizon.getTime()) break
+    if (cursor.getTime() <= target.getTime()) predicted = Math.min(capTotal, predicted + perDay)
     else break
   }
   return predicted
@@ -387,13 +443,16 @@ function predictedEndAirDateUsingTMDBEpisodes(s: {
   const maxKnown = maxEpisodeDate(s.episodeDates)
   if (!maxKnown) return null
   if (!s.weekdays.length) return null
+  const perDay = episodesPerDateAverage(s.episodeDates)
+  const horizon = addDays(dateOnly(maxKnown), PREDICT_HORIZON_DAYS)
   let cursor = dateOnly(maxKnown)
   let predicted = knownCount
   const cap = Math.min(2000, capTotal)
   while (predicted < cap) {
     if (s.cycleDays && s.weekdays.length === 1) cursor = addDays(cursor, s.cycleDays)
     else cursor = nextDateByWeekdays(cursor, s.weekdays)
-    predicted += 1
+    if (cursor.getTime() > horizon.getTime()) return null
+    predicted += perDay
     if (predicted >= capTotal) return formatYYYYMMDD(cursor)
   }
   return null
@@ -498,6 +557,7 @@ async function ensureTMDBDetailCached(tmdbId: number): Promise<TMDBDetail | null
       try {
         const dates = extractEpisodeDatesFromDetailData(data?.data || {})
         episodeDatesById[id] = dates
+        episodeNumbersById[id] = extractEpisodeNumbersByDate(data?.data || {})
         inferredWeekdaysById[id] = inferWeekdaysFromEpisodeDates(dates)
         inferredCycleDaysById[id] = inferCycleDaysFromEpisodeDates(dates)
         const obj: any = data?.data
@@ -539,6 +599,7 @@ const schedules = computed(() => {
     cycleDays: number | null
     weekdays: WeekdayKey[]
     savedEpisode: number | null
+    episodeNumbersByDate: Record<string, number[]>
   }> = []
 
   for (const task of enabledDramaTasks.value) {
@@ -554,6 +615,7 @@ const schedules = computed(() => {
 
     const title = displayTitle(task, detail || null)
     const posterUrl = posterUrlFromDetail(detail || null)
+    const episodeNumbersByDate = mt === 'tv' && tmdbId > 0 ? episodeNumbersById[tmdbId] || {} : {}
     const totalEpisodes = (() => {
       const data = detail?.data || null
       if (!data || mt !== 'tv') return null
@@ -594,11 +656,8 @@ const schedules = computed(() => {
       if (!data || mt !== 'tv') return null
       if (episodeDates.length) {
         const status = String(data?.status || '').trim().toLowerCase()
-        const maxKnown = maxEpisodeDate(episodeDates)
         if (status !== 'ended' && status !== 'canceled') {
-          if (maxKnown && dateOnly(maxKnown).getTime() > dateOnly(new Date()).getTime()) {
-            return formatYYYYMMDD(maxKnown)
-          }
+          // 连载中：不按"最后已知日期"截断，否则会挡住 7 天内的预测
           return null
         }
         return (
@@ -649,6 +708,7 @@ const schedules = computed(() => {
       cycleDays: days.length === 1 ? inferredCycleDaysById[Number(tmdbId)] || null : null,
       weekdays: days,
       savedEpisode,
+      episodeNumbersByDate,
     })
   }
 
@@ -718,13 +778,20 @@ const weekEntriesByDate = computed(() => {
     const map = by.get(key) || new Map<string, CalendarEntry>()
     const groupKey = scheduleGroupKey(s)
 
-    const predictedAiredTotal = tvPredictedAiredTotalForDate(d, {
-      weekdays: s.weekdays,
-      baseAiredTotal: s.baseAiredTotal,
-      totalEpisodes: s.totalEpisodes,
-      nextEpisodeDate: s.nextEpisodeDate,
-      lastEpisodeDate: s.lastEpisodeDate,
-    })
+    const predictedAiredTotal = s.episodeDates.length
+      ? predictedAiredTotalForDateUsingTMDBEpisodes(d, {
+          episodeDates: s.episodeDates,
+          totalEpisodes: s.totalEpisodes,
+          weekdays: s.weekdays,
+          cycleDays: s.cycleDays,
+        })
+      : tvPredictedAiredTotalForDate(d, {
+          weekdays: s.weekdays,
+          baseAiredTotal: s.baseAiredTotal,
+          totalEpisodes: s.totalEpisodes,
+          nextEpisodeDate: s.nextEpisodeDate,
+          lastEpisodeDate: s.lastEpisodeDate,
+        })
     const predictedPercent =
       predictedAiredTotal != null && s.totalEpisodes != null && Number(s.totalEpisodes) > 0
         ? Math.max(0, Math.min(100, Math.floor((predictedAiredTotal / Number(s.totalEpisodes)) * 100)))
@@ -756,8 +823,11 @@ const weekEntriesByDate = computed(() => {
       return
     }
 
+    const entryDateKey = formatYYYYMMDD(d)
     map.set(groupKey, {
       weekday: isoWeekdayFromDate(d),
+      dateKey: entryDateKey,
+      episodeNumbers: s.episodeNumbersByDate[entryDateKey] || [],
       taskId: s.task.id,
       tmdbId: s.tmdbId,
       task: s.task,
@@ -766,6 +836,7 @@ const weekEntriesByDate = computed(() => {
       progressText: savedText,
       progressPercent: progressItem.percent,
       predictedAiredTotal: savedEpisode ?? predictedAiredTotal,
+      predictedEpisodes: predictedAiredTotal,
       predictedPercent: savedPercent ?? predictedPercent,
       totalEpisodes: s.totalEpisodes,
       nextAirDate: s.nextAirDate,
@@ -791,11 +862,14 @@ const weekEntriesByDate = computed(() => {
         let knownEpisodes = s.episodeDates.length
         if (knownEpisodes < Number(total)) {
           let cursor = dateOnly(maxEpisodeDate(s.episodeDates) || new Date())
+          const perDay = episodesPerDateAverage(s.episodeDates)
+          const horizon = addDays(cursor, PREDICT_HORIZON_DAYS)
           const cap = Math.min(2000, Number(total))
           while (knownEpisodes < cap) {
             if (s.cycleDays && s.weekdays.length === 1) cursor = addDays(cursor, s.cycleDays)
             else cursor = nextDateByWeekdays(cursor, s.weekdays)
-            knownEpisodes += 1
+            if (cursor.getTime() > horizon.getTime()) break
+            knownEpisodes += perDay
             if (cursor.getTime() > end.getTime()) break
             if (cursor.getTime() >= start.getTime()) {
               const k = formatYYYYMMDD(cursor)
@@ -920,8 +994,11 @@ const monthEntriesByDate = computed(() => {
       return
     }
 
+    const entryDateKey = formatYYYYMMDD(d)
     map.set(groupKey, {
       weekday: isoWeekdayFromDate(d),
+      dateKey: entryDateKey,
+      episodeNumbers: s.episodeNumbersByDate[entryDateKey] || [],
       taskId: s.task.id,
       tmdbId: s.tmdbId,
       task: s.task,
@@ -930,6 +1007,7 @@ const monthEntriesByDate = computed(() => {
       progressText: savedText,
       progressPercent: progressItem.percent,
       predictedAiredTotal: savedEpisode ?? predictedAiredTotal,
+      predictedEpisodes: predictedAiredTotal,
       predictedPercent: savedPercent ?? predictedPercent,
       totalEpisodes: s.totalEpisodes,
       nextAirDate: s.nextAirDate,
@@ -956,11 +1034,14 @@ const monthEntriesByDate = computed(() => {
         let knownEpisodes = s.episodeDates.length
         if (knownEpisodes < Number(total)) {
           let cursor = dateOnly(maxEpisodeDate(s.episodeDates) || new Date())
+          const perDay = episodesPerDateAverage(s.episodeDates)
+          const horizon = addDays(cursor, PREDICT_HORIZON_DAYS)
           let cap = Math.min(2000, Number(total))
           while (knownEpisodes < cap) {
             if (s.cycleDays && s.weekdays.length === 1) cursor = addDays(cursor, s.cycleDays)
             else cursor = nextDateByWeekdays(cursor, s.weekdays)
-            knownEpisodes += 1
+            if (cursor.getTime() > horizon.getTime()) break
+            knownEpisodes += perDay
             if (cursor.getTime() > monthEnd.getTime()) break
             if (cursor.getTime() >= monthStart.getTime()) {
               const k = formatYYYYMMDD(cursor)
@@ -1181,7 +1262,15 @@ watch(
             <div class="poster-card">
               <img v-if="it.posterUrl && posterFailures[it.posterUrl] !== 'unavailable'" class="poster-img" :src="posterSource(it.posterUrl)" @error="handlePosterError(it.posterUrl)" :alt="`${it.title} 海报`" loading="lazy" decoding="async" />
               <div v-else class="poster-fallback">暂无海报</div>
-              <span v-if="!it.confirmed" class="poster-badge">预计</span>
+              <span v-if="it.dateKey === todayKey() && it.episodeNumbers.length" class="poster-badge poster-badge--ep">
+                今日 {{ formatEpisodeList(it.episodeNumbers) }}
+              </span>
+              <span v-else-if="it.dateKey > todayKey() && it.confirmed && it.episodeNumbers.length" class="poster-badge">
+                {{ formatEpisodeList(it.episodeNumbers) }}
+              </span>
+              <span v-else-if="it.dateKey > todayKey()" class="poster-badge">
+                预测{{ it.predictedEpisodes != null ? ` E${it.predictedEpisodes}` : '' }}
+              </span>
 
               <div class="poster-overlay">
                 <div class="overlay-title" :title="it.title">{{ it.title }}</div>
@@ -1211,7 +1300,7 @@ watch(
       <div class="month-bar">
         <div class="month-title">{{ monthTitle }}</div>
         <div class="month-legend">
-          <span class="month-legend__dot" />预计 = 按更新星期推测
+          <span class="month-legend__dot" />预计 = 按最近更新规律推测（最多 7 天）
         </div>
         <div class="month-nav">
           <el-button text bg @click="goToday">回今天</el-button>
@@ -1253,7 +1342,11 @@ watch(
               <div v-else class="month-poster-fallback">TMDB</div>
               <div class="month-name" :title="it.title">{{ it.title }}</div>
               <div class="month-pct">
-                <template v-if="it.progressItems.length > 1">{{ it.progressItems.length }} 盘</template>
+                <template v-if="it.dateKey > todayKey() && it.confirmed && it.episodeNumbers.length">{{ formatEpisodeList(it.episodeNumbers) }}</template>
+                <template v-else-if="it.dateKey > todayKey()">预测{{ it.predictedEpisodes != null ? ` E${it.predictedEpisodes}` : '' }}</template>
+                <template v-else-if="it.dateKey === todayKey() && it.episodeNumbers.length">{{ formatEpisodeList(it.episodeNumbers) }}</template>
+                <template v-else-if="it.episodeNumbers.length">{{ formatEpisodeList(it.episodeNumbers) }}</template>
+                <template v-else-if="it.progressItems.length > 1">{{ it.progressItems.length }} 盘</template>
                 <template v-else>{{ it.predictedAiredTotal != null ? `E${it.predictedAiredTotal}` : it.progressPercent != null ? `${it.progressPercent}%` : '—' }}</template>
               </div>
             </div>
@@ -1886,4 +1979,9 @@ watch(
 }
 
 
+
+.poster-badge--ep {
+  background: rgba(47, 111, 237, 0.85);
+  border-color: rgba(255, 255, 255, 0.4);
+}
 </style>
