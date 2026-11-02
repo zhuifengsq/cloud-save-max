@@ -77,6 +77,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ShareLinkHistory: typeof import('./components/dashboard/ShareLinkHistory.vue')['default']
+    WpsPluginSettings: typeof import('./components/search/WpsPluginSettings.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

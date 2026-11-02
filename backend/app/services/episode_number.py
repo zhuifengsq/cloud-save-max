@@ -9,8 +9,18 @@ _RE_EPISODE_CN = re.compile(r"第\s*0*(\d{1,4})\s*[集期话部篇]")
 _RE_EPISODE_E = re.compile(r"(?<![A-Za-z])[Ee][Pp]?\.?\s*0*(\d{1,4})(?!\d)")
 _RE_TRAILING_NUMBER = re.compile(r"^0*(\d{1,4})(?!\d)(?![pPiIkK])")
 
+# 日期（综艺常见 2026.1.13 / 2026-01-13 / 2026年1月13日 / 20260113）
+_RE_DATE_WITH_DAY = re.compile(
+    r"(?<!\d)(?:19|20)\d{2}\s*(?:[.\-/年])\s*\d{1,2}\s*(?:[.\-/月])\s*\d{1,2}\s*日?(?!\d)"
+)
+_RE_DATE_COMPACT = re.compile(r"(?<!\d)(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])(?!\d)")
+_RE_DATE_MONTH_ONLY = re.compile(r"(?<!\d)(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月(?!\d)")
+
 # 清晰度/画幅数字不应被当成集数
 _NON_EPISODE_NUMBERS = {360, 480, 540, 576, 720, 1080, 1440, 2160, 4320}
+
+# 分享者常把"更新到第几集"写进文件夹名，例如 "4K SDR 低码 26集"
+_RE_FOLDER_EPISODE = re.compile(r"(?:更新?至|全|共|第)?\s*0*(\d{1,4})\s*集")
 
 _SIZE_UNITS = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 
@@ -36,6 +46,18 @@ def extract_episode(file_name: str, *, mr: Any = None) -> tuple[int | None, int 
     return None, None
 
 
+def _strip_date_tokens(text: str) -> str:
+    """去掉文件名里的日期，避免 "2026.1.13" 被当成第 2026 集。"""
+    cleaned = _RE_DATE_WITH_DAY.sub(" ", text)
+    cleaned = _RE_DATE_COMPACT.sub(" ", cleaned)
+    cleaned = _RE_DATE_MONTH_ONLY.sub(" ", cleaned)
+    return cleaned
+
+
+def _is_year_like(number: int) -> bool:
+    return 1900 <= number <= 2100
+
+
 def guess_episode(file_name: str) -> int | None:
     """Best-effort episode number for names that were not renamed."""
     text = str(file_name or "").strip()
@@ -43,15 +65,32 @@ def guess_episode(file_name: str) -> int | None:
         return None
     if match := _RE_SEASON_EPISODE.search(text):
         return int(match.group(2))
+    text = _strip_date_tokens(text)
     for pattern in (_RE_EPISODE_CN, _RE_EPISODE_E, _RE_TRAILING_NUMBER):
         if match := pattern.search(text):
             try:
                 number = int(match.group(1))
             except (TypeError, ValueError):
                 continue
-            if number in _NON_EPISODE_NUMBERS:
+            if number in _NON_EPISODE_NUMBERS or _is_year_like(number):
                 continue
             return number
+    return None
+
+
+def episode_from_folder_name(folder_name: str) -> int | None:
+    """从文件夹名里的 "26集" / "更新至26集" 读取集数提示。"""
+    text = str(folder_name or "").strip()
+    if not text:
+        return None
+    for match in _RE_FOLDER_EPISODE.finditer(text):
+        try:
+            number = int(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if number <= 0 or number in _NON_EPISODE_NUMBERS or _is_year_like(number):
+            continue
+        return number
     return None
 
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
+import WpsPluginSettings from '@/components/search/WpsPluginSettings.vue'
 
 import {
   createApiSearchSource,
@@ -211,6 +212,7 @@ async function runTest() {
       : await testPythonSearchPlugin(String(test.key), test.keyword.trim())
     test.results = Array.isArray(result) ? result : (result.results || result.items || result.data || [])
     test.message = Array.isArray(result) ? '' : (result.error || result.message || '')
+    if (test.kind === 'plugin') await refresh()
   } catch (error) {
     test.message = errorText(error)
   } finally {
@@ -321,7 +323,10 @@ class MySearchPlugin(BaseSearchPlugin):
               </div>
               <el-switch :model-value="item.enabled" :disabled="!canWrite || item.status !== 'ready' || busyKey === `plugin:${item.key}`" @change="(value: string | number | boolean) => togglePlugin(item, Boolean(value))" />
             </div>
-            <div class="source-card__actions"><el-button @click="openTest('plugin', item.key, item.name || item.key)">测试搜索</el-button></div>
+            <div class="source-card__actions">
+              <el-button @click="openTest('plugin', item.key, item.name || item.key)">测试搜索</el-button>
+              <WpsPluginSettings v-if="item.key === 'wps' && item.configurable" :plugin="item" :can-write="canWrite" @changed="refresh" />
+            </div>
           </el-card>
         </div>
       </el-tab-pane>

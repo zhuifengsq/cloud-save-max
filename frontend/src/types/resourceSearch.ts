@@ -25,6 +25,10 @@ export type PythonSearchPlugin = {
   enabled: boolean
   status?: string
   error?: string | null
+  configurable?: boolean
+  supports_cache?: boolean
+  config?: { document_url?: string; drive_types?: string[] }
+  cache?: { cached?: boolean; count?: number; updated_at?: string | null; expired?: boolean }
 }
 
 export type SearchTestResult = {

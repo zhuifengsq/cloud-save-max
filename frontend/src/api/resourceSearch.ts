@@ -45,6 +45,16 @@ export async function patchPythonSearchPlugin(key: string, enabled: boolean) {
   return data
 }
 
+export async function savePythonSearchPluginConfig(key: string, config: { document_url: string; drive_types: string[] }) {
+  const { data } = await http.put<PythonSearchPlugin>(`/resource-search/plugins/${encodeURIComponent(key)}/config`, { config })
+  return data
+}
+
+export async function clearPythonSearchPluginCache(key: string) {
+  const { data } = await http.post<{ success: boolean; message: string }>(`/resource-search/plugins/${encodeURIComponent(key)}/clear-cache`)
+  return data
+}
+
 export async function testPythonSearchPlugin(key: string, keyword: string) {
   const { data } = await http.post<SearchTestResult>(`/resource-search/plugins/${encodeURIComponent(key)}/test`, { keyword }, { timeout: 30000 })
   return data

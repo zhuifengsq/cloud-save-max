@@ -15,6 +15,17 @@ class BaseSearchPlugin(ABC):
     name: str = ""
     description: str = ""
     timeout_seconds: float = 8.0
+    configurable: bool = False
+    supports_cache: bool = False
+
+    def configure(self, config: dict) -> None:
+        self.config = config
+
+    def clear_cache(self) -> None:
+        pass
+
+    def cache_status(self) -> dict:
+        return {}
 
     @abstractmethod
     def search(self, keyword: str) -> list[dict[str, Any]]:

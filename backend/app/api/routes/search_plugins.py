@@ -16,6 +16,8 @@ from app.services.search_plugins import (
     set_search_plugin_enabled,
     test_search_plugin,
     upload_search_plugin,
+    save_search_plugin_config,
+    clear_search_plugin_cache,
 )
 
 
@@ -28,6 +30,10 @@ class SearchPluginUpdateIn(BaseModel):
 
 class SearchPluginTestIn(BaseModel):
     keyword: str = Field(min_length=2, max_length=100)
+
+
+class SearchPluginConfigIn(BaseModel):
+    config: dict
 
 
 def _require_admin(current: CurrentUser) -> None:
@@ -109,3 +115,25 @@ def post_test_search_plugin(
 ):
     _require_admin(current)
     return test_search_plugin(db, key, payload.keyword)
+
+
+@router.put('/{key}/config', dependencies=[Depends(require_permissions(PLUGIN_WRITE))])
+def put_search_plugin_config(request: Request, key: str, payload: SearchPluginConfigIn,
+                             current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    _require_admin(current)
+    item = save_search_plugin_config(db, key, payload.config)
+    _audit(db, request, current, 'search_plugin.config', key)
+    db.commit()
+    cache_clear()
+    return item
+
+
+@router.post('/{key}/clear-cache', dependencies=[Depends(require_permissions(PLUGIN_WRITE))])
+def post_clear_search_plugin_cache(request: Request, key: str,
+                                   current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    _require_admin(current)
+    result = clear_search_plugin_cache(db, key)
+    cache_clear()
+    _audit(db, request, current, 'search_plugin.clear_cache', key)
+    db.commit()
+    return result

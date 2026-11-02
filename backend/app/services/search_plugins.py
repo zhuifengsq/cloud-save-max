@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import inspect
+import json
 import logging
 import re
 import sys
@@ -116,6 +117,14 @@ def _ensure_rows(db: Session, discovered: list[dict[str, Any]]) -> dict[str, Res
             db.add(row)
             rows[key] = row
     db.flush()
+    for item in discovered:
+        if item['plugin'] is None:
+            continue
+        try:
+            config = json.loads(rows[_source_key(item['key'])].config_json or '{}')
+            item['plugin'].configure(config if isinstance(config, dict) else {})
+        except (ValueError, TypeError) as exc:
+            item['status'], item['error'] = 'error', str(exc)
     return rows
 
 
@@ -130,6 +139,10 @@ def list_search_plugins(db: Session, *, plugin_dir: Path = PLUGIN_DIR) -> list[d
             "enabled": bool(rows[_source_key(item["key"])].enabled),
             "status": item["status"],
             "error": item["error"],
+            "configurable": bool(item['plugin'] and item['plugin'].configurable),
+            "supports_cache": bool(item['plugin'] and item['plugin'].supports_cache),
+            "config": getattr(item['plugin'], 'config', {}) if item['plugin'] and item['plugin'].configurable else {},
+            "cache": item['plugin'].cache_status() if item['status'] == 'ready' and item['plugin'] else {},
         }
         for item in discovered
     ]
@@ -139,12 +152,38 @@ def set_search_plugin_enabled(db: Session, key: str, enabled: bool, *, plugin_di
     item = next((item for item in discover_search_plugins(plugin_dir=plugin_dir) if item["key"] == key), None)
     if item is None:
         raise not_found("SEARCH_PLUGIN_NOT_FOUND", "搜索插件不存在")
+    rows = _ensure_rows(db, [item])
     if enabled and item["status"] != "ready":
         raise bad_request("SEARCH_PLUGIN_LOAD_FAILED", "插件加载失败，无法启用", detail=item["error"])
-    rows = _ensure_rows(db, [item])
     rows[_source_key(key)].enabled = bool(enabled)
     db.flush()
     return next(entry for entry in list_search_plugins(db, plugin_dir=plugin_dir) if entry["key"] == key)
+
+
+def save_search_plugin_config(db: Session, key: str, config: dict) -> dict:
+    item = next((p for p in discover_search_plugins() if p['key'] == key), None)
+    if not item or not item['plugin'] or not item['plugin'].configurable:
+        raise bad_request('SEARCH_PLUGIN_CONFIG_UNSUPPORTED', '该插件不支持配置')
+    rows = _ensure_rows(db, [item])
+    plugin = item['plugin']
+    try:
+        plugin.configure(config)
+    except (ValueError, TypeError) as exc:
+        raise bad_request('SEARCH_PLUGIN_CONFIG_INVALID', str(exc)) from exc
+    rows[_source_key(key)].config_json = json.dumps(plugin.config, ensure_ascii=False)
+    db.flush()
+    return next(p for p in list_search_plugins(db) if p['key'] == key)
+
+
+def clear_search_plugin_cache(db: Session, key: str) -> dict:
+    item = next((p for p in discover_search_plugins() if p['key'] == key), None)
+    if not item or not item['plugin'] or not item['plugin'].supports_cache:
+        raise bad_request('SEARCH_PLUGIN_CACHE_UNSUPPORTED', '该插件不支持清除缓存')
+    _ensure_rows(db, [item])
+    if item['status'] != 'ready':
+        raise bad_request('SEARCH_PLUGIN_CONFIG_INVALID', item['error'])
+    item['plugin'].clear_cache()
+    return {'success': True, 'message': '缓存已清除，下次搜索将重新读取文档'}
 
 
 def normalize_search_results(plugin: BaseSearchPlugin, raw_results: Any) -> list[dict[str, Any]]:
@@ -223,6 +262,7 @@ def test_search_plugin(db: Session, key: str, keyword: str, *, plugin_dir: Path 
     item = next((item for item in discover_search_plugins(plugin_dir=plugin_dir) if item["key"] == key), None)
     if item is None:
         raise not_found("SEARCH_PLUGIN_NOT_FOUND", "搜索插件不存在")
+    _ensure_rows(db, [item])
     if item["status"] != "ready":
         return {"success": False, "message": item["error"], "latency_ms": 0, "items": []}
     started = time.monotonic()

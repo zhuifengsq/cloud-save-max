@@ -141,6 +141,10 @@ class DramaTaskExecutor:
         self.log = log
         self.transfer_count = 0
         self.saved_latest: dict[str, Any] | None = None
+        # 保存后用于统计集号的名字集合（目标已存在 ∪ 本次新增）
+        self._saved_name_pool: list[str] = []
+        # 拿不到文件清单时，用文件夹名里的 "N集" 作为兜底
+        self._folder_episode_hints: list[int] = []
 
     def _set_stage(self, stage: str | None) -> None:
         if self.log:
@@ -227,6 +231,13 @@ class DramaTaskExecutor:
                 continue
             names.add(_normalize_name(name, ignore_extension))
         return names
+
+    def _add_saved_names(self, names: Iterable[str]) -> None:
+        """把"目标目录里已存在的文件名"加入统计池（不产生额外请求）。"""
+        for name in names:
+            text = str(name or "").strip()
+            if text:
+                self._saved_name_pool.append(text)
 
     def _fetch_share_items(self, *, pwd_id: str, stoken: str, pdir_fid: str) -> list[dict[str, Any]]:
         def _validate(detail: dict[str, Any]) -> RetryResult:
@@ -670,6 +681,8 @@ class DramaTaskExecutor:
 
     def execute(self) -> Tree:
         extra = self.task_data.get("extra") or {}
+        self._saved_name_pool.clear()
+        self._folder_episode_hints.clear()
         allow_once = bool(extra.get("allow_once"))
         runweek_mode = str(extra.get("runweek_mode") or "manual").strip().lower()
         runweek = extra.get("runweek") or []
@@ -840,7 +853,9 @@ class DramaTaskExecutor:
                 "is_dir": False,
             }
             tree.create_node(f"{i + 1}. {item.origin_name} -> {item.target_name}", f"item-{i + 1}", parent="root", data=data)
-        self._record_saved_latest([item.target_name for item in plan[:limit]])
+        self._add_saved_names(_get_name(raw) for raw in dest_file_list if not _is_dir(raw))
+        self._add_saved_names(item.target_name for item in plan[:limit])
+        self._record_saved_latest()
 
     # ------------------------------------------------------------------
     # 文件夹对比模式：白名单文件夹按层级增量，其它文件夹整包转存一次
@@ -867,7 +882,6 @@ class DramaTaskExecutor:
 
         self._line("模式: 文件夹对比（白名单增量 + 其它文件夹整包一次）")
         self._line(f"白名单: {'|'.join(whitelist) if whitelist else '(未设置，所有文件夹按增量处理)'}")
-        transferred_names: list[str] = []
 
         # 1) 分享根目录下的文件：按普通模式（同名跳过，不改名）
         if root_files:
@@ -912,7 +926,8 @@ class DramaTaskExecutor:
                         "file_name_re": item.target_name,
                         "is_dir": False,
                     })
-                transferred_names.extend([item.origin_name for item in plan[:limit]])
+                self._add_saved_names(item.origin_name for item in plan[:limit])
+            self._add_saved_names(_get_name(raw) for raw in dest_file_list if not _is_dir(raw))
 
         # 2) 子文件夹
         for raw in share_items:
@@ -928,7 +943,7 @@ class DramaTaskExecutor:
                     self._line(f"跳过排除文件夹: {name}")
                     continue
             if not whitelist or (any(kw in lowered for kw in whitelist) if whitelist_is_any else all(kw in lowered for kw in whitelist)):
-                names = self._sync_share_dir_incremental(
+                self._sync_share_dir_incremental(
                     pwd_id=pwd_id,
                     stoken=stoken,
                     share_fid=str(fid),
@@ -941,9 +956,8 @@ class DramaTaskExecutor:
                     depth=0,
                     copy_all=False,
                 )
-                transferred_names.extend(names)
             else:
-                names = self._save_share_dir_once(
+                self._save_share_dir_once(
                     pwd_id=pwd_id,
                     stoken=stoken,
                     share_fid=str(fid),
@@ -955,8 +969,7 @@ class DramaTaskExecutor:
                     ignore_extension=ignore_extension,
                     tree=tree,
                 )
-                transferred_names.extend(names)
-        self._record_saved_latest(transferred_names)
+        self._record_saved_latest()
 
     def _sync_share_dir_incremental(
         self,
@@ -987,6 +1000,7 @@ class DramaTaskExecutor:
         files = [item for item in children if not _is_dir(item)]
         dirs = [item for item in children if _is_dir(item)]
         existing_names = self._list_dest_names(dest_fid, ignore_extension) if not copy_all else set()
+        self._add_saved_names(existing_names)
 
         plan: list[DramaPlanItem] = []
         for item in files:
@@ -1022,6 +1036,7 @@ class DramaTaskExecutor:
                     "is_dir": False,
                 })
             transferred.extend([item.origin_name for item in plan[:limit]])
+            self._add_saved_names(item.origin_name for item in plan[:limit])
 
         for item in dirs:
             sub_name = _get_name(item)
@@ -1061,6 +1076,10 @@ class DramaTaskExecutor:
     ) -> list[str]:
         if share_name in dest_dir_map:
             self._line(f"跳过已存在的文件夹: {share_name}")
+            try:
+                self._add_saved_names(self._list_dest_names(dest_dir_map[share_name], ignore_extension))
+            except Exception as exc:
+                self._line(f"统计已存在目录失败: {exc}")
             return []
         # 优先整包转存目录 fid
         if share_token:
@@ -1078,6 +1097,21 @@ class DramaTaskExecutor:
                     self._line(f"整包转存文件夹: {share_name}")
                     dest_dir_map[share_name] = str(saved[0] or "")
                     tree.create_node(f"📁{share_name}", f"folder-{share_name}", parent="root", data={"is_dir": True})
+                    # 整包直转没有文件清单，单独列一次目标目录统计集号
+                    try:
+                        saved_names = self._list_dest_names(str(saved[0] or ""), ignore_extension)
+                    except Exception as exc:
+                        saved_names = set()
+                        self._line(f"统计目标目录失败: {exc}")
+                    if saved_names:
+                        self._add_saved_names(saved_names)
+                    else:
+                        from app.services.episode_number import episode_from_folder_name
+
+                        hint = episode_from_folder_name(share_name)
+                        if hint:
+                            self._folder_episode_hints.append(int(hint))
+                            self._line(f"按文件夹名记录集数: {hint}")
                     return []
             except Exception as exc:
                 self._line(f"目录直转失败，改为逐文件转存: {exc}")
@@ -1097,12 +1131,20 @@ class DramaTaskExecutor:
             copy_all=True,
         )
 
-    def _record_saved_latest(self, file_names: list[str]) -> None:
-        """记录本次转存到的最大集数（写到任务的 extra.saved_latest）。"""
-        if not file_names:
-            return
-        from datetime import datetime
+    def _clear_saved_latest(self) -> None:
+        self.saved_latest = {
+            "episode": 0,
+            "season": None,
+            "name": "",
+            "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
 
+    def _record_saved_latest(self, file_names: list[str] | None = None) -> None:
+        """记录保存后目标目录里实际存在的最大集数（写到任务的 extra.saved_latest）。
+
+        名字来源：目标目录已存在的文件 ∪ 本次转存成功的文件；整包直转时补充目标目录列表。
+        这些清单在同步过程中本来就会拉取，不产生额外请求。
+        """
         from app.services.episode_number import extract_episode, guess_episode
 
         extra = self.task_data.get("extra") if isinstance(self.task_data.get("extra"), dict) else {}
@@ -1111,6 +1153,18 @@ class DramaTaskExecutor:
             prev_episode = int(prev.get("episode") or 0)
         except (TypeError, ValueError):
             prev_episode = 0
+        # 历史数据里可能把日期年份记成了集号（如 2026.1.13 -> 2026），直接丢弃
+        prev_year_like = 1900 <= prev_episode <= 2100
+        if prev_year_like:
+            prev_episode = 0
+
+        names = list(file_names) if file_names is not None else list(self._saved_name_pool)
+        hints = list(self._folder_episode_hints)
+        if not names and not hints:
+            if prev_year_like:
+                # 清掉错误的年份水位，前端会隐藏"已存"
+                self._clear_saved_latest()
+            return
 
         mr = MagicRename(magic_regex=(self.task_data.get("magic_regex") if isinstance(self.task_data.get("magic_regex"), dict) else None))
         mr.set_taskname(str(self.task_data.get("taskname") or ""))
@@ -1129,7 +1183,7 @@ class DramaTaskExecutor:
         best_episode = prev_episode
         best_season = prev.get("season")
         best_name = str(prev.get("name") or "")
-        for name in file_names:
+        for name in names:
             season, episode = extract_episode(name, mr=mr)
             if episode is None:
                 episode = guess_episode(name)
@@ -1139,7 +1193,18 @@ class DramaTaskExecutor:
                 best_episode = int(episode)
                 best_season = season
                 best_name = name
+        for hint in hints:
+            try:
+                hint_value = int(hint)
+            except (TypeError, ValueError):
+                continue
+            if hint_value > int(best_episode or 0):
+                best_episode = hint_value
+                best_season = None
+                best_name = f"{hint_value}集"
         if not best_episode:
+            if prev_year_like:
+                self._clear_saved_latest()
             return
         self.saved_latest = {
             "episode": int(best_episode),
