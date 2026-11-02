@@ -17,3 +17,8 @@ export async function clearDramaFailures(days = 0) {
   })
   return data
 }
+
+export async function clearDramaShareurlLogs() {
+  const { data } = await http.post<{ deleted: number }>('/dashboard/drama/clear-shareurl-logs')
+  return data
+}

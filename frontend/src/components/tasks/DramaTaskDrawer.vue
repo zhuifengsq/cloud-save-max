@@ -1384,6 +1384,11 @@ function closeDrawer() {
 
 function buildExtraPayload() {
   const extra = clone(state.extra || {})
+  extra.auto_update_shareurl = Boolean(state.auto_update_shareurl)
+  // 后端兼容旧字段时使用 OR；同步旧值，避免关闭后仍被旧开关开启。
+  if ('auto_update_115_shareurl' in extra) {
+    extra.auto_update_115_shareurl = extra.auto_update_shareurl
+  }
   extra.runweek_mode = state.runweek_mode
   extra.runweek = state.runweek_mode === 'auto' ? [] : clone(state.runweek || [])
   return extra

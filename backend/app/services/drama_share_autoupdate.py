@@ -134,6 +134,7 @@ def _search_candidates(
             search_date_from=search_date_from,
             search_filter_mode=search_filter_mode,
             search_exclude_mode=search_exclude_mode,
+            force_refresh=True,
         )
         if changed:
             db_changed = True
@@ -383,12 +384,6 @@ def resolve_drama_shareurl_update(
             continue
 
         task.shareurl = new_shareurl
-        try:
-            from app.services.task_share_links import drop_task_share_link
-
-            drop_task_share_link(task)
-        except Exception:  # pragma: no cover - 清理失败不影响换链
-            logger.warning("自动换链：清理已保存的分享链接失败", exc_info=True)
         db.flush()
         logger.info("自动换链（死链修复）：成功 old=%s new=%s", old_shareurl, new_shareurl)
         return {

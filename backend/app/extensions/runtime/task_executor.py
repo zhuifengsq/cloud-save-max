@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,9 +19,13 @@ from app.extensions.runtime.execution_log import ExecutionLog
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
 from app.services.drama_share_autoupdate import is_auto_update_task, resolve_drama_shareurl_update
+from app.services.shareurl_update_logs import append_shareurl_update_log
 
 
 logger = logging.getLogger(__name__)
+
+SHARE_SEARCH_ROUNDS = 4
+SHARE_SEARCH_RETRY_DELAY = 2
 
 
 def _truncate(s: str, max_len: int) -> str:
@@ -163,7 +168,7 @@ class TaskExecutor:
                 adapter = account_manager.get_adapter_for_task(task_data)
             except Exception:
                 adapter = None
-        started_at = datetime.now()
+        started_at = log.started_at
         task_id = int(getattr(task, "id", 0) or 0)
         drama_executor = None
 
@@ -265,14 +270,56 @@ class TaskExecutor:
                 try:
                     log.section("链接失效自动换链")
                     log.line(f"链接失效（阶段={stage}），尝试自动换链")
-                    update_result = resolve_drama_shareurl_update(self.db, task, respect_toggle=True, tried_shareurls=_tried_shareurls)
+                    update_result = {}
+                    for round_number in range(1, SHARE_SEARCH_ROUNDS + 1):
+                        if round_number > 1:
+                            time.sleep(SHARE_SEARCH_RETRY_DELAY)
+                        old_shareurl = str(task.shareurl or '')
+                        # 没换成功的探测结果不跨轮屏蔽，允许临时读取失败的候选重试。
+                        round_tried = set(_tried_shareurls)
+                        try:
+                            update_result = resolve_drama_shareurl_update(
+                                self.db, task, respect_toggle=True, tried_shareurls=round_tried,
+                            )
+                            updated = bool(update_result.get('updated'))
+                            reason = str(update_result.get('reason') or '')
+                            reason_text = {
+                                'no_candidates': '未搜索到候选链接',
+                                'no_valid_candidate': '候选链接均失效或不符合筛选条件',
+                                'no_better_candidate': '未找到可读取的新链接',
+                                'no_search_keyword': '缺少搜索关键词',
+                                'not_applicable': '当前任务不适用自动换链',
+                                'shareurl_empty': '源链接为空',
+                            }.get(reason, reason or '未找到可用链接')
+                            result_message = '已自动更换源链接' if updated else reason_text
+                        except Exception as search_exc:
+                            updated = False
+                            update_result = {'checked': True, 'updated': False}
+                            result_message = f'搜索异常：{str(search_exc).strip() or type(search_exc).__name__}'
+                        entry = append_shareurl_update_log(
+                            task, source='auto', status='success' if updated else 'failed',
+                            message=result_message, old_shareurl=old_shareurl,
+                            new_shareurl=str(update_result.get('new_shareurl') or ''), round_number=round_number,
+                        )
+                        log.line(f"自动换链 {round_number}/{SHARE_SEARCH_ROUNDS}: {entry['message']}")
+                        if persist_execution and task_id > 0:
+                            # 每轮独立落盘，刷新卡片即可看到；下一轮网络请求不占用写锁。
+                            self.db.commit()
+                        else:
+                            self.db.flush()
+                        if updated:
+                            _tried_shareurls.update(round_tried)
+                            break
+                        if not update_result.get('checked'):
+                            break
                     if bool(update_result.get("updated")):
                         log.line(f"OK: 自动换链成功 new={str(update_result.get('new_shareurl') or '').strip()}")
-                        self.db.commit()
-                        self.db.refresh(task)
+                        if persist_execution and task_id > 0:
+                            self.db.refresh(task)
                         log.line("换链后立即再次执行任务")
                         re_execution = self.run_task(
                             task,
+                            log=log,
                             persist_execution=persist_execution,
                             account_manager=account_manager,
                             init_account_for_task=False,
@@ -281,8 +328,7 @@ class TaskExecutor:
                         )
                         return re_execution
                     else:
-                        reason = str(update_result.get("reason") or "未找到可用链接")
-                        log.line(f"换链未找到可用链接: {reason}")
+                        log.line("本次自动换链搜索结束，未找到可用链接")
                 except Exception as au_exc:
                     log.line(f"自动换链失败: {str(au_exc).strip() or type(au_exc).__name__}")
 

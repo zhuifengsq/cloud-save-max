@@ -12,6 +12,7 @@ from app.schemas.dashboard import CapacityOverviewOut, DramaOverviewOut
 from app.services import audit
 from app.services.dashboard_drama import build_drama_overview
 from app.services.drive_accounts import build_capacity_overview
+from app.services.shareurl_update_logs import clear_drama_shareurl_update_logs
 
 router = APIRouter()
 
@@ -55,6 +56,28 @@ def clear_drama_failures(
         user_agent=request.headers.get('user-agent'),
         success=True,
         detail=f'days={days} deleted={deleted}',
+    )
+    db.commit()
+    return {'deleted': deleted}
+
+
+@router.post('/drama/clear-shareurl-logs', dependencies=[Depends(require_permissions(TASK_WRITE))])
+def clear_drama_shareurl_logs(
+    request: Request,
+    current: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    deleted = clear_drama_shareurl_update_logs(db)
+    audit.write_audit_log(
+        db,
+        actor_user_id=current.user.id,
+        action='task.shareurl_logs.clear',
+        target_type='task',
+        target_id='drama',
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get('user-agent'),
+        success=True,
+        detail=f'deleted={deleted}',
     )
     db.commit()
     return {'deleted': deleted}

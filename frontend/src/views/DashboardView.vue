@@ -4,6 +4,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import CapacityAccountCard from '@/components/dashboard/CapacityAccountCard.vue'
 import CapacityHero from '@/components/dashboard/CapacityHero.vue'
 import DramaTrend from '@/components/dashboard/DramaTrend.vue'
+import ShareLinkHistory from '@/components/dashboard/ShareLinkHistory.vue'
+import FailureReason from '@/components/dashboard/FailureReason.vue'
+import { failureStageLabel } from '@/utils/failureMessage'
 import { clearDramaFailures, fetchCapacityOverview, fetchDramaOverview } from '@/api/dashboard'
 import { refreshDriveAccountProfiles } from '@/api/extensions'
 import { fetchTMDBDetail } from '@/api/media'
@@ -484,6 +487,8 @@ onMounted(() => {
           </div>
         </div>
 
+        <ShareLinkHistory :tasks="dramaTasks" @cleared="dramaTasks.forEach(task => delete task.extra.shareurl_update_logs)" />
+
         <div v-if="failures.length" class="failures-card">
           <div class="failures-card__head">
             <div class="failures-card__title">近期失败</div>
@@ -504,9 +509,9 @@ onMounted(() => {
                 <div class="failure-row__desc">
                   <span>{{ formatDateTime(f.started_at) }}</span>
                   <span v-if="f.stage" class="meta-dot">·</span>
-                  <span v-if="f.stage">阶段 {{ f.stage }}</span>
+                  <span v-if="f.stage">{{ failureStageLabel(f.stage) }}</span>
                 </div>
-                <div v-if="f.message" class="failure-row__msg">{{ f.message }}</div>
+                <FailureReason :message="f.message" />
               </div>
               <router-link to="/tasks/drama">
                 <el-button size="small">查看</el-button>
@@ -521,9 +526,9 @@ onMounted(() => {
                     <div class="failure-row__desc">
                       <span>{{ formatDateTime(f.started_at) }}</span>
                       <span v-if="f.stage" class="meta-dot">·</span>
-                      <span v-if="f.stage">阶段 {{ f.stage }}</span>
+                      <span v-if="f.stage">{{ failureStageLabel(f.stage) }}</span>
                     </div>
-                    <div v-if="f.message" class="failure-row__msg">{{ f.message }}</div>
+                    <FailureReason :message="f.message" />
                   </div>
                   <router-link to="/tasks/drama">
                     <el-button size="small">查看</el-button>
@@ -768,6 +773,7 @@ onMounted(() => {
 
 .failures-card__head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
@@ -775,13 +781,18 @@ onMounted(() => {
 
 .failures-card__title {
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .failures-card__right {
   display: flex;
+  flex-wrap: wrap;
+  margin-left: auto;
   align-items: center;
   gap: 10px;
 }
+
+.failures-card__right .status-pill { white-space: nowrap; }
 
 .failures-list {
   margin-top: 12px;
@@ -810,13 +821,8 @@ onMounted(() => {
   color: var(--el-text-color-secondary);
 }
 
-.failure-row__msg {
-  margin-top: 6px;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
-  line-height: 1.5;
-  word-break: break-word;
-}
+.failure-row__main { min-width: 0; flex: 1; }
+.failure-row > a { flex-shrink: 0; }
 
 .upcoming-card {
   padding: 22px;

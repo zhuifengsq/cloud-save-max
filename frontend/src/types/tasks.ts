@@ -2,12 +2,24 @@ export type TaskExtraConfig = Record<string, any> & {
   auto_update_shareurl?: boolean | null
   auto_update_115_shareurl?: boolean | null
   share_link?: TaskShareLink | null
+  shareurl_update_logs?: ShareurlUpdateLog[]
   saved_latest?: {
     episode?: number | null
     season?: number | null
     name?: string | null
     at?: string | null
   } | null
+}
+
+export type ShareurlUpdateLog = {
+  id: string
+  at: string
+  source: 'auto' | 'manual'
+  status: 'success' | 'failed'
+  message: string
+  old_shareurl: string
+  new_shareurl: string
+  round?: number | null
 }
 
 export type TaskExecutionItem = {

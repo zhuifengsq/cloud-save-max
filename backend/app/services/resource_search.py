@@ -257,6 +257,7 @@ def fetch_task_suggestions(
     deep: int,
     *,
     filter_invalid: bool = True,
+    force_refresh: bool = False,
     drive_type: str | None = None,
     search_filter: str = "",
     search_exclude: str = "",
@@ -280,7 +281,7 @@ def fetch_task_suggestions(
     _update_search_cache_ttl()
     with _search_cache_lock:
         cached = _search_cache.get(cache_key)
-        if cached is not None:
+        if cached is not None and not force_refresh:
             return cached
 
     from app.services.api_search_sources import search_enabled_api_sources

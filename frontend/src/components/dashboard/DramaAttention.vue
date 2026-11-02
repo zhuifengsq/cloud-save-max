@@ -2,6 +2,8 @@
 import type { DramaFailureItem } from '@/types/dashboard'
 import type { TaskItem } from '@/types/tasks'
 import { formatDateTime } from '@/utils/capacity'
+import { failureStageLabel } from '@/utils/failureMessage'
+import FailureReason from '@/components/dashboard/FailureReason.vue'
 
 const props = defineProps<{
   recentFailures: DramaFailureItem[]
@@ -71,9 +73,9 @@ function tagTypeOfStatus(status: string) {
             <div class="list-row__meta">
               <span>{{ formatDateTime(item.started_at) }}</span>
               <span v-if="item.stage" class="meta-dot">·</span>
-              <span v-if="item.stage">阶段 {{ item.stage }}</span>
+              <span v-if="item.stage">{{ failureStageLabel(item.stage) }}</span>
             </div>
-            <div v-if="item.message" class="list-row__message">{{ item.message }}</div>
+            <FailureReason :message="item.message" />
           </div>
           <div class="list-row__side">
             <router-link to="/tasks/drama">
@@ -93,9 +95,9 @@ function tagTypeOfStatus(status: string) {
                 <div class="list-row__meta">
                   <span>{{ formatDateTime(item.started_at) }}</span>
                   <span v-if="item.stage" class="meta-dot">·</span>
-                  <span v-if="item.stage">阶段 {{ item.stage }}</span>
+                  <span v-if="item.stage">{{ failureStageLabel(item.stage) }}</span>
                 </div>
-                <div v-if="item.message" class="list-row__message">{{ item.message }}</div>
+                <FailureReason :message="item.message" />
               </div>
               <div class="list-row__side">
                 <router-link to="/tasks/drama">

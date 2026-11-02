@@ -68,6 +68,7 @@ declare module 'vue' {
     ElTabs: typeof import('element-plus/es')['ElTabs']
     ElTag: typeof import('element-plus/es')['ElTag']
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
+    FailureReason: typeof import('./components/dashboard/FailureReason.vue')['default']
     HelloWorld: typeof import('./components/HelloWorld.vue')['default']
     InteractiveLineChart: typeof import('./components/dashboard/InteractiveLineChart.vue')['default']
     NotificationChannelCard: typeof import('./components/extensions/NotificationChannelCard.vue')['default']
@@ -75,6 +76,7 @@ declare module 'vue' {
     RoleAssignDialog: typeof import('./components/users/RoleAssignDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    ShareLinkHistory: typeof import('./components/dashboard/ShareLinkHistory.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

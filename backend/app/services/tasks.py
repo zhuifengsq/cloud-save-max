@@ -13,6 +13,7 @@ from app.extensions.runtime.task_executor import TaskExecutor
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
 from app.services.task_share_links import drop_task_share_link, merge_task_extra
+from app.services.shareurl_update_logs import append_shareurl_update_log
 
 logger = logging.getLogger(__name__)
 
@@ -168,18 +169,24 @@ def update_task(db: Session, task_id: int, **payload) -> Task:
     if payload.get('addition') is not None:
         task.addition_json = json.dumps(payload['addition'], ensure_ascii=False)
     if payload.get('extra') is not None:
-        merge_task_extra(task, payload['extra'])
-    if any(key in payload for key in ('shareurl', 'savepath', 'account_name')):
+        # 对外分享记录和换源日志由服务端维护，不能被旧编辑表单覆盖。
+        merge_task_extra(task, {key: value for key, value in payload['extra'].items()
+                                if key not in {'share_link', 'shareurl_update_logs'}})
+    if any(key in payload for key in ('savepath', 'account_name')):
         link_target_changed = (
-            str(getattr(task, "shareurl", "") or "").strip() != previous_shareurl
-            or str(getattr(task, "savepath", "") or "").strip() != previous_savepath
+            str(getattr(task, "savepath", "") or "").strip() != previous_savepath
             or str(getattr(task, "account_name", "") or "").strip() != previous_account_name
         )
         if link_target_changed:
-            # The saved share link points at the previous source/path, so it must not be reused.
+            # 对外分享指向保存目录，仅改变源链接不会改变它的目标。
             drop_task_share_link(task)
     if "shareurl" in payload:
         new_shareurl = str(getattr(task, "shareurl", "") or "").strip()
+        if new_shareurl != previous_shareurl:
+            append_shareurl_update_log(
+                task, source='manual', status='success', message='已手动更换源链接',
+                old_shareurl=previous_shareurl, new_shareurl=new_shareurl,
+            )
 
     db.flush()
     return task
