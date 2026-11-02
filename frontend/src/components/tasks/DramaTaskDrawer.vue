@@ -206,6 +206,7 @@ const drivePicker = reactive({
 const sharePicker = reactive({
   visible: false,
   loading: false,
+  requestId: 0,
   shareurl: '' as string,
   root_shareurl: '' as string,
   pdir_fid: null as string | null,
@@ -1591,6 +1592,9 @@ async function openSharePicker(overrideUrl?: string) {
 }
 
 async function refreshSharePicker(pdir_fid: string | null) {
+  const requestId = ++sharePicker.requestId
+  sharePicker.items = []
+  sharePicker.pdir_fid = null
   sharePicker.loading = true
   try {
     const account_name = state.account_choice || null
@@ -1619,6 +1623,7 @@ async function refreshSharePicker(pdir_fid: string | null) {
       tmdb_id: state.tmdb_id ?? undefined,
       tmdb_media_type: state.tmdb_media_type || undefined,
     })
+    if (requestId !== sharePicker.requestId) return
     sharePicker.pdir_fid = data.pdir_fid || null
     sharePicker.items = data.items || []
     if (data.share_author_name) {
@@ -1626,7 +1631,7 @@ async function refreshSharePicker(pdir_fid: string | null) {
       sharePicker.isPreferredSharer = sharerFilterConfig.preferred.includes(data.share_author_name)
     }
   } finally {
-    sharePicker.loading = false
+    if (requestId === sharePicker.requestId) sharePicker.loading = false
   }
 }
 
@@ -1651,6 +1656,7 @@ function onShareRowClick(row: SharePreviewItem) {
 }
 
 function pickShareFolderCurrent() {
+  if (sharePicker.loading) return
   const current = sharePicker.stack.at(-1)
   if (current?.pdir_fid && current?.name !== '当前目录') {
     state.shareurl = getShareurl(sharePicker.root_shareurl, { fid: current.pdir_fid, name: current.name })
@@ -2412,7 +2418,7 @@ async function submitSaveTemplate() {
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
           <el-button v-if="sharePicker.stack.length" @click="goShareBack">返回上级</el-button>
-          <el-button type="primary" @click="pickShareFolderCurrent">使用当前文件夹</el-button>
+          <el-button type="primary" :disabled="sharePicker.loading" @click="pickShareFolderCurrent">使用当前文件夹</el-button>
         </div>
       </template>
     </el-dialog>

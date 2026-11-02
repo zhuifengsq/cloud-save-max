@@ -985,6 +985,9 @@ def post_share_preview(payload: SharePreviewIn, db: Session = Depends(get_db)):
         raise bad_request('TASK_SHARE_TOKEN_FAILED', str(message))
     pdir_fid = payload.pdir_fid if payload.pdir_fid is not None else (extracted_pdir_fid or "")
     detail = adapter.get_detail(pwd_id, stoken, pdir_fid or "")
+    if not isinstance(detail, dict) or detail.get("code") not in (None, 0, "0"):
+        message = detail.get("message") if isinstance(detail, dict) else None
+        raise bad_request('TASK_SHARE_DETAIL_FAILED', str(message or '读取分享目录失败，请重试'))
     data = (detail or {}).get("data") or {}
     if isinstance(data, dict):
         resolved = str(data.get("resolved_pdir_fid") or "").strip()

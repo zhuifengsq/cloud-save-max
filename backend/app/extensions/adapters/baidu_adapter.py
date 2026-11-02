@@ -608,18 +608,26 @@ class BaiduAdapter(BaseCloudDriveAdapter):
         # 更新 cookies
         self._session.cookies.update(resp.cookies.get_dict())
 
-        # 解析 yunData.setData 或 locals.mset
-        match = re.search(r"(?:yunData\.setData|locals\.mset)\((.+?)\);", html)
-        if not match:
-            logger.error("[Baidu] 无法解析分享页面数据")
-            return {}
-
-        try:
-            shared_data = json.loads(match.group(1))
-            return shared_data
-        except json.JSONDecodeError as e:
-            logger.error(f"[Baidu] 解析分享数据 JSON 失败: {e}")
-            return {}
+        # 新版分享页将数据放在独立 JSON script 中；兼容旧版函数调用。
+        # raw_decode 不会被 JSON 字符串里的 `);` 或换行截断。
+        decoder = json.JSONDecoder()
+        candidates = [
+            html[match.end():].lstrip()
+            for match in re.finditer(r"(?:yunData\.setData|locals\.mset)\s*\(", html)
+        ]
+        candidates.extend(
+            match.group(1).strip()
+            for match in re.finditer(r"<script\b[^>]*>(.*?)</script\s*>", html, re.I | re.S)
+            if match.group(1).lstrip().startswith("{")
+        )
+        for candidate in candidates:
+            try:
+                shared_data, _ = decoder.raw_decode(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(shared_data, dict) and "file_list" in shared_data:
+                return shared_data
+        raise ValueError("无法读取百度分享文件列表，请检查分享链接、提取码或账号状态")
 
     def _api_list_shared_paths(
         self,
@@ -901,12 +909,7 @@ class BaiduAdapter(BaseCloudDriveAdapter):
             # 获取分享数据
             shared_data = self._api_shared_paths(share_url)
             if not shared_data:
-                return {
-                    "code": 0,
-                    "message": "success",
-                    "data": {"list": [], "full_path": []},
-                    "metadata": {"_total": 0},
-                }
+                raise ValueError("无法读取百度分享文件列表")
 
             uk = shared_data.get("share_uk") or shared_data.get("uk")
             if uk:
