@@ -212,6 +212,8 @@ const sharePicker = reactive({
   root_shareurl: '' as string,
   pdir_fid: null as string | null,
   stack: [] as Array<{ name: string; pdir_fid: string }>,
+  // 记住每个分享链接选中的目录层级，再次打开弹窗时能还原面包屑名字
+  stackCache: {} as Record<string, Array<{ name: string; pdir_fid: string }>>,
   items: [] as SharePreviewItem[],
   sharerName: '' as string,
   isPreferredSharer: false,
@@ -230,6 +232,7 @@ const saveAuto = reactive({
   tasksLoading: false,
   tasks: null as TaskItem[] | null,
   tmdbDetailCache: {} as Record<string, any>,
+  folderNameCache: {} as Record<string, string>,
 })
 
 const viewport = reactive({ width: window.innerWidth })
@@ -1043,18 +1046,33 @@ function currentDriveType() {
 function cleanSavepathBase(savepath: string, taskname: string) {
   let p = normalizeSavepath(savepath)
   if (!p) return ''
-  p = p.replace(/\/S\d{1,3}$/i, '')
+  p = p.replace(/\/Season[ _-]?\d{1,3}$/i, '').replace(/\/S\d{1,3}$/i, '')
   const name = String(taskname || '').trim()
   if (!name) return p
   const parts = p.split('/').filter(Boolean)
   const last = String(parts.at(-1) || '')
   if (!last) return p
-  if (last === name) return normalizeSavepath(parts.slice(0, -1).join('/'))
+  if (last === name) return normalizeSavepath(parts.slice(0, -1).join('/')) || '/'
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   if (new RegExp(`^${escaped}\\s*\\(\\d{4}\\)$`).test(last)) {
-    return normalizeSavepath(parts.slice(0, -1).join('/'))
+    return normalizeSavepath(parts.slice(0, -1).join('/')) || '/'
   }
   return p
+}
+
+// 多个历史保存路径的公共前缀（按路径段比较），用于“只看相同部分”
+function commonSavepathPrefix(paths: string[]) {
+  const split = (p: string) => normalizeSavepath(p).split('/').filter(Boolean)
+  if (!paths.length) return ''
+  let prefix = split(paths[0])
+  for (let k = 1; k < paths.length; k += 1) {
+    const cur = split(paths[k])
+    let i = 0
+    while (i < prefix.length && i < cur.length && prefix[i] === cur[i]) i += 1
+    prefix = prefix.slice(0, i)
+    if (!prefix.length) return ''
+  }
+  return prefix.length ? normalizeSavepath(prefix.join('/')) : ''
 }
 
 function existingTaskCategory(task: TaskItem) {
@@ -1085,30 +1103,6 @@ function categoryFromTmdb(mt: string, detail: any) {
   const hasVariety = Array.from(varietyIds).some((id) => ids.has(id)) || Array.from(names).some((n) => n.includes('reality') || n.includes('talk') || n.includes('真人秀') || n.includes('脱口秀'))
   if (hasVariety) return '综艺'
   return '电视剧'
-}
-
-function ensureCategorySegment(base: string, category: string) {
-  const p = normalizeSavepath(base)
-  const c = String(category || '').trim()
-  if (!p || !c) return p
-  const segs = p.split('/').filter(Boolean)
-  if (segs.includes(c)) return p
-  return normalizeSavepath(`${p}/${c}`)
-}
-
-function yearFromTmdbDetail(mt: string, detail: any) {
-  const mediaType = String(mt || '').toLowerCase()
-  const raw = mediaType === 'movie' ? String(detail?.release_date || '') : String(detail?.first_air_date || '')
-  if (raw.length >= 4 && /^\d{4}/.test(raw)) return Number(raw.slice(0, 4))
-  return null
-}
-
-function appendYearSuffix(name: string, year: number | null) {
-  const n = String(name || '').trim()
-  if (!n) return ''
-  if (!year || !Number.isFinite(year) || year < 1900 || year > 2100) return n
-  if (/\(\d{4}\)\s*$/.test(n)) return n
-  return `${n}(${year})`
 }
 
 async function ensureTasksLoaded() {
@@ -1144,6 +1138,56 @@ async function getTmdbDetailForCurrent() {
   }
 }
 
+function normFolderName(value: string) {
+  return String(value || '').toLowerCase().replace(/\s+/g, '')
+}
+
+// 取保存路径最后一级的文件夹名：
+// 1) 用户刚在“选择文件夹”里选中的那一层，直接用它的名字；
+// 2) 链接带 fid 但不知道名字时返回 ''，由调用方退回任务名；
+// 3) 根链接把链接当根目录，取里面的第一层文件夹（唯一一个就用它，多个按任务名匹配）。
+async function shareTopFolderName(url: string, accountName: string | null) {
+  const u = String(url || '').trim()
+  if (!u || !detectDriveTypeByUrl(u)) return ''
+  const picked = sharePicker.stackCache[u]?.at(-1)?.name
+  if (picked && picked !== '当前目录') return picked
+  const fidInUrl = extractShareFid(u)
+  if (fidInUrl) {
+    // 链接带 fid：优先用上次选目录时记在任务里的名字（刷新页面/重新打开任务后仍然有效）
+    const saved = (state.extra as any)?.share_folder
+    const savedName = String(saved?.name || '').trim()
+    if (saved && String(saved?.fid || '') === String(fidInUrl) && savedName) return savedName
+    return ''
+  }
+  // 链接类型和所选账号不一致时，让后端按链接类型挑默认账号
+  const accountForPreview = driveTypeForAccountName(accountName) === detectDriveTypeByUrl(u) ? accountName : null
+  const key = `${accountForPreview || ''}|${u}`
+  if (key in saveAuto.folderNameCache) return saveAuto.folderNameCache[key]
+  let name = ''
+  try {
+    const data = await previewShare({ shareurl: u, account_name: accountForPreview, max_items: 200, silent: true })
+    const dirs = (data.items || [])
+      .filter((it) => it.is_dir)
+      .map((it) => String(it.name || '').trim())
+      .filter(Boolean)
+    if (dirs.length === 1) {
+      name = dirs[0]
+    } else if (dirs.length > 1) {
+      const target = normFolderName(state.taskname)
+      if (target.length >= 2) {
+        name =
+          dirs.find((d) => normFolderName(d) === target) ||
+          dirs.find((d) => normFolderName(d).includes(target) || target.includes(normFolderName(d))) ||
+          ''
+      }
+    }
+  } catch {
+    name = ''
+  }
+  saveAuto.folderNameCache[key] = name
+  return name
+}
+
 async function autoFillSavepath(runId: number) {
   if (!props.modelValue) return
   if (runId !== shareAuto.runId) return
@@ -1164,53 +1208,52 @@ async function autoFillSavepath(runId: number) {
   const detail = await getTmdbDetailForCurrent()
   if (runId !== shareAuto.runId) return
 
+  const folderName = await shareTopFolderName(String(state.shareurl || '').trim(), state.account_choice || null)
+  if (runId !== shareAuto.runId) return
+  if (saveAuto.touched) return
+  const latestSave = String(state.savepath || '').trim()
+  if (latestSave && latestSave !== saveAuto.lastApplied) return
+
   const mt = String(state.tmdb_media_type || '').toLowerCase()
   const category = categoryFromTmdb(mt, detail)
   const titleFromTmdb = String(detail?.name || detail?.title || '').trim()
-  const baseNameSeg = String(state.taskname || '').trim() || titleFromTmdb
-  const seasonCount = Number(detail?.number_of_seasons) || 0
-  const needSeason = mt === 'tv' && seasonCount > 1
-
-  // 获取最新季数和年份（和 driveSavepathHint 一样的逻辑）
-  let seasonSuffix = ''
-  let year: number | null = yearFromTmdbDetail(mt, detail)  // 默认取首播年份
-  if (needSeason && detail) {
-    const seasons = Array.isArray(detail?.seasons) ? detail.seasons : []
-    const validSeasons = seasons.filter((s: any) => s && Number(s.season_number) > 0)
-    const last = validSeasons.slice(-1)[0]
-    const sn = Number(last?.season_number) || 1
-    seasonSuffix = `/Season ${sn}`
-    // 年份取最新季的播出年份，没有则取剧的首播年份
-    const seasonAirDate = String(last?.air_date || '')
-    if (seasonAirDate.length >= 4 && /^\d{4}/.test(seasonAirDate)) {
-      year = Number(seasonAirDate.slice(0, 4))
-    }
-  }
-  const nameSeg = appendYearSuffix(baseNameSeg, year)
-  if (!nameSeg) return
+  // 末尾不再拼接 (年份) 和 /Season N
+  const nameSeg = String(state.taskname || '').trim() || titleFromTmdb
+  if (!nameSeg && !folderName) return
 
   const filteredByCat = candidates.filter((t) => existingTaskCategory(t) === category)
   const pool = filteredByCat.length ? filteredByCat : candidates
 
-  const counts = new Map<string, number>()
-  const firstIdx = new Map<string, number>()
-  for (let i = 0; i < pool.length; i += 1) {
-    const t = pool[i]
-    const base = cleanSavepathBase(t.savepath, t.taskname)
-    if (!base) continue
-    counts.set(base, (counts.get(base) || 0) + 1)
-    if (!firstIdx.has(base)) firstIdx.set(base, i)
+  const bases = pool.map((t) => cleanSavepathBase(t.savepath, t.taskname)).filter(Boolean)
+  if (!bases.length) return
+  // 先取所有同类历史路径的公共部分（例：/夸克自动转存测试/a、/夸克自动转存测试/b → /夸克自动转存测试）
+  let baseRoot = ''
+  if (bases.length === 1) {
+    const only = bases[0].split('/').filter(Boolean)
+    baseRoot = only.length > 1 ? normalizeSavepath(only.slice(0, -1).join('/')) : '/'
+  } else {
+    baseRoot = commonSavepathPrefix(bases)
   }
-  const sorted = Array.from(counts.entries()).sort((a, b) => {
-    if (b[1] !== a[1]) return b[1] - a[1]
-    return (firstIdx.get(a[0]) || 0) - (firstIdx.get(b[0]) || 0)
-  })
-  const baseRoot = sorted[0]?.[0] || ''
+  if (!baseRoot) {
+    // 公共部分为空（历史分散在完全不同的根下）时，退回出现次数最多的父目录
+    const counts = new Map<string, number>()
+    const firstIdx = new Map<string, number>()
+    for (let i = 0; i < bases.length; i += 1) {
+      const base = bases[i]
+      counts.set(base, (counts.get(base) || 0) + 1)
+      if (!firstIdx.has(base)) firstIdx.set(base, i)
+    }
+    const sorted = Array.from(counts.entries()).sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1]
+      return (firstIdx.get(a[0]) || 0) - (firstIdx.get(b[0]) || 0)
+    })
+    baseRoot = sorted[0]?.[0] || ''
+  }
   if (!baseRoot) return
 
-  let root = ensureCategorySegment(baseRoot, category)
-  root = normalizeSavepath(root)
-  let suggested = normalizeSavepath(`${root}/${nameSeg}${seasonSuffix}`)
+  // 上级目录沿用历史，最后一级优先用链接里的文件夹名，否则用任务名；不插分类段
+  const lastSeg = folderName || nameSeg
+  const suggested = normalizeSavepath(`${normalizeSavepath(baseRoot)}/${lastSeg}`)
 
   saveAuto.applying = true
   try {
@@ -1537,39 +1580,8 @@ function driveGoBack() {
   browseDriveDir(fid === '0' ? '/' : fid)
 }
 
-function driveSavepathHint() {
-  const name = String(state.taskname || '').trim()
-  if (!name) return ''
-  const id = Number(state.tmdb_id) || 0
-  const mt = String(state.tmdb_media_type || '').toLowerCase()
-  if (id <= 0 || (mt !== 'movie' && mt !== 'tv')) return name
-  const key = `${mt}:${id}`
-  const detail = saveAuto.tmdbDetailCache[key]
-  if (!detail) return name
-  const seasons = Array.isArray(detail?.seasons) ? detail.seasons : []
-  const validSeasons = seasons.filter((s: any) => s && Number(s.season_number) > 0)
-  const last = validSeasons.slice(-1)[0]
-  const sn = Number(last?.season_number) || 1
-  // 年份取最新季的播出年份，没有则取剧的首播年份
-  const seasonAirDate = String(last?.air_date || '')
-  let year: number | null = null
-  if (seasonAirDate.length >= 4 && /^\d{4}/.test(seasonAirDate)) {
-    year = Number(seasonAirDate.slice(0, 4))
-  } else {
-    year = yearFromTmdbDetail(mt, detail)
-  }
-  const nameWithYear = appendYearSuffix(name, year)
-  return `${nameWithYear}/Season ${sn}`
-}
-
-function useCurrentDrivePath(withTaskname: boolean) {
-  const base = currentDrivePathLabel()
-  if (withTaskname && state.taskname.trim()) {
-    const hint = driveSavepathHint() || state.taskname.trim()
-    state.savepath = `${base}/${hint}`.replace(/\/+/g, '/')
-  } else {
-    state.savepath = base
-  }
+function useCurrentDrivePath() {
+  state.savepath = currentDrivePathLabel()
   drivePicker.visible = false
 }
 
@@ -1585,7 +1597,35 @@ async function openSharePicker(overrideUrl?: string) {
   sharePicker.sharerName = ''
   sharePicker.isPreferredSharer = false
   const fid = extractShareFid(sharePicker.shareurl)
-  sharePicker.stack = fid ? [{ name: '当前目录', pdir_fid: fid }] : []
+  const cached = fid ? sharePicker.stackCache[url] : undefined
+  if (cached?.length && String(cached[cached.length - 1]?.pdir_fid || '') === String(fid)) {
+    sharePicker.stack = cached.map((x) => ({ ...x }))
+  } else if (fid) {
+    // 没有内存缓存时，先用任务里持久化的目录名，再退回分享根目录列表里找名字
+    const saved = (state.extra as any)?.share_folder
+    const savedName = String(saved?.name || '').trim()
+    if (saved && String(saved?.fid || '') === String(fid) && savedName) {
+      sharePicker.stack = [{ name: savedName, pdir_fid: fid }]
+    } else {
+      let name = '当前目录'
+      try {
+        const root = await previewShare({
+          shareurl: sharePicker.root_shareurl,
+          account_name: state.account_choice || null,
+          max_items: 200,
+          silent: true,
+        })
+        const hit = (root.items || []).find((it) => String(it.fid) === String(fid))
+        if (hit?.name) name = String(hit.name)
+      } catch {
+        // 取不到名字就保持“当前目录”
+      }
+      if (!sharePicker.visible || sharePicker.shareurl !== url) return
+      sharePicker.stack = [{ name, pdir_fid: fid }]
+    }
+  } else {
+    sharePicker.stack = []
+  }
   await refreshSharePicker(null)
 }
 
@@ -1656,27 +1696,33 @@ function onShareRowClick(row: SharePreviewItem) {
 function pickShareFolderCurrent() {
   if (sharePicker.loading) return
   const current = sharePicker.stack.at(-1)
+  let nextUrl = ''
+  let pickedShare = false
   if (current?.pdir_fid && current?.name !== '当前目录') {
-    state.shareurl = getShareurl(sharePicker.root_shareurl, { fid: current.pdir_fid, name: current.name })
-    sharePicker.visible = false
-    ElMessage.success('已选择分享文件夹')
+    nextUrl = getShareurl(sharePicker.root_shareurl, { fid: current.pdir_fid, name: current.name })
+  } else if (extractShareFid(sharePicker.shareurl)) {
+    nextUrl = sharePicker.shareurl
+  } else if (sharePicker.items.length) {
+    // 没有文件夹可选（根目录只有文件），直接使用原始分享链接
+    nextUrl = sharePicker.root_shareurl
+    pickedShare = true
+  } else {
+    ElMessage.warning('请先进入某个文件夹后再选择')
     return
   }
-  const fid = extractShareFid(sharePicker.shareurl)
-  if (fid) {
-    state.shareurl = sharePicker.shareurl
-    sharePicker.visible = false
-    ElMessage.success('已选择分享文件夹')
-    return
+  // 记住这次选中的层级，下次打开能还原面包屑
+  sharePicker.stackCache[nextUrl] = sharePicker.stack.map((x) => ({ ...x }))
+  // 同时把目录名写进任务 extra，页面刷新或重新打开任务后保存路径仍能用这个目录名
+  const pickedFid = extractShareFid(nextUrl)
+  const pickedName = current?.name && current.name !== '当前目录' ? String(current.name).trim() : ''
+  if (pickedFid && pickedName && String(current?.pdir_fid || '') === String(pickedFid)) {
+    state.extra.share_folder = { fid: String(pickedFid), name: pickedName }
+  } else if (!pickedFid) {
+    delete (state.extra as any).share_folder
   }
-  // 没有文件夹可选（根目录只有文件），直接使用原始分享链接
-  if (sharePicker.items.length) {
-    state.shareurl = sharePicker.root_shareurl
-    sharePicker.visible = false
-    ElMessage.success('已选择分享链接')
-    return
-  }
-  ElMessage.warning('请先进入某个文件夹后再选择')
+  state.shareurl = nextUrl
+  sharePicker.visible = false
+  ElMessage.success(pickedShare ? '已选择分享链接' : '已选择分享文件夹')
 }
 
 const weekOptions = [
@@ -1842,6 +1888,20 @@ function applyTemplate(id: number | null) {
   } else if (config.replace !== undefined) {
     state.replace = config.replace
   }
+  // 分享者开关
+  if (config.preferred_only !== undefined) state.addition.preferred_only = Boolean(config.preferred_only)
+  if (config.show_blocked !== undefined) state.addition.show_blocked = Boolean(config.show_blocked)
+  // 运行星期
+  if (config.runweek_mode === 'auto') {
+    state.runweek_mode = 'auto'
+  } else if (config.runweek_mode === 'manual') {
+    state.runweek_mode = 'manual'
+    if (Array.isArray(config.runweek)) {
+      const days = config.runweek.map((d: any) => Number(d)).filter((d: number) => d >= 1 && d <= 7)
+      state.runweek = days
+      manualRunweekBackup.value = clone(days)
+    }
+  }
   ElMessage.success(`已应用模板：${template.name}`)
 }
 
@@ -1872,6 +1932,12 @@ async function submitSaveTemplate() {
   }
   if (state.addition.file_filter) config.file_filter = state.addition.file_filter
   if (state.addition.min_size) config.min_size = state.addition.min_size
+  // 分享者开关（关闭也存，套用模板时能一起关掉）
+  config.preferred_only = Boolean(state.addition.preferred_only)
+  config.show_blocked = Boolean(state.addition.show_blocked)
+  // 运行星期：自动模式只存模式，手动模式连勾选的天一起存
+  config.runweek_mode = state.runweek_mode === 'auto' ? 'auto' : 'manual'
+  if (config.runweek_mode === 'manual') config.runweek = clone(state.runweek || [])
   // 重命名：如果选中了内置规则，保存 key；否则保存实际内容
   if (magicRegex.selectedKey) {
     config.pattern = magicRegex.selectedKey
@@ -2297,8 +2363,7 @@ async function submitSaveTemplate() {
           <el-button :loading="drivePicker.loading" @click="refreshDrivePicker">刷新</el-button>
           <el-button @click="driveGoRoot">根目录</el-button>
           <el-button v-if="drivePicker.paths.length" @click="driveGoBack">返回上级</el-button>
-          <el-button type="primary" @click="useCurrentDrivePath(false)">当前文件夹</el-button>
-          <el-button v-if="state.taskname.trim()" type="primary" @click="useCurrentDrivePath(true)">当前文件夹/{{ driveSavepathHint() }}</el-button>
+          <el-button type="primary" @click="useCurrentDrivePath">当前文件夹</el-button>
         </div>
         <el-breadcrumb separator="/" class="drive-breadcrumb">
           <el-breadcrumb-item>

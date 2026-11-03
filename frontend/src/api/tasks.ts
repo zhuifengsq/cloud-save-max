@@ -119,8 +119,14 @@ export async function previewShare(payload: {
   folder_priority_mode?: string | null
   tmdb_id?: number | null
   tmdb_media_type?: string | null
+  silent?: boolean
 }) {
-  const { data } = await http.post<SharePreviewResponse>('/tasks/share/preview', payload)
+  const { silent, ...body } = payload
+  const { data } = await http.post<SharePreviewResponse>(
+    '/tasks/share/preview',
+    body,
+    silent ? { headers: { 'X-Silent-Toast': '1' } } : undefined,
+  )
   return data
 }
 
