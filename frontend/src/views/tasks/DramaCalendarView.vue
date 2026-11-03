@@ -7,6 +7,7 @@ import { fetchTasks } from '@/api/tasks'
 import type { TMDBDetail } from '@/types/media'
 import type { TaskItem } from '@/types/tasks'
 import { DRIVE_TYPE_META, detectDriveTypeByUrl, type DriveType } from '@/utils/driveType'
+import { resolveDramaEpisodeProgress, tvAiredEpisodesFromDetail, tvTotalEpisodesFromDetail } from '@/utils/dramaEpisodeProgress'
 
 type WeekdayKey = 1 | 2 | 3 | 4 | 5 | 6 | 7
 
@@ -98,33 +99,6 @@ async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T
   await Promise.all(runners)
 }
 
-function tvTotalEpisodesFromDetail(detail: any) {
-  const n = detail?.number_of_episodes
-  if (typeof n === 'number' && n > 0) return n
-  const seasons = Array.isArray(detail?.seasons) ? detail.seasons : []
-  const sum = seasons
-    .filter((s: any) => s && typeof s === 'object' && Number(s.season_number) > 0)
-    .reduce((acc: number, s: any) => acc + (Number(s.episode_count) || 0), 0)
-  return sum > 0 ? sum : null
-}
-
-function tvAiredEpisodesFromDetail(detail: any, total: number | null) {
-  const status = String(detail?.status || '').toLowerCase()
-  if (status === 'ended' && typeof total === 'number' && total > 0) return total
-  const last = detail?.last_episode_to_air
-  if (!last || typeof last !== 'object') return null
-  const seasonNumber = Number(last.season_number) || 0
-  const episodeNumber = Number(last.episode_number) || 0
-  if (seasonNumber <= 0 || episodeNumber <= 0) return null
-
-  const seasons = Array.isArray(detail?.seasons) ? detail.seasons : []
-  const prev = seasons
-    .filter((s: any) => s && typeof s === 'object' && Number(s.season_number) > 0 && Number(s.season_number) < seasonNumber)
-    .reduce((acc: number, s: any) => acc + (Number(s.episode_count) || 0), 0)
-  const aired = prev + episodeNumber
-  return aired > 0 ? aired : null
-}
-
 function tvProgressTextFromDetail(detail: any) {
   const seasons = typeof detail?.number_of_seasons === 'number' ? detail.number_of_seasons : null
   const total = tvTotalEpisodesFromDetail(detail)
@@ -160,14 +134,6 @@ function tvProgressPercentFromDetail(detail: any) {
   if (t <= 0) return null
   const pct = Math.floor((a / t) * 100)
   return Math.max(0, Math.min(100, pct))
-}
-
-function tvAiredTotalFromDetail(detail: any) {
-  const total = tvTotalEpisodesFromDetail(detail)
-  const aired = tvAiredEpisodesFromDetail(detail, total)
-  if (aired == null) return null
-  const a = Number(aired) || 0
-  return a > 0 ? a : null
 }
 
 function displayTitle(task: TaskItem, detail: TMDBDetail | null) {
@@ -616,16 +582,7 @@ const schedules = computed(() => {
     const title = displayTitle(task, detail || null)
     const posterUrl = posterUrlFromDetail(detail || null)
     const episodeNumbersByDate = mt === 'tv' && tmdbId > 0 ? episodeNumbersById[tmdbId] || {} : {}
-    const totalEpisodes = (() => {
-      const data = detail?.data || null
-      if (!data || mt !== 'tv') return null
-      return tvTotalEpisodesFromDetail(data)
-    })()
-    const baseAiredTotal = (() => {
-      const data = detail?.data || null
-      if (!data || mt !== 'tv') return null
-      return tvAiredTotalFromDetail(data)
-    })()
+    const { totalEpisodes, airedEpisode: baseAiredTotal, savedEpisode } = resolveDramaEpisodeProgress(task.extra, detail?.data)
     const nextEpisodeDate = (() => {
       const data = detail?.data || null
       if (!data || mt !== 'tv') return null
@@ -685,11 +642,6 @@ const schedules = computed(() => {
       return brief || progressFromDetail(task, detail || null)
     })()
     const nextAirDate = nextAirDateFromDetail(detail || null)
-    const savedEpisode = (() => {
-      const latest = (task.extra as any)?.saved_latest
-      const ep = Number(latest?.episode)
-      return Number.isFinite(ep) && ep > 0 ? ep : null
-    })()
 
     list.push({
       task,

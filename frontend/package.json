@@ -15,7 +15,8 @@
     "element-plus": "^2.14.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.32",
-    "vue-router": "^5.0.6"
+    "vue-router": "^5.0.6",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/node": "^24.12.2",

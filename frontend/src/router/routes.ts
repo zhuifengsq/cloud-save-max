@@ -90,6 +90,12 @@ export const appRoutes: RouteRecordRaw[] = [
         meta: { title: '搜索源管理', icon: 'Search', permissions: [PLUGIN_READ] },
       },
       {
+        path: 'tools/link-extractor',
+        name: 'LinkExtractor',
+        component: () => import('@/views/tools/LinkExtractorView.vue'),
+        meta: { title: '链接整理', icon: 'Link', permissions: [TASK_READ] },
+      },
+      {
         path: 'extensions/notifications',
         name: 'Notifications',
         component: () => import('@/views/extensions/NotificationConfigView.vue'),

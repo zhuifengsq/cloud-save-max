@@ -335,9 +335,9 @@ const weiboDriveTags = computed(() => {
 
 const weiboLine1 = computed(() => {
   const title = draft.title.trim() || draft.taskname.trim() || '未命名'
-  const episode = draft.episode.trim() || '1'
+  const episode = draft.episode.trim()
   const quality = weiboQuality.value.trim() || '4K高码'
-  return `${title} 更${episode}集资源${quality}【已更】`
+  return `${title} ${episode ? `更${episode}集` : ''}资源${quality}【已更】`
 })
 
 const weiboText1 = computed(() => {
@@ -429,8 +429,7 @@ function goBack() {
             </div>
             <div class="copy-field copy-field--episode">
               <label>更几集</label>
-              <el-input v-model="draft.episode" placeholder="1" />
-              <div class="copy-field__hint">默认取 TMDB 最新已播集，可手动改</div>
+              <el-input v-model="draft.episode" placeholder="未知，可手动填写" />
             </div>
             <div class="copy-field copy-field--year">
               <label>画质</label>
@@ -498,8 +497,7 @@ function goBack() {
             </div>
             <div class="copy-field copy-field--episode">
               <label>更新集数</label>
-              <el-input v-model="draft.episode" placeholder="4" />
-              <div class="copy-field__hint">默认取 TMDB 最新已播集</div>
+              <el-input v-model="draft.episode" placeholder="未知，可手动填写" />
             </div>
           </div>
 

@@ -15,6 +15,7 @@ import type { TaskSuggestionItem } from '@/types/resourceSearch'
 import type { DriveBrowseItem, MagicRegexRule, SharePreviewItem, TaskItem } from '@/types/tasks'
 import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
+import { resolveDramaEpisodeProgress } from '@/utils/dramaEpisodeProgress'
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w185'
 
@@ -810,23 +811,15 @@ async function openCopywriting() {
   let overview = ''
   let title = state.taskname || ''
   let year = ''
-  let tmdbEpisode = ''
+  let tmdbData: Record<string, any> | null = null
   try {
     const detail = await fetchTMDBDetail(mediaType, Number(state.tmdb_id))
     const data = (detail as any)?.data || {}
+    tmdbData = data
     posterPath = String(data.poster_path || '')
     overview = String(data.overview || '')
     title = String(data.name || data.title || title)
     year = String(data.first_air_date || data.release_date || '').slice(0, 4)
-    if (mediaType === 'tv') {
-      const lastEpisode = data.last_episode_to_air
-      const lastNumber = lastEpisode && Number(lastEpisode.episode_number)
-      if (lastNumber > 0) {
-        tmdbEpisode = String(lastNumber)
-      } else if (Number(data.number_of_episodes) > 0) {
-        tmdbEpisode = String(Number(data.number_of_episodes))
-      }
-    }
   } catch {
     /* 忽略：拿不到详情也能生成纯文本 */
   }
@@ -871,7 +864,7 @@ async function openCopywriting() {
     /* 忽略：拿不到任务列表时只带当前任务的链接 */
   }
 
-  const savedLatest = (state.extra?.saved_latest || {}) as Record<string, any>
+  const episode = mediaType === 'tv' ? resolveDramaEpisodeProgress(state.extra, tmdbData).updatedEpisode : null
   const draft = {
     title,
     year,
@@ -879,7 +872,7 @@ async function openCopywriting() {
     mediaType,
     posterPath,
     overview,
-    episode: tmdbEpisode || String(savedLatest.episode || ''),
+    episode: episode != null ? String(episode) : '',
     links,
     taskname: String(state.taskname || ''),
     savedAt: Date.now(),
