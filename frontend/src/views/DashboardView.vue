@@ -9,10 +9,16 @@ import FailureReason from '@/components/dashboard/FailureReason.vue'
 import { failureStageLabel } from '@/utils/failureMessage'
 import { clearDramaFailures, fetchCapacityOverview, fetchDramaOverview } from '@/api/dashboard'
 import { refreshDriveAccountProfiles } from '@/api/extensions'
-import { fetchTMDBDetail } from '@/api/media'
-import { fetchTasks } from '@/api/tasks'
+import { loadSharedTasks } from '@/stores/taskCache'
+import {
+  TMDB_DETAIL_REFRESH_MS,
+  ensureTmdbDetails,
+  invalidateTmdbDetails,
+  tmdbDetailIdsNeedingRefresh,
+  tmdbDetailsById,
+} from '@/stores/tmdbDetailCache'
+import { getTasksVersion, subscribeTasksChanged } from '@/utils/taskChangeBus'
 import type { CapacityOverview, DramaOverview } from '@/types/dashboard'
-import type { TMDBDetail } from '@/types/media'
 import type { TaskItem } from '@/types/tasks'
 import { formatBytes, formatDateTime, formatPercent } from '@/utils/capacity'
 
@@ -23,13 +29,18 @@ const dtfBeijing = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 })
 
+defineOptions({ name: 'DashboardView' })
+
+const DRAMA_REFRESH_MS = 60 * 1000
+const CAPACITY_REFRESH_MS = 5 * 60 * 1000
+const CHECK_TICK_MS = 60 * 1000
+
 const dramaDays = ref(30)
 const dramaLoading = ref(false)
 const dramaRefreshing = ref(false)
 const dramaOverview = ref<DramaOverview | null>(null)
 const dramaTasks = ref<TaskItem[]>([])
-const tmdbDetailsById = reactive<Record<number, TMDBDetail | null | undefined>>({})
-const tmdbDetailPromises = reactive<Record<number, Promise<TMDBDetail | null> | undefined>>({})
+const tmdbLoading = ref(false)
 const trendDialogVisible = ref(false)
 const showAllFailures = ref(false)
 
@@ -61,31 +72,25 @@ function addDays(d: Date, delta: number) {
   return copy
 }
 
-async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
-  const queue = [...items]
-  const runners: Promise<void>[] = []
-  const runOne = async () => {
-    while (queue.length) {
-      const it = queue.shift()
-      if (it === undefined) return
-      await worker(it)
-    }
-  }
-  for (let i = 0; i < Math.max(1, limit); i += 1) {
-    runners.push(runOne())
-  }
-  await Promise.all(runners)
-}
-
-async function loadDrama() {
-  dramaLoading.value = true
+async function loadDrama(opts: { silent?: boolean } = {}) {
+  const silent = opts.silent === true
+  const versionAtStart = getTasksVersion()
+  if (!silent) dramaLoading.value = true
   try {
-    const [overviewData, allTasks] = await Promise.all([fetchDramaOverview(dramaDays.value), fetchTasks()])
+    // 任务列表与追剧日历共用缓存，这里始终取最新一份，避免看到别处已删除的任务
+    const [overviewData, allTasks] = await Promise.all([
+      fetchDramaOverview(dramaDays.value),
+      loadSharedTasks({ maxAgeMs: 0 }),
+    ])
     dramaOverview.value = overviewData
     dramaTasks.value = allTasks.filter((t) => t.task_type === 'drama')
-    await loadTMDBDetails()
+    dramaLoadedAt = Date.now()
+    loadedTasksVersion = versionAtStart
+  } catch (e: any) {
+    // 静默刷新失败时保留原有内容，不打搅用户
+    if (!silent) ElMessage.error(e?.response?.data?.message || e?.message || '追剧数据加载失败')
   } finally {
-    dramaLoading.value = false
+    if (!silent) dramaLoading.value = false
   }
 }
 
@@ -105,7 +110,7 @@ async function clearFailures() {
   try {
     const res = await clearDramaFailures(0)
     ElMessage.success(`已清理 ${res.deleted} 条失败记录`)
-    await loadDrama()
+    await refreshDrama({ silent: true })
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message || e?.message || '清理失败')
   } finally {
@@ -116,34 +121,70 @@ async function clearFailures() {
 async function handleRefreshDrama() {
   dramaRefreshing.value = true
   try {
-    await loadDrama()
+    // 手动刷新时丢弃 TMDB 资料缓存，之前失败过的剧集也一并重试
+    invalidateTmdbDetails()
+    await refreshDrama({ forceDetails: true })
     ElMessage.success('追剧数据已刷新')
   } finally {
     dramaRefreshing.value = false
   }
 }
 
-async function loadTMDBDetails() {
-  const tasks = dramaTasks.value
-  const ids = Array.from(
+let tmdbPending = 0
+let dramaRefreshPromise: Promise<void> | null = null
+let dramaLoadedAt = 0
+let capacityLoadedAt = 0
+let loadedTasksVersion = -1
+let dashboardActive = false
+let firstActivated = true
+let checkTimer: number | null = null
+let changeTimer: number | null = null
+let unsubscribeTasksChanged: (() => void) | null = null
+
+function dramaTmdbIds() {
+  return Array.from(
     new Set(
-      tasks
+      dramaTasks.value
         .filter((t) => String(t.tmdb_media_type || '').toLowerCase() === 'tv')
         .map((t) => Number(t.tmdb_id) || 0)
-        .filter((n) => Number.isFinite(n) && n > 0),
+        .filter((id) => id > 0),
     ),
   )
+}
+
+// TMDB 资料与追剧日历共用缓存，独立 30 分钟有效期。
+// 拉取失败不会写入缓存，下次调用（包括“刷新追剧数据”）会重新尝试。
+async function loadTMDBDetails(opts: { force?: boolean } = {}) {
+  const ids = dramaTmdbIds()
   if (!ids.length) return
-  await runWithConcurrency(ids, 4, async (id) => {
-    if (tmdbDetailsById[id] !== undefined) return
-    if (!tmdbDetailPromises[id]) {
-      tmdbDetailPromises[id] = fetchTMDBDetail('tv', id)
-        .then((data) => data)
-        .catch(() => null)
-    }
-    const detail = await tmdbDetailPromises[id]
-    tmdbDetailsById[id] = detail
+  tmdbPending += 1
+  tmdbLoading.value = true
+  try {
+    await ensureTmdbDetails(ids, {
+      force: opts.force === true,
+      maxAgeMs: TMDB_DETAIL_REFRESH_MS,
+      concurrency: 4,
+    })
+  } finally {
+    tmdbPending -= 1
+    tmdbLoading.value = tmdbPending > 0
+  }
+}
+
+// 同一时间只跑一次追剧数据刷新；手动刷新会排在静默刷新之后重跑
+function refreshDrama(opts: { silent?: boolean; forceDetails?: boolean } = {}): Promise<void> {
+  if (dramaRefreshPromise) {
+    if (opts.silent) return dramaRefreshPromise
+    return dramaRefreshPromise.catch(() => {}).then(() => refreshDrama(opts))
+  }
+  dramaRefreshPromise = (async () => {
+    await loadDrama(opts)
+    // 追剧统计先显示，TMDB 资料随后补齐，不让整块区域一起等待
+    await loadTMDBDetails({ force: opts.forceDetails })
+  })().finally(() => {
+    dramaRefreshPromise = null
   })
+  return dramaRefreshPromise
 }
 
 const contentSummary = computed(() => {
@@ -341,12 +382,18 @@ const hiddenFailures = computed(() => failures.value.slice(3))
 
 const trendPoints = computed(() => dramaOverview.value?.trend || [])
 
-async function loadCapacityOverview() {
-  capacityLoading.value = true
+// 容量概览只读取后端已保存的快照，不会真的去查询网盘；
+// 真正查询网盘仍然只由“刷新容量”按钮或后台调度触发。
+async function loadCapacityOverview(opts: { silent?: boolean } = {}) {
+  const silent = opts.silent === true
+  if (!silent) capacityLoading.value = true
   try {
     capacityOverview.value = await fetchCapacityOverview()
+    capacityLoadedAt = Date.now()
+  } catch (e: any) {
+    if (!silent) ElMessage.error(e?.response?.data?.message || e?.message || '容量数据加载失败')
   } finally {
-    capacityLoading.value = false
+    if (!silent) capacityLoading.value = false
   }
 }
 
@@ -354,23 +401,125 @@ async function handleRefreshCapacity() {
   capacityRefreshing.value = true
   try {
     await refreshDriveAccountProfiles()
-    await loadCapacityOverview()
+    await loadCapacityOverview({ silent: true })
     ElMessage.success('容量快照已刷新')
   } finally {
     capacityRefreshing.value = false
   }
 }
 
+function stopAutoCheck() {
+  if (checkTimer !== null) {
+    window.clearInterval(checkTimer)
+    checkTimer = null
+  }
+}
+
+function refreshStaleDetails() {
+  const ids = dramaTmdbIds()
+  if (!ids.length) return
+  if (!tmdbDetailIdsNeedingRefresh(ids, TMDB_DETAIL_REFRESH_MS).length) return
+  void loadTMDBDetails()
+}
+
+// 页面可见时每分钟检查一次：统计类数据 60 秒、TMDB 资料 30 分钟、容量快照 5 分钟
+function startAutoCheck() {
+  stopAutoCheck()
+  checkTimer = window.setInterval(() => {
+    if (!dashboardActive) return
+    if (document.visibilityState !== 'visible') return
+    if (Date.now() - dramaLoadedAt >= DRAMA_REFRESH_MS) void refreshDrama({ silent: true })
+    if (Date.now() - capacityLoadedAt >= CAPACITY_REFRESH_MS) void loadCapacityOverview({ silent: true })
+    refreshStaleDetails()
+  }, CHECK_TICK_MS)
+}
+
+// 从别的页面切回来、或标签页重新可见时，只补该补的，不重复拉刚取过的数据
+function catchUpIfStale() {
+  if (getTasksVersion() !== loadedTasksVersion || Date.now() - dramaLoadedAt >= DRAMA_REFRESH_MS) {
+    void refreshDrama({ silent: true })
+  }
+  if (Date.now() - capacityLoadedAt >= CAPACITY_REFRESH_MS) void loadCapacityOverview({ silent: true })
+  refreshStaleDetails()
+}
+
+function handleVisibilityChange() {
+  if (!dashboardActive) return
+  if (document.visibilityState === 'visible') {
+    startAutoCheck()
+    catchUpIfStale()
+    return
+  }
+  stopAutoCheck()
+}
+
+// 任务增删改/执行完成后立即刷新相关数据，合并短时间内的多次写操作
+function scheduleDramaRefresh() {
+  if (changeTimer !== null) window.clearTimeout(changeTimer)
+  changeTimer = window.setTimeout(() => {
+    changeTimer = null
+    if (!dashboardActive || document.visibilityState !== 'visible') return
+    void refreshDrama({ silent: true })
+  }, 300)
+}
+
+function onShareLogsCleared() {
+  for (const task of dramaTasks.value) {
+    if (task.extra) delete task.extra.shareurl_update_logs
+  }
+  void refreshDrama({ silent: true })
+}
+
 watch(
   () => dramaDays.value,
   () => {
-    loadDrama()
+    void refreshDrama()
   },
 )
 
 onMounted(() => {
-  loadDrama()
-  loadCapacityOverview()
+  void refreshDrama()
+  void loadCapacityOverview()
+  startAutoCheck()
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onActivated(() => {
+  dashboardActive = true
+  if (!unsubscribeTasksChanged) {
+    unsubscribeTasksChanged = subscribeTasksChanged(() => {
+      if (!dashboardActive) return
+      scheduleDramaRefresh()
+    })
+  }
+  // 首次挂载时 onMounted 已经加载过，不用再来一次
+  if (firstActivated) {
+    firstActivated = false
+    return
+  }
+  startAutoCheck()
+  catchUpIfStale()
+})
+
+onDeactivated(() => {
+  dashboardActive = false
+  stopAutoCheck()
+  if (changeTimer !== null) {
+    window.clearTimeout(changeTimer)
+    changeTimer = null
+  }
+})
+
+onBeforeUnmount(() => {
+  dashboardActive = false
+  stopAutoCheck()
+  if (changeTimer !== null) {
+    window.clearTimeout(changeTimer)
+    changeTimer = null
+  }
+  unsubscribeTasksChanged?.()
+  unsubscribeTasksChanged = null
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
@@ -487,7 +636,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <ShareLinkHistory :tasks="dramaTasks" @cleared="dramaTasks.forEach(task => delete task.extra.shareurl_update_logs)" />
+        <ShareLinkHistory :tasks="dramaTasks" @cleared="onShareLogsCleared" />
 
         <div v-if="failures.length" class="failures-card">
           <div class="failures-card__head">
@@ -546,7 +695,9 @@ onMounted(() => {
             <div class="section-header__eyebrow">Upcoming</div>
             <h2>即将播出</h2>
             <div class="section-header__desc">
-              <span>{{ upcomingAiring.length ? `未来 7 天 ${upcomingAiring.length} 部` : '未来 7 天暂无' }}</span>
+              <span v-if="upcomingAiring.length">未来 7 天 {{ upcomingAiring.length }} 部</span>
+              <span v-else-if="tmdbLoading">TMDB 资料加载中…</span>
+              <span v-else>未来 7 天暂无</span>
             </div>
           </div>
         </div>

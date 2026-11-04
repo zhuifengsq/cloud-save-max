@@ -269,7 +269,7 @@ watch(
 
       <div class="app-main">
         <RouterView v-slot="{ Component }">
-          <keep-alive :include="['DramaCalendarView']">
+          <keep-alive :include="['DashboardView', 'DramaCalendarView']">
             <component :is="Component" />
           </keep-alive>
         </RouterView>

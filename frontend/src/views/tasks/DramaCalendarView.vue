@@ -2,8 +2,16 @@
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 
-import { fetchTMDBDetail, invalidateTMDBDetailCache } from '@/api/media'
-import { fetchTasks } from '@/api/tasks'
+import {
+  TMDB_DETAIL_REFRESH_MS,
+  ensureTmdbDetails,
+  getTmdbDetailEntry,
+  getTmdbDetailStoreVersion,
+  invalidateTmdbDetails,
+  tmdbDetailIdsNeedingRefresh,
+  tmdbDetailsById,
+} from '@/stores/tmdbDetailCache'
+import { loadSharedTasks } from '@/stores/taskCache'
 import type { TMDBDetail } from '@/types/media'
 import type { TaskItem } from '@/types/tasks'
 import { DRIVE_TYPE_META, detectDriveTypeByUrl, type DriveType } from '@/utils/driveType'
@@ -56,8 +64,9 @@ function posterSource(url: string) {
 
 const loading = ref(false)
 const tasks = ref<TaskItem[]>([])
-const detailsById = reactive<Record<number, TMDBDetail | undefined>>({})
-const detailPromises = reactive<Record<number, Promise<TMDBDetail | null> | undefined>>({})
+// 详情与工作台共用一份缓存；这里只维护由它派生出的日历映射
+const detailsById = tmdbDetailsById
+const derivedVersion: Record<number, number> = {}
 const episodeDatesById = reactive<Record<number, Date[] | undefined>>({})
 const episodeNumbersById = reactive<Record<number, Record<string, number[]> | undefined>>({})
 const inferredWeekdaysById = reactive<Record<number, WeekdayKey[] | undefined>>({})
@@ -84,22 +93,6 @@ function diffDays(a: Date, b: Date) {
   const aa = new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime()
   const bb = new Date(b.getFullYear(), b.getMonth(), b.getDate()).getTime()
   return Math.round((aa - bb) / 86400000)
-}
-
-async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
-  const queue = [...items]
-  const runners: Promise<void>[] = []
-  const runOne = async () => {
-    while (queue.length) {
-      const it = queue.shift()
-      if (it === undefined) return
-      await worker(it)
-    }
-  }
-  for (let i = 0; i < Math.max(1, limit); i += 1) {
-    runners.push(runOne())
-  }
-  await Promise.all(runners)
 }
 
 function tvProgressTextFromDetail(detail: any) {
@@ -523,38 +516,25 @@ function relativeDayText(target: Date) {
   return `${diff}天后`
 }
 
-const detailLoadedAt: Record<number, number> = {}
-
-async function ensureTMDBDetailCached(tmdbId: number, opts: { force?: boolean } = {}): Promise<TMDBDetail | null> {
-  const id = Number(tmdbId) || 0
-  if (id <= 0) return null
-  if (!opts.force && detailsById[id]) return detailsById[id]
-  if (detailPromises[id]) return detailPromises[id]
-  detailPromises[id] = (async () => {
-    try {
-      const data = await fetchTMDBDetail('tv', id, opts.force ? { force: true } : undefined)
-      try {
-        const dates = extractEpisodeDatesFromDetailData(data?.data || {})
-        episodeDatesById[id] = dates
-        episodeNumbersById[id] = extractEpisodeNumbersByDate(data?.data || {})
-        inferredWeekdaysById[id] = inferWeekdaysFromEpisodeDates(dates)
-        inferredCycleDaysById[id] = inferCycleDaysFromEpisodeDates(dates)
-        const obj: any = data?.data
-        if (obj && typeof obj === 'object') {
-          delete obj.seasons_full
-          delete obj.seasons_full_meta
-        }
-      } catch {}
-      detailsById[id] = data
-      detailLoadedAt[id] = Date.now()
-      return data
-    } catch {
-      return detailsById[id] ?? null
-    } finally {
-      delete detailPromises[id]
+// 从共享详情里抽取日历需要的映射，按详情版本号判断要不要重算
+function ensureDerived(id: number) {
+  const entry = getTmdbDetailEntry(id)
+  if (!entry) return
+  if (derivedVersion[id] === entry.version) return
+  const data: any = entry.detail?.data || {}
+  try {
+    const dates = extractEpisodeDatesFromDetailData(data)
+    episodeDatesById[id] = dates
+    episodeNumbersById[id] = extractEpisodeNumbersByDate(data)
+    inferredWeekdaysById[id] = inferWeekdaysFromEpisodeDates(dates)
+    inferredCycleDaysById[id] = inferCycleDaysFromEpisodeDates(dates)
+    if (data && typeof data === 'object') {
+      // 已抽成日历映射，不再保留整季明细，省内存
+      delete data.seasons_full
+      delete data.seasons_full_meta
     }
-  })()
-  return detailPromises[id]
+    derivedVersion[id] = entry.version
+  } catch {}
 }
 
 const enabledDramaTasks = computed(() =>
@@ -1131,7 +1111,6 @@ function handleSelectCell(cell: { key: string; inMonth: boolean }) {
 }
 
 const TASK_CHECK_INTERVAL_MS = 5 * 60 * 1000
-const TMDB_DETAIL_REFRESH_MS = 30 * 60 * 1000
 const CHECK_TICK_MS = 60 * 1000
 
 let lastLoadedAt = 0
@@ -1140,16 +1119,15 @@ let refreshPromise: Promise<void> | null = null
 let checkTimer: number | null = null
 let firstActivated = true
 let calendarActive = false
+let derivedStoreVersion = -1
 let unsubscribeTasksChanged: (() => void) | null = null
 
 function clearDetailCache() {
-  for (const k of Object.keys(detailsById)) delete detailsById[Number(k)]
-  for (const k of Object.keys(detailPromises)) delete detailPromises[Number(k)]
   for (const k of Object.keys(episodeDatesById)) delete episodeDatesById[Number(k)]
   for (const k of Object.keys(episodeNumbersById)) delete episodeNumbersById[Number(k)]
   for (const k of Object.keys(inferredWeekdaysById)) delete inferredWeekdaysById[Number(k)]
   for (const k of Object.keys(inferredCycleDaysById)) delete inferredCycleDaysById[Number(k)]
-  for (const k of Object.keys(detailLoadedAt)) delete detailLoadedAt[Number(k)]
+  for (const k of Object.keys(derivedVersion)) delete derivedVersion[Number(k)]
 }
 
 async function performLoad(opts: { silent?: boolean; forceDetails?: boolean }) {
@@ -1158,7 +1136,7 @@ async function performLoad(opts: { silent?: boolean; forceDetails?: boolean }) {
   const versionAtStart = getTasksVersion()
   if (!silent) loading.value = true
   try {
-    const all = await fetchTasks()
+    const all = await loadSharedTasks({ maxAgeMs: 0 })
     tasks.value = all
 
     const ids = Array.from(
@@ -1171,13 +1149,16 @@ async function performLoad(opts: { silent?: boolean; forceDetails?: boolean }) {
       ),
     )
 
-    // 任务数据每次都要更新；TMDB 资料变化慢，只在缺失或超过独立有效期时才重新拉
-    const needsDetail = ids.filter(
-      (id) => forceDetails || !detailsById[id] || Date.now() - (detailLoadedAt[id] || 0) > TMDB_DETAIL_REFRESH_MS,
-    )
-    await runWithConcurrency(needsDetail, 6, async (id) => {
-      await ensureTMDBDetailCached(id, { force: forceDetails })
+    // 任务数据每次都要更新；TMDB 资料与工作台共用缓存，只在缺失或超过 30 分钟时才重新拉
+    const needsDetail = forceDetails ? ids : tmdbDetailIdsNeedingRefresh(ids, TMDB_DETAIL_REFRESH_MS)
+    await ensureTmdbDetails(needsDetail, {
+      force: forceDetails,
+      maxAgeMs: TMDB_DETAIL_REFRESH_MS,
+      concurrency: 6,
     })
+    // 详情可能由工作台先拉好，这里统一补齐日历映射
+    for (const id of ids) ensureDerived(id)
+    derivedStoreVersion = getTmdbDetailStoreVersion()
 
     lastLoadedAt = Date.now()
     loadedTasksVersion = versionAtStart
@@ -1240,8 +1221,18 @@ function handleVisibilityChange() {
 async function handleRefresh() {
   for (const url of Object.keys(posterFailures)) delete posterFailures[url]
   clearDetailCache()
-  invalidateTMDBDetailCache()
+  invalidateTmdbDetails()
   await refreshData({ silent: false, forceDetails: true })
+}
+
+// 工作台可能在后台刷新过 TMDB 资料，切回日历时把派生映射同步一下
+function syncDerivedFromCache() {
+  if (derivedStoreVersion === getTmdbDetailStoreVersion()) return
+  for (const task of enabledDramaTasks.value) {
+    const id = Number(task.tmdb_id) || 0
+    if (id > 0) ensureDerived(id)
+  }
+  derivedStoreVersion = getTmdbDetailStoreVersion()
 }
 
 onMounted(() => {
@@ -1264,6 +1255,7 @@ onActivated(() => {
     return
   }
   refreshTodayKey()
+  syncDerivedFromCache()
   startAutoCheck()
   if (refreshPromise) return
   // 离开期间任务被增删改/启停/执行过，或超过兜底时间，就静默刷新
