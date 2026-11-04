@@ -22,6 +22,10 @@ if settings.database_url.startswith("sqlite"):
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA synchronous=NORMAL")
         cur.execute("PRAGMA busy_timeout=30000")
+        # 排序/临时 b-tree 一律放内存：进程的 TEMP 目录不可写时，
+        # SQLite 建临时文件失败只会报 "unable to open database file"，
+        # 表现为列表接口（ORDER BY ... LIMIT）莫名其妙 500。
+        cur.execute("PRAGMA temp_store=MEMORY")
         cur.close()
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
