@@ -1075,11 +1075,27 @@ function commonSavepathPrefix(paths: string[]) {
   return prefix.length ? normalizeSavepath(prefix.join('/')) : ''
 }
 
-function existingTaskCategory(task: TaskItem) {
-  const savepath = normalizeSavepath(task.savepath)
-  if (savepath.includes('/动漫')) return '动漫'
-  if (savepath.includes('/综艺')) return '综艺'
+// 目录名不固定（可能是「🔥综艺」「综艺合集」），所以路径段只作兜底线索：去掉 emoji/符号后再看
+function categoryFromSavepath(savepath: string) {
+  const segs = normalizeSavepath(savepath).split('/').filter(Boolean)
+  const plain = (s: string) => s.replace(/[^\p{L}\p{N}]/gu, '')
+  const has = (kw: string) => segs.some((s) => plain(s).includes(kw))
+  if (has('动漫')) return '动漫'
+  if (has('综艺')) return '综艺'
+  return ''
+}
+
+// 历史任务的分类以它自己关联的 TMDB 条目为准（目录名不固定，不能靠名字判断），
+// 拿不到详情时再退回路径名、最后退回 tmdb_media_type
+async function taskCategory(task: TaskItem) {
   const mt = String(task.tmdb_media_type || '').toLowerCase()
+  const id = Number(task.tmdb_id) || 0
+  if (id > 0 && (mt === 'movie' || mt === 'tv')) {
+    const detail = await getTmdbDetailFor(mt, id)
+    if (detail) return categoryFromTmdb(mt, detail)
+  }
+  const byPath = categoryFromSavepath(task.savepath)
+  if (byPath) return byPath
   if (mt === 'movie') return '电影'
   if (mt === 'tv') return '电视剧'
   return ''
@@ -1121,12 +1137,12 @@ async function ensureTasksLoaded() {
   }
 }
 
-async function getTmdbDetailForCurrent() {
-  const id = Number(state.tmdb_id) || 0
-  const mt = String(state.tmdb_media_type || '').toLowerCase()
+async function getTmdbDetailFor(mtRaw: string, idRaw: number) {
+  const id = Number(idRaw) || 0
+  const mt = String(mtRaw || '').toLowerCase()
   if (id <= 0 || (mt !== 'movie' && mt !== 'tv')) return null
   const key = `${mt}:${id}`
-  if (saveAuto.tmdbDetailCache[key]) return saveAuto.tmdbDetailCache[key]
+  if (key in saveAuto.tmdbDetailCache) return saveAuto.tmdbDetailCache[key]
   try {
     const res = await fetchTMDBDetail(mt as any, id)
     const detail = (res as any)?.data || null
@@ -1138,8 +1154,27 @@ async function getTmdbDetailForCurrent() {
   }
 }
 
+function getTmdbDetailForCurrent() {
+  return getTmdbDetailFor(String(state.tmdb_media_type || ''), Number(state.tmdb_id) || 0)
+}
+
 function normFolderName(value: string) {
   return String(value || '').toLowerCase().replace(/\s+/g, '')
+}
+
+// 限制并发地跑异步任务，避免一次给几十条历史任务同时打 TMDB
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) {
+  const out = new Array<R>(items.length)
+  let idx = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (idx < items.length) {
+      const i = idx
+      idx += 1
+      out[i] = await fn(items[i])
+    }
+  })
+  await Promise.all(workers)
+  return out
 }
 
 // 取保存路径最后一级的文件夹名：
@@ -1221,7 +1256,11 @@ async function autoFillSavepath(runId: number) {
   const nameSeg = String(state.taskname || '').trim() || titleFromTmdb
   if (!nameSeg && !folderName) return
 
-  const filteredByCat = candidates.filter((t) => existingTaskCategory(t) === category)
+  // 历史任务的分类逐个按它自己的 TMDB 条目算（目录名不固定，不能靠文件夹名判断）
+  const taskCats = await mapLimit(candidates, 6, (t) => taskCategory(t))
+  if (runId !== shareAuto.runId) return
+  if (saveAuto.touched) return
+  const filteredByCat = candidates.filter((_, i) => taskCats[i] === category)
   const pool = filteredByCat.length ? filteredByCat : candidates
 
   const bases = pool.map((t) => cleanSavepathBase(t.savepath, t.taskname)).filter(Boolean)
