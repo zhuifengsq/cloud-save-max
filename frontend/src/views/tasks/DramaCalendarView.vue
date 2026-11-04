@@ -9,6 +9,8 @@ import type { TaskItem } from '@/types/tasks'
 import { DRIVE_TYPE_META, detectDriveTypeByUrl, type DriveType } from '@/utils/driveType'
 import { resolveDramaEpisodeProgress, tvAiredEpisodesFromDetail, tvTotalEpisodesFromDetail } from '@/utils/dramaEpisodeProgress'
 
+defineOptions({ name: 'DramaCalendarView' })
+
 type WeekdayKey = 1 | 2 | 3 | 4 | 5 | 6 | 7
 
 type CalendarEntry = {
@@ -1113,8 +1115,13 @@ function handleSelectCell(cell: { key: string; inMonth: boolean }) {
   selectedDateKey.value = cell.key
 }
 
-async function loadData() {
-  loading.value = true
+const SILENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000
+let lastLoadedAt = 0
+let firstActivated = true
+
+async function loadData(opts: { silent?: boolean } = {}) {
+  const silent = opts.silent === true
+  if (!silent) loading.value = true
   try {
     const all = await fetchTasks()
     tasks.value = all
@@ -1132,10 +1139,11 @@ async function loadData() {
     await runWithConcurrency(ids, 6, async (id) => {
       await ensureTMDBDetailCached(id)
     })
+    lastLoadedAt = Date.now()
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    if (!silent) ElMessage.error(e?.message || '加载失败')
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
@@ -1150,6 +1158,16 @@ async function handleRefresh() {
 onMounted(() => {
   loadData()
   window.addEventListener('resize', onResize)
+})
+
+onActivated(() => {
+  if (firstActivated) {
+    firstActivated = false
+    return
+  }
+  if (loading.value) return
+  if (Date.now() - lastLoadedAt < SILENT_REFRESH_INTERVAL_MS) return
+  loadData({ silent: true })
 })
 
 onBeforeUnmount(() => {
