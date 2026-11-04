@@ -8,6 +8,7 @@ import type { TMDBDetail } from '@/types/media'
 import type { TaskItem } from '@/types/tasks'
 import { DRIVE_TYPE_META, detectDriveTypeByUrl, type DriveType } from '@/utils/driveType'
 import { resolveDramaEpisodeProgress, tvAiredEpisodesFromDetail, tvTotalEpisodesFromDetail } from '@/utils/dramaEpisodeProgress'
+import { getTasksVersion, subscribeTasksChanged } from '@/utils/taskChangeBus'
 
 defineOptions({ name: 'DramaCalendarView' })
 
@@ -260,8 +261,16 @@ function extractEpisodeNumbersByDate(data: any): Record<string, number[]> {
   return out
 }
 
+const todayKeyRef = ref(formatYYYYMMDD(new Date()))
+
 function todayKey(): string {
-  return formatYYYYMMDD(new Date())
+  return todayKeyRef.value
+}
+
+// 跨过午夜后重新计算“今天”，让日期范围、角标和排期跟着变
+function refreshTodayKey() {
+  const next = formatYYYYMMDD(new Date())
+  if (next !== todayKeyRef.value) todayKeyRef.value = next
 }
 
 function formatEpisodeList(nums: number[]): string {
@@ -514,14 +523,16 @@ function relativeDayText(target: Date) {
   return `${diff}天后`
 }
 
-async function ensureTMDBDetailCached(tmdbId: number): Promise<TMDBDetail | null> {
+const detailLoadedAt: Record<number, number> = {}
+
+async function ensureTMDBDetailCached(tmdbId: number, opts: { force?: boolean } = {}): Promise<TMDBDetail | null> {
   const id = Number(tmdbId) || 0
   if (id <= 0) return null
-  if (detailsById[id]) return detailsById[id]
+  if (!opts.force && detailsById[id]) return detailsById[id]
   if (detailPromises[id]) return detailPromises[id]
   detailPromises[id] = (async () => {
     try {
-      const data = await fetchTMDBDetail('tv', id)
+      const data = await fetchTMDBDetail('tv', id, opts.force ? { force: true } : undefined)
       try {
         const dates = extractEpisodeDatesFromDetailData(data?.data || {})
         episodeDatesById[id] = dates
@@ -535,9 +546,10 @@ async function ensureTMDBDetailCached(tmdbId: number): Promise<TMDBDetail | null
         }
       } catch {}
       detailsById[id] = data
+      detailLoadedAt[id] = Date.now()
       return data
     } catch {
-      return null
+      return detailsById[id] ?? null
     } finally {
       delete detailPromises[id]
     }
@@ -550,6 +562,8 @@ const enabledDramaTasks = computed(() =>
 )
 
 const schedules = computed(() => {
+  // “下次更新/还有几天”依赖当天日期，跨午夜后要重算
+  void todayKeyRef.value
   const list: Array<{
     task: TaskItem
     tmdbId: number | null
@@ -684,7 +698,8 @@ const unknownTasks = computed(() => {
 
 const weekDates = computed(() => {
   const out: Date[] = []
-  const start = dateOnly(new Date())
+  // 依赖“今天”，跨过午夜后整周日期跟着后移
+  const start = parseDateOnly(todayKeyRef.value) || dateOnly(new Date())
   for (let i = 0; i < 7; i += 1) out.push(addDays(start, i))
   return out
 })
@@ -1040,13 +1055,13 @@ const monthEntriesByDate = computed(() => {
 
 const monthCells = computed(() => {
   const cur = monthCursor.value
-  const todayKey = formatYYYYMMDD(new Date())
+  const today = todayKeyRef.value
 
   const cells = monthGridDates.value.map((d) => {
     const key = formatYYYYMMDD(d)
     const list = (monthEntriesByDate.value.get(key) || []).slice()
     const inMonth = d.getFullYear() === cur.getFullYear() && d.getMonth() === cur.getMonth()
-    const isToday = key === todayKey
+    const isToday = key === today
     const display = list.slice(0, 3)
     const more = Math.max(0, list.length - display.length)
     return {
@@ -1115,12 +1130,32 @@ function handleSelectCell(cell: { key: string; inMonth: boolean }) {
   selectedDateKey.value = cell.key
 }
 
-const SILENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000
-let lastLoadedAt = 0
-let firstActivated = true
+const TASK_CHECK_INTERVAL_MS = 5 * 60 * 1000
+const TMDB_DETAIL_REFRESH_MS = 30 * 60 * 1000
+const CHECK_TICK_MS = 60 * 1000
 
-async function loadData(opts: { silent?: boolean } = {}) {
+let lastLoadedAt = 0
+let loadedTasksVersion = -1
+let refreshPromise: Promise<void> | null = null
+let checkTimer: number | null = null
+let firstActivated = true
+let calendarActive = false
+let unsubscribeTasksChanged: (() => void) | null = null
+
+function clearDetailCache() {
+  for (const k of Object.keys(detailsById)) delete detailsById[Number(k)]
+  for (const k of Object.keys(detailPromises)) delete detailPromises[Number(k)]
+  for (const k of Object.keys(episodeDatesById)) delete episodeDatesById[Number(k)]
+  for (const k of Object.keys(episodeNumbersById)) delete episodeNumbersById[Number(k)]
+  for (const k of Object.keys(inferredWeekdaysById)) delete inferredWeekdaysById[Number(k)]
+  for (const k of Object.keys(inferredCycleDaysById)) delete inferredCycleDaysById[Number(k)]
+  for (const k of Object.keys(detailLoadedAt)) delete detailLoadedAt[Number(k)]
+}
+
+async function performLoad(opts: { silent?: boolean; forceDetails?: boolean }) {
   const silent = opts.silent === true
+  const forceDetails = opts.forceDetails === true
+  const versionAtStart = getTasksVersion()
   if (!silent) loading.value = true
   try {
     const all = await fetchTasks()
@@ -1136,41 +1171,118 @@ async function loadData(opts: { silent?: boolean } = {}) {
       ),
     )
 
-    await runWithConcurrency(ids, 6, async (id) => {
-      await ensureTMDBDetailCached(id)
+    // 任务数据每次都要更新；TMDB 资料变化慢，只在缺失或超过独立有效期时才重新拉
+    const needsDetail = ids.filter(
+      (id) => forceDetails || !detailsById[id] || Date.now() - (detailLoadedAt[id] || 0) > TMDB_DETAIL_REFRESH_MS,
+    )
+    await runWithConcurrency(needsDetail, 6, async (id) => {
+      await ensureTMDBDetailCached(id, { force: forceDetails })
     })
+
     lastLoadedAt = Date.now()
+    loadedTasksVersion = versionAtStart
+    refreshTodayKey()
   } catch (e: any) {
+    // 失败保留原有内容，只在非静默刷新时提示
     if (!silent) ElMessage.error(e?.message || '加载失败')
   } finally {
     if (!silent) loading.value = false
   }
 }
 
+// 同一时间只允许一个刷新请求，避免重复请求和旧数据覆盖新数据
+function refreshData(opts: { silent?: boolean; forceDetails?: boolean } = {}): Promise<void> {
+  if (refreshPromise) {
+    if (opts.silent) return refreshPromise
+    return refreshPromise.catch(() => {}).then(() => refreshData(opts))
+  }
+  refreshPromise = performLoad(opts).finally(() => {
+    refreshPromise = null
+  })
+  return refreshPromise
+}
+
+function stopAutoCheck() {
+  if (checkTimer !== null) {
+    window.clearInterval(checkTimer)
+    checkTimer = null
+  }
+}
+
+function startAutoCheck() {
+  stopAutoCheck()
+  // 页面可见时每分钟检查一次：跨午夜重算“今天”，任务数据超过 5 分钟就静默刷新
+  checkTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return
+    refreshTodayKey()
+    if (Date.now() - lastLoadedAt < TASK_CHECK_INTERVAL_MS) return
+    refreshData({ silent: true })
+  }, CHECK_TICK_MS)
+}
+
+function handleVisibilityChange() {
+  // 没在看日历这一页（被 keep-alive 缓存着）时不响应，避免后台空跑请求
+  if (!calendarActive) return
+  if (document.visibilityState === 'visible') {
+    refreshTodayKey()
+    startAutoCheck()
+    if (refreshPromise) return
+    const tasksChanged = getTasksVersion() !== loadedTasksVersion
+    if (tasksChanged || Date.now() - lastLoadedAt >= TASK_CHECK_INTERVAL_MS) {
+      refreshData({ silent: true })
+    }
+    return
+  }
+  // 切到后台就暂停定时检查，回来时再按上面的规则判断
+  stopAutoCheck()
+}
+
 async function handleRefresh() {
   for (const url of Object.keys(posterFailures)) delete posterFailures[url]
-  for (const k of Object.keys(detailsById)) delete detailsById[Number(k)]
-  for (const k of Object.keys(detailPromises)) delete detailPromises[Number(k)]
+  clearDetailCache()
   invalidateTMDBDetailCache()
-  await loadData()
+  await refreshData({ silent: false, forceDetails: true })
 }
 
 onMounted(() => {
-  loadData()
+  refreshData()
+  startAutoCheck()
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   window.addEventListener('resize', onResize)
 })
 
 onActivated(() => {
+  calendarActive = true
+  if (!unsubscribeTasksChanged) {
+    unsubscribeTasksChanged = subscribeTasksChanged(() => {
+      if (!calendarActive) return
+      refreshData({ silent: true })
+    })
+  }
   if (firstActivated) {
     firstActivated = false
     return
   }
-  if (loading.value) return
-  if (Date.now() - lastLoadedAt < SILENT_REFRESH_INTERVAL_MS) return
-  loadData({ silent: true })
+  refreshTodayKey()
+  startAutoCheck()
+  if (refreshPromise) return
+  // 离开期间任务被增删改/启停/执行过，或超过兜底时间，就静默刷新
+  if (getTasksVersion() !== loadedTasksVersion || Date.now() - lastLoadedAt >= TASK_CHECK_INTERVAL_MS) {
+    refreshData({ silent: true })
+  }
+})
+
+onDeactivated(() => {
+  calendarActive = false
+  stopAutoCheck()
 })
 
 onBeforeUnmount(() => {
+  calendarActive = false
+  stopAutoCheck()
+  unsubscribeTasksChanged?.()
+  unsubscribeTasksChanged = null
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener('resize', onResize)
 })
 

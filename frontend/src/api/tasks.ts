@@ -12,6 +12,7 @@ import type {
   TaskShareLink,
 } from '@/types/tasks'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
+import { markTasksChanged } from '@/utils/taskChangeBus'
 
 export async function fetchTasks() {
   const { data } = await http.get<TaskItem[]>('/tasks')
@@ -35,6 +36,7 @@ export async function createTask(payload: {
   extra?: Record<string, any>
 }) {
   const { data } = await http.post<TaskItem>('/tasks', payload, { headers: { 'X-Silent-Toast': '1' } })
+  markTasksChanged()
   return data
 }
 
@@ -57,16 +59,19 @@ export async function updateTask(
   }>,
 ) {
   const { data } = await http.patch<TaskItem>(`/tasks/${taskId}`, payload, { headers: { 'X-Silent-Toast': '1' } })
+  markTasksChanged()
   return data
 }
 
 export async function setTaskStatus(taskId: number, enabled: boolean) {
   const { data } = await http.patch<TaskItem>(`/tasks/${taskId}/status`, { enabled })
+  markTasksChanged()
   return data
 }
 
 export async function runTask(taskId: number) {
   const { data } = await http.post<TaskExecutionItem>(`/tasks/${taskId}/run`)
+  markTasksChanged()
   return data
 }
 
@@ -77,6 +82,7 @@ export async function createTaskShareLink(taskId: number) {
 
 export async function deleteTask(taskId: number) {
   const { data } = await http.delete<{ ok: boolean }>(`/tasks/${taskId}`)
+  markTasksChanged()
   return data
 }
 
@@ -225,6 +231,7 @@ export async function stopCompletedDramaTasks() {
   const { data } = await http.post<StopCompletedDramaTasksResponse>('/tasks/drama/stop-completed', null, {
     headers: { 'X-Silent-Toast': '1' },
   })
+  if (data?.stopped) markTasksChanged()
   return data
 }
 
