@@ -1344,6 +1344,8 @@ watch(
   async ([visible]) => {
     if (!visible) return
     syncState()
+    // 每次打开抽屉都重新拉历史任务，避免用旧快照算保存路径
+    saveAuto.tasks = null
     refreshMagicRegex()
     try {
       const cfg = await fetchTMDBConfig()
