@@ -1,0 +1,296 @@
+"""任务执行的 SSE 流式端点（从 app.api.routes.tasks 拆分，路径与事件契约不变）。
+
+事件契约：event: init / log / stage / done，连接空闲 15 秒发一条 `: ping` 注释；
+任务执行跑在独立线程（TaskExecutor 是同步阻塞栈），事件循环只负责消费队列写给客户端，
+因此长时间运行的任务不再占用 anyio 线程池令牌。客户端断开时 finally 会置 stopped，
+执行线程的后续事件直接丢弃，避免向已断开的连接堆积。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import threading
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
+
+from app.core.deps import CurrentUser, get_current_user_scoped, require_permissions_scoped
+from app.core.permissions import TASK_RUN
+from app.db.session import SessionLocal
+from app.extensions.runtime.execution_log import ExecutionLog
+from app.extensions.runtime.task_executor import TaskExecutor
+from app.models.task import Task
+from app.schemas.task import TaskCreateIn
+from app.services import audit
+from app.services.notifications.sender import send_runtime
+from app.services.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
+from app.services.task_serialization import execution_out
+from app.services.tasks import get_task
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+class _SseQueue:
+    """阻塞线程生产者 → 事件循环消费者的桥接队列。
+
+    SSE 任务执行跑在独立线程里，事件循环只负责把队列内容写给客户端；
+    这样长时间运行的任务不再占用 anyio 线程池令牌（此前同步生成器会一直占用）。
+    """
+
+    def __init__(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+        self.stopped = threading.Event()
+
+    def put(self, item: tuple[str, object]) -> None:
+        if self.stopped.is_set():
+            return
+        try:
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, item)
+        except RuntimeError:  # 事件循环已关闭（请求已结束）
+            pass
+
+    async def get(self, timeout: float) -> tuple[str, object] | None:
+        try:
+            return await asyncio.wait_for(self._queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+
+
+def _sse_bytes(event: str, data: object) -> bytes:
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
+
+
+def _stream_response(q: _SseQueue, init_payload: dict) -> StreamingResponse:
+    async def gen():
+        yield _sse_bytes("init", init_payload)
+        try:
+            while True:
+                item = await q.get(15)
+                if item is None:
+                    yield b": ping\n\n"
+                    continue
+                kind, value = item
+                if kind == "log":
+                    yield _sse_bytes("log", {"line": str(value)})
+                    continue
+                if kind == "stage":
+                    yield _sse_bytes("stage", {"stage": str(value)})
+                    continue
+                if kind == "done":
+                    yield _sse_bytes("done", value)
+                    continue
+                if kind == "done_sentinel":
+                    break
+        finally:
+            # 客户端断开时尽快停止投递，避免执行线程继续向队列堆积无用事件。
+            q.stopped.set()
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post('/{task_id:int}/run/stream', dependencies=[Depends(require_permissions_scoped(TASK_RUN))])
+async def post_run_task_stream(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user_scoped)):
+    def _prepare() -> dict:
+        with SessionLocal() as adb:
+            task = get_task(adb, task_id)
+            payload = {
+                "task_id": int(task.id),
+                "taskname": str(task.taskname),
+                "started_at": datetime.now().isoformat(),
+            }
+            audit.write_audit_log(
+                adb,
+                actor_user_id=current.user.id,
+                action='task.run.stream',
+                target_type='task',
+                target_id=str(payload["task_id"]),
+                ip=request.client.host if request.client else None,
+                user_agent=request.headers.get('user-agent'),
+                success=True,
+            )
+            adb.commit()
+            return payload
+
+    init_payload = await run_in_threadpool(_prepare)
+
+    q = _SseQueue()
+
+    def emit_line(line: str) -> None:
+        q.put(("log", line))
+
+    def emit_stage(stage: str) -> None:
+        q.put(("stage", stage))
+
+    def worker() -> None:
+        with SessionLocal() as wdb:
+            log = ExecutionLog(emit_line=emit_line, emit_stage=emit_stage)
+            try:
+                wtask = get_task(wdb, task_id)
+                execution = TaskExecutor(wdb).run_task(wtask, log=log)
+                wdb.commit()
+                wdb.refresh(execution)
+                if str(getattr(wtask, "task_type", "") or "") == "drama":
+                    try:
+                        section, should_notify = build_task_section(wtask, execution)
+                        if should_notify:
+                            send_runtime(wdb, DRAMA_NOTIFY_TITLE, section)
+                    except Exception:
+                        pass
+                q.put(
+                    (
+                        "done",
+                        {
+                            "status": execution.status,
+                            "message": execution.message,
+                            "execution": execution_out(execution).model_dump(mode="json"),
+                        },
+                    )
+                )
+            except Exception as exc:
+                wdb.rollback()
+                message = getattr(exc, "message", None) or str(exc).strip() or type(exc).__name__
+                log.section("异常")
+                log.line(message)
+                q.put(
+                    (
+                        "done",
+                        {
+                            "status": "failed",
+                            "message": message,
+                            "execution": {
+                                "id": 0,
+                                "task_id": task_id,
+                                "status": "failed",
+                                "started_at": log.started_at.isoformat(),
+                                "finished_at": datetime.now().isoformat(),
+                                "tree_summary": None,
+                                "message": message,
+                                "stage": log.stage,
+                                "run_log": log.render(),
+                                "adapter_snapshot": {},
+                            },
+                        },
+                    )
+                )
+            finally:
+                q.put(("done_sentinel", object()))
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    return _stream_response(q, init_payload)
+
+
+@router.post('/run/stream', dependencies=[Depends(require_permissions_scoped(TASK_RUN))])
+async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateIn, current: CurrentUser = Depends(get_current_user_scoped)):
+    import uuid
+
+    def _prepare() -> dict:
+        with SessionLocal() as adb:
+            payload_out = {
+                "task_id": 0,
+                "taskname": str(payload.taskname),
+                "started_at": datetime.now().isoformat(),
+                "preview": True,
+            }
+            audit.write_audit_log(
+                adb,
+                actor_user_id=current.user.id,
+                action='task.run.preview_stream',
+                target_type='task',
+                target_id='0',
+                ip=request.client.host if request.client else None,
+                user_agent=request.headers.get('user-agent'),
+                success=True,
+                detail=str(payload.taskname or ""),
+            )
+            adb.commit()
+            return payload_out
+
+    init_payload = await run_in_threadpool(_prepare)
+
+    q = _SseQueue()
+
+    def emit_line(line: str) -> None:
+        q.put(("log", line))
+
+    def emit_stage(stage: str) -> None:
+        q.put(("stage", stage))
+
+    def worker() -> None:
+        with SessionLocal() as wdb:
+            log = ExecutionLog(emit_line=emit_line, emit_stage=emit_stage)
+            try:
+                task_uid = (str(payload.task_uid or "").strip() or f"preview-{uuid.uuid4().hex}")
+                wtask = Task(
+                    task_uid=task_uid,
+                    task_type=str(payload.task_type or "generic"),
+                    taskname=str(payload.taskname or ""),
+                    shareurl=str(payload.shareurl or ""),
+                    savepath=str(payload.savepath or ""),
+                    pattern=(str(payload.pattern) if payload.pattern is not None else None),
+                    replace=(str(payload.replace) if payload.replace is not None else None),
+                    ignore_extension=bool(payload.ignore_extension),
+                    account_name=(str(payload.account_name) if payload.account_name is not None else None),
+                    tmdb_id=(int(payload.tmdb_id) if payload.tmdb_id is not None else None),
+                    tmdb_media_type=(str(payload.tmdb_media_type) if payload.tmdb_media_type is not None else None),
+                    enabled=True,
+                    addition_json=json.dumps(payload.addition or {}, ensure_ascii=False),
+                    extra_json=json.dumps(payload.extra or {}, ensure_ascii=False),
+                )
+                wtask.id = 0
+                execution = TaskExecutor(wdb).run_task(wtask, log=log, persist_execution=False)
+                q.put(
+                    (
+                        "done",
+                        {
+                            "status": execution.status,
+                            "message": execution.message,
+                            "execution": execution_out(execution).model_dump(mode="json"),
+                        },
+                    )
+                )
+            except Exception as exc:
+                wdb.rollback()
+                message = getattr(exc, "message", None) or str(exc).strip() or type(exc).__name__
+                log.section("异常")
+                log.line(message)
+                q.put(
+                    (
+                        "done",
+                        {
+                            "status": "failed",
+                            "message": message,
+                            "execution": {
+                                "id": 0,
+                                "task_id": 0,
+                                "status": "failed",
+                                "started_at": log.started_at.isoformat(),
+                                "finished_at": datetime.now().isoformat(),
+                                "tree_summary": None,
+                                "message": message,
+                                "stage": log.stage,
+                                "run_log": log.render(),
+                                "adapter_snapshot": {},
+                            },
+                        },
+                    )
+                )
+            finally:
+                q.put(("done_sentinel", object()))
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    return _stream_response(q, init_payload)

@@ -342,3 +342,74 @@ def _normalize_account_payload(
     if not runtime_cookie.strip():
         raise bad_request('DRIVE_ACCOUNT_CONFIG_REQUIRED', '请填写驱动账号登录参数')
     return normalized_config, runtime_cookie
+
+
+
+def get_active_account(db: Session, account_name: str) -> DriveAccount | None:
+    """按名称取可用账号：优先 runtime_status=active，取不到再退回 enabled 账号。"""
+    name = str(account_name or "").strip()
+    if not name:
+        return None
+    active = (
+        db.execute(
+            select(DriveAccount).where(
+                DriveAccount.enabled.is_(True),
+                DriveAccount.name == name,
+                DriveAccount.runtime_status == "active",
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if active is not None:
+        return active
+    return (
+        db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True), DriveAccount.name == name))
+        .scalars()
+        .first()
+    )
+
+
+def pick_default_account_name(db: Session, drive_type: str) -> str | None:
+    """按网盘类型挑默认账号名（默认账号优先、再按 id 升序），没有可用账号返回 None。"""
+    active = (
+        db.execute(
+            select(DriveAccount)
+            .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type, DriveAccount.runtime_status == "active")
+            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
+        )
+        .scalars()
+        .first()
+    )
+    if active is not None:
+        return active.name
+    fallback = (
+        db.execute(
+            select(DriveAccount)
+            .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type)
+            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
+        )
+        .scalars()
+        .first()
+    )
+    return None if fallback is None else fallback.name
+
+
+def pick_any_default_account(db: Session) -> DriveAccount | None:
+    """不限网盘类型地挑一个默认账号（默认账号优先、再按 id 升序）。"""
+    active = (
+        db.execute(
+            select(DriveAccount)
+            .where(DriveAccount.enabled.is_(True), DriveAccount.runtime_status == "active")
+            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
+        )
+        .scalars()
+        .first()
+    )
+    if active is not None:
+        return active
+    return (
+        db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True)).order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc()))
+        .scalars()
+        .first()
+    )

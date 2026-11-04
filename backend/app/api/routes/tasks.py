@@ -1,52 +1,28 @@
-import json
+"""任务管理端点：任务 CRUD、执行、调度设置、模板与建议。
+
+拆分说明：SSE 流式端点在 app.api.routes.tasks_stream，分享预览/验证在 tasks_share，
+网盘浏览/建目录/删除在 tasks_drive；公共逻辑在服务层（task_serialization / tmdb_view /
+drive_payload / drive_accounts）。本模块通过 include_router 组合子路由，URL 与响应契约不变。
+"""
+
 import logging
-import os
-import queue
-import threading
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
-import re
-from sqlalchemy import and_, func, or_, select, update as sa_update
+from sqlalchemy import and_, func, select, update as sa_update
 from sqlalchemy.orm import Session
 
-from app.core.deps import CurrentUser, get_current_user, get_current_user_scoped, require_permissions, require_permissions_scoped
+from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ, TASK_RUN, TASK_WRITE
-from app.core.settings import settings
 from app.db.session import get_db
-from app.db.session import SessionLocal
 from app.extensions.adapters.adapter_factory import AdapterFactory
 from app.extensions.adapters.base_adapter import BaseCloudDriveAdapter
 from app.extensions.runtime.adapter_registry import AdapterRegistry
 from app.extensions.runtime.account_manager import DatabaseAccountManager
-from app.extensions.runtime.execution_log import ExecutionLog
-from app.extensions.runtime.magic_rename import MagicRename
-from app.models.drive_account import DriveAccount
 from app.models.task import Task
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.extensions.runtime.task_scheduler import task_scheduler_manager
 from app.extensions.runtime.task_executor import TaskExecutor
-from app.schemas.task_browse import (
-    DriveBrowseIn,
-    DriveDeleteIn,
-    DriveDeleteOut,
-    DriveBrowseItemOut,
-    DriveBrowseOut,
-    DriveBrowsePathOut,
-    DriveMkdirIn,
-    DriveMkdirOut,
-    SharePreviewBatchIn,
-    SharePreviewBatchItemOut,
-    SharePreviewBatchOut,
-    SharePreviewIn,
-    SharePreviewItemOut,
-    SharePreviewOut,
-    ShareValidateIn,
-    ShareValidateOut,
-)
 from app.schemas.task_magic_regex import MagicRegexOut, MagicRegexRuleOut
 from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn
 from app.schemas.task import (
@@ -62,291 +38,20 @@ from app.schemas.resource_search import TaskSuggestionListOut
 from app.services import audit
 from app.services.notifications.sender import send_runtime
 from app.services.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
-from app.services.share_preview_batch import cache_clear as _preview_batch_cache_clear
-from app.services.share_preview_batch import preview_share_batch, validate_share_links
-from app.services.drama_update_progress import build_drama_update_progress
-from app.services.task_scheduler import get_or_create_task_scheduler_setting, update_task_scheduler_setting
+from app.services.task_scheduler import get_or_create_task_scheduler_setting, load_task_scheduler_setting, update_task_scheduler_setting
 from app.services.resource_search import fetch_task_suggestions
-from app.services.tasks import create_task, delete_task, get_task, list_tasks_recent_executions, set_task_enabled, update_task
+from app.services.tasks import create_task, delete_task, get_task, list_recent_executions, list_tasks_recent_executions, set_task_enabled, update_task
 from app.services.task_share_links import save_task_share_link
-from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
+from app.services.tmdb_settings import get_tmdb_lang_pair
+
+from app.api.routes import tasks_drive, tasks_share, tasks_stream
+from app.services.drive_accounts import get_active_account, pick_default_account_name
+from app.services.task_serialization import execution_out, scheduler_out, task_out
+from app.services.tmdb_view import load_tmdb_payload_map, load_tmdb_status_map
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
-def _share_preview_batch_cache_clear() -> None:
-    _preview_batch_cache_clear()
-
-
-def _execution_out(item) -> TaskExecutionOut:
-    return TaskExecutionOut(
-        id=item.id,
-        task_id=item.task_id,
-        status=item.status,
-        started_at=item.started_at,
-        finished_at=item.finished_at,
-        tree_summary=item.tree_summary,
-        message=item.message,
-        stage=getattr(item, "stage", None),
-        run_log=getattr(item, "run_log", None),
-        adapter_snapshot=json.loads(item.adapter_snapshot) if item.adapter_snapshot else {},
-    )
-
-
-def _tmdb_lang_pair(db: Session) -> tuple[str, str]:
-    cfg = get_tmdb_runtime_config(get_or_create_tmdb_setting(db))
-    language = str(cfg.get("language") or "zh-CN").strip() or "zh-CN"
-    poster_language = str(cfg.get("poster_language") or "zh-CN").strip() or "zh-CN"
-    return language, poster_language
-
-
-def _tmdb_cache_key(item) -> tuple[str, int] | None:
-    tmdb_id = getattr(item, "tmdb_id", None)
-    if tmdb_id is None:
-        return None
-    try:
-        tid = int(tmdb_id)
-    except Exception:
-        return None
-    if tid <= 0:
-        return None
-    mt = str(getattr(item, "tmdb_media_type", None) or "").strip().lower()
-    if mt not in ("movie", "tv"):
-        return None
-    return mt, tid
-
-
-def _load_tmdb_status_map(db: Session, items: list[object]) -> dict[tuple[str, int], str | None]:
-    keys: list[tuple[str, int]] = []
-    seen: set[tuple[str, int]] = set()
-    for item in items:
-        key = _tmdb_cache_key(item)
-        if key is None or key in seen:
-            continue
-        seen.add(key)
-        keys.append(key)
-    if not keys:
-        return {}
-
-    language, poster_language = _tmdb_lang_pair(db)
-    tv_ids = [tid for mt, tid in keys if mt == "tv"]
-    movie_ids = [tid for mt, tid in keys if mt == "movie"]
-    conds = []
-    if tv_ids:
-        conds.append(and_(TMDBMediaCache.media_type == "tv", TMDBMediaCache.tmdb_id.in_(tv_ids)))
-    if movie_ids:
-        conds.append(and_(TMDBMediaCache.media_type == "movie", TMDBMediaCache.tmdb_id.in_(movie_ids)))
-    if not conds:
-        return {}
-
-    rows = (
-        db.execute(
-            select(TMDBMediaCache.media_type, TMDBMediaCache.tmdb_id, TMDBMediaCache.status)
-            .where(TMDBMediaCache.language == language, TMDBMediaCache.poster_language == poster_language, or_(*conds))
-            .order_by(TMDBMediaCache.updated_at.desc())
-        )
-        .all()
-    )
-    out: dict[tuple[str, int], str | None] = {}
-    for mt, tid, status in rows:
-        key = (str(mt or "").strip().lower(), int(tid))
-        if key not in out:
-            out[key] = str(status or "").strip() or None
-    return out
-
-
-def _load_tmdb_payload_map(db: Session, items: list[object]) -> dict[tuple[str, int], dict[str, object] | None]:
-    keys: list[tuple[str, int]] = []
-    seen: set[tuple[str, int]] = set()
-    for item in items:
-        if str(getattr(item, "task_type", "") or "") != "drama":
-            continue
-        key = _tmdb_cache_key(item)
-        if key is None or key in seen:
-            continue
-        if key[0] != "tv":
-            continue
-        seen.add(key)
-        keys.append(key)
-    if not keys:
-        return {}
-
-    language, poster_language = _tmdb_lang_pair(db)
-    tv_ids = [tid for mt, tid in keys if mt == "tv"]
-    if not tv_ids:
-        return {}
-
-    rows = (
-        db.execute(
-            select(TMDBMediaCache.media_type, TMDBMediaCache.tmdb_id, TMDBMediaCache.payload_json)
-            .where(
-                TMDBMediaCache.media_type == "tv",
-                TMDBMediaCache.tmdb_id.in_(tv_ids),
-                TMDBMediaCache.language == language,
-                TMDBMediaCache.poster_language == poster_language,
-            )
-            .order_by(TMDBMediaCache.updated_at.desc())
-        )
-        .all()
-    )
-    out: dict[tuple[str, int], dict[str, object] | None] = {}
-    for mt, tid, payload in rows:
-        key = (str(mt or "").strip().lower(), int(tid))
-        if key in out:
-            continue
-        if not payload:
-            out[key] = None
-            continue
-        try:
-            parsed = json.loads(payload)
-        except Exception:
-            parsed = None
-        out[key] = parsed if isinstance(parsed, dict) else None
-    return out
-
-
-def _get_tmdb_status(db: Session, mt: str, tid: int) -> str | None:
-    language, poster_language = _tmdb_lang_pair(db)
-    row = (
-        db.execute(
-            select(TMDBMediaCache.status)
-            .where(
-                TMDBMediaCache.media_type == mt,
-                TMDBMediaCache.tmdb_id == tid,
-                TMDBMediaCache.language == language,
-                TMDBMediaCache.poster_language == poster_language,
-            )
-            .order_by(TMDBMediaCache.updated_at.desc())
-            .limit(1)
-        )
-        .first()
-    )
-    if row is None:
-        return None
-    status = str(row[0] or "").strip()
-    return status or None
-
-
-def _task_out(
-    db: Session,
-    item,
-    *,
-    tmdb_status_map: dict[tuple[str, int], str | None] | None = None,
-    tmdb_payload_map: dict[tuple[str, int], dict[str, object] | None] | None = None,
-) -> TaskOut:
-    raw_executions = list(getattr(item, "executions", None) or [])
-    raw_executions.sort(key=lambda x: x.started_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-
-    tmdb_status: str | None = None
-    tmdb_is_ended: bool | None = None
-    drama_update_progress = None
-    key = _tmdb_cache_key(item)
-    if key is not None:
-        tmdb_status = tmdb_status_map.get(key) if isinstance(tmdb_status_map, dict) else _get_tmdb_status(db, key[0], key[1])
-        if key[0] == "tv" and tmdb_status is not None:
-            tmdb_is_ended = tmdb_status in ("Ended", "Canceled")
-    extra = json.loads(item.extra_json) if item.extra_json else {}
-    if str(getattr(item, "task_type", "") or "") == "drama":
-        # 进度来自 TMDB 最新已播 + 任务在执行时记录的 saved_latest（不再读快照表）
-        saved_latest = extra.get("saved_latest") if isinstance(extra, dict) else None
-        tmdb_details = tmdb_payload_map.get(key) if (isinstance(tmdb_payload_map, dict) and key is not None and key[0] == "tv") else None
-        drama_update_progress = build_drama_update_progress(tmdb_details=tmdb_details, saved_latest=saved_latest)
-
-    return TaskOut(
-        id=item.id,
-        task_uid=item.task_uid,
-        task_type=item.task_type,
-        taskname=item.taskname,
-        shareurl=item.shareurl,
-        savepath=item.savepath,
-        pattern=item.pattern,
-        replace=item.replace,
-        ignore_extension=item.ignore_extension,
-        account_name=item.account_name,
-        tmdb_id=getattr(item, "tmdb_id", None),
-        tmdb_media_type=getattr(item, "tmdb_media_type", None),
-        tmdb_status=tmdb_status,
-        tmdb_is_ended=tmdb_is_ended,
-        drama_update_progress=drama_update_progress,
-        enabled=item.enabled,
-        addition=json.loads(item.addition_json) if item.addition_json else {},
-        extra=json.loads(item.extra_json) if item.extra_json else {},
-        executions=[_execution_out(x) for x in raw_executions[:3]],
-        created_at=item.created_at,
-        updated_at=item.updated_at,
-    )
-
-
-def _scheduler_out(item) -> TaskSchedulerSettingOut:
-    return TaskSchedulerSettingOut(enabled=item.enabled, crontab=item.crontab, timezone=item.timezone)
-
-
-def _pick_default_account_name(db: Session, drive_type: str) -> str | None:
-    active = (
-        db.execute(
-            select(DriveAccount)
-            .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type, DriveAccount.runtime_status == "active")
-            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
-        )
-        .scalars()
-        .first()
-    )
-    if active is not None:
-        return active.name
-    fallback = (
-        db.execute(
-            select(DriveAccount)
-            .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type)
-            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
-        )
-        .scalars()
-        .first()
-    )
-    return None if fallback is None else fallback.name
-
-
-def _pick_any_default_account(db: Session) -> DriveAccount | None:
-    active = (
-        db.execute(
-            select(DriveAccount)
-            .where(DriveAccount.enabled.is_(True), DriveAccount.runtime_status == "active")
-            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
-        )
-        .scalars()
-        .first()
-    )
-    if active is not None:
-        return active
-    return (
-        db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True)).order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc()))
-        .scalars()
-        .first()
-    )
-
-
-def _get_active_account(db: Session, account_name: str) -> DriveAccount | None:
-    name = str(account_name or "").strip()
-    if not name:
-        return None
-    active = (
-        db.execute(
-            select(DriveAccount).where(
-                DriveAccount.enabled.is_(True),
-                DriveAccount.name == name,
-                DriveAccount.runtime_status == "active",
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if active is not None:
-        return active
-    return (
-        db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True), DriveAccount.name == name))
-        .scalars()
-        .first()
-    )
 
 
 @router.get('/magic-regex', response_model=MagicRegexOut, dependencies=[Depends(require_permissions(TASK_READ))])
@@ -387,107 +92,15 @@ def get_task_suggestions(q: str = "", d: int = 0, drive_type: str = "", sf: str 
         return TaskSuggestionListOut(success=True, message=f"error: {str(e)}", data=[])
 
 
-def _bool_is_dir(payload: dict) -> bool:
-    if payload.get("is_dir") is not None:
-        return bool(payload.get("is_dir"))
-    if payload.get("isdir") is not None:
-        return str(payload.get("isdir")) in ("1", "true", "True")
-    if payload.get("dir") is not None:
-        return bool(payload.get("dir"))
-    if payload.get("kind") in ("folder", "dir", "directory"):
-        return True
-    if payload.get("kind") in ("file",):
-        return False
-    if payload.get("type") in ("folder", "dir"):
-        return True
-    if payload.get("type") in ("file",):
-        return False
-    if payload.get("file_type") is not None:
-        value = str(payload.get("file_type"))
-        if value in ("0", "dir", "folder"):
-            return True
-        if value in ("1", "file"):
-            return False
-    return False
-
-
-def _pick_name(payload: dict) -> str:
-    return str(
-        payload.get("file_name")
-        or payload.get("server_filename")
-        or payload.get("fileName")
-        or payload.get("name")
-        or payload.get("title")
-        or payload.get("fid")
-        or payload.get("fs_id")
-        or ""
-    )
-
-
-def _pick_fid(payload: dict) -> str:
-    return str(payload.get("fid") or payload.get("fs_id") or payload.get("file_id") or payload.get("id") or payload.get("fileId") or "")
-
-
-def _pick_fid_token(payload: dict) -> str | None:
-    value = payload.get("fid_token") or payload.get("share_fid_token") or payload.get("token")
-    if value is None:
-        return None
-    return str(value)
-
-
-def _pick_updated_at(payload: dict):
-    return payload.get("updated_at") or payload.get("update_time") or payload.get("mtime") or payload.get("modified_at")
-
-
-def _pick_size(payload: dict) -> int | None:
-    if payload.get("size") is None:
-        return None
-    try:
-        return int(payload.get("size"))
-    except (TypeError, ValueError):
-        return None
-
-
-def _pick_children_count(payload: dict) -> int | None:
-    if payload.get("include_items") is not None:
-        try:
-            return int(payload.get("include_items"))
-        except (TypeError, ValueError):
-            pass
-    for key in ("children_count", "child_count", "child_cnt", "count", "cnt", "total"):
-        if payload.get(key) is not None:
-            try:
-                return int(payload.get(key))
-            except (TypeError, ValueError):
-                pass
-    file_count = None
-    dir_count = None
-    for key in ("file_count", "file_cnt", "files", "fileCount", "fileCnt", "sub_file_cnt", "subFileCount"):
-        if payload.get(key) is not None:
-            try:
-                file_count = int(payload.get(key))
-                break
-            except (TypeError, ValueError):
-                pass
-    for key in ("dir_count", "dir_cnt", "dirs", "dirCount", "dirCnt", "sub_dir_cnt", "subDirCount"):
-        if payload.get(key) is not None:
-            try:
-                dir_count = int(payload.get(key))
-                break
-            except (TypeError, ValueError):
-                pass
-    if file_count is None and dir_count is None:
-        return None
-    return int((file_count or 0) + (dir_count or 0))
 
 
 @router.get('', response_model=list[TaskOut], dependencies=[Depends(require_permissions(TASK_READ))])
 def get_tasks(db: Session = Depends(get_db)):
     items = list_tasks_recent_executions(db, limit=3)
-    tmdb_status_map = _load_tmdb_status_map(db, items)
-    tmdb_payload_map = _load_tmdb_payload_map(db, items)
+    tmdb_status_map = load_tmdb_status_map(db, items)
+    tmdb_payload_map = load_tmdb_payload_map(db, items)
     return [
-        _task_out(
+        task_out(
             db,
             item,
             tmdb_status_map=tmdb_status_map,
@@ -499,7 +112,7 @@ def get_tasks(db: Session = Depends(get_db)):
 
 @router.post("/drama/stop-completed", response_model=StopCompletedDramaTasksOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
 def post_stop_completed_drama_tasks(request: Request, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    language, poster_language = _tmdb_lang_pair(db)
+    language, poster_language = get_tmdb_lang_pair(db)
 
     checked = (
         db.execute(
@@ -565,7 +178,8 @@ def post_task(request: Request, payload: TaskCreateIn, current: CurrentUser = De
     audit.write_audit_log(db, actor_user_id=current.user.id, action='task.create', target_type='task', target_id=str(task.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.commit()
     db.refresh(task)
-    return _task_out(db, task)
+    # 新建任务必然没有执行记录，显式传空列表避免一次多余查询。
+    return task_out(db, task, executions=[])
 
 
 @router.patch('/{task_id:int}', response_model=TaskOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -574,7 +188,7 @@ def patch_task(request: Request, task_id: int, payload: TaskUpdateIn, current: C
     audit.write_audit_log(db, actor_user_id=current.user.id, action='task.update', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.commit()
     db.refresh(task)
-    return _task_out(db, task)
+    return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3))
 
 
 @router.patch('/{task_id:int}/status', response_model=TaskOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -583,7 +197,7 @@ def patch_task_status(request: Request, task_id: int, payload: TaskStatusIn, cur
     audit.write_audit_log(db, actor_user_id=current.user.id, action='task.status', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True, detail=f'enabled={payload.enabled}')
     db.commit()
     db.refresh(task)
-    return _task_out(db, task)
+    return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3))
 
 
 @router.delete('/{task_id:int}', dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -608,22 +222,22 @@ def post_run_task(request: Request, task_id: int, current: CurrentUser = Depends
                 send_runtime(db, DRAMA_NOTIFY_TITLE, section)
         except Exception:
             pass
-    return _execution_out(execution)
+    return execution_out(execution)
 
 
 @router.post('/{task_id:int}/share', response_model=TaskShareLinkOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
 def post_create_task_share(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     task = get_task(db, task_id)
     if task.account_name:
-        account = _get_active_account(db, task.account_name)
+        account = get_active_account(db, task.account_name)
         if account is None:
             raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '任务指定的网盘账号不存在或不可用')
     else:
         drive_type = AdapterRegistry.detect_drive_type(task.shareurl)
         if not drive_type:
             raise bad_request('TASK_SHAREURL_INVALID', '无法识别任务使用的网盘类型')
-        account_name = _pick_default_account_name(db, drive_type)
-        account = _get_active_account(db, account_name) if account_name else None
+        account_name = pick_default_account_name(db, drive_type)
+        account = get_active_account(db, account_name) if account_name else None
         if account is None:
             raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的网盘账号')
 
@@ -683,262 +297,16 @@ def post_create_task_share(request: Request, task_id: int, current: CurrentUser 
     )
 
 
-@router.post('/{task_id:int}/run/stream', dependencies=[Depends(require_permissions_scoped(TASK_RUN))])
-def post_run_task_stream(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user_scoped)):
-    with SessionLocal() as adb:
-        task = get_task(adb, task_id)
-        init_payload = {
-            "task_id": int(task.id),
-            "taskname": str(task.taskname),
-            "started_at": datetime.now().isoformat(),
-        }
-        audit.write_audit_log(
-            adb,
-            actor_user_id=current.user.id,
-            action='task.run.stream',
-            target_type='task',
-            target_id=str(init_payload["task_id"]),
-            ip=request.client.host if request.client else None,
-            user_agent=request.headers.get('user-agent'),
-            success=True,
-        )
-        adb.commit()
-
-    q: queue.Queue[tuple[str, object]] = queue.Queue()
-    done_sentinel = object()
-
-    def emit_line(line: str) -> None:
-        q.put(("log", line))
-
-    def emit_stage(stage: str) -> None:
-        q.put(("stage", stage))
-
-    def worker() -> None:
-        with SessionLocal() as wdb:
-            log = ExecutionLog(emit_line=emit_line, emit_stage=emit_stage)
-            try:
-                wtask = get_task(wdb, task_id)
-                execution = TaskExecutor(wdb).run_task(wtask, log=log)
-                wdb.commit()
-                wdb.refresh(execution)
-                if str(getattr(wtask, "task_type", "") or "") == "drama":
-                    try:
-                        section, should_notify = build_task_section(wtask, execution)
-                        if should_notify:
-                            send_runtime(wdb, DRAMA_NOTIFY_TITLE, section)
-                    except Exception:
-                        pass
-                q.put(
-                    (
-                        "done",
-                        {
-                            "status": execution.status,
-                            "message": execution.message,
-                            "execution": _execution_out(execution).model_dump(mode="json"),
-                        },
-                    )
-                )
-            except Exception as exc:
-                wdb.rollback()
-                message = getattr(exc, "message", None) or str(exc).strip() or type(exc).__name__
-                log.section("异常")
-                log.line(message)
-                q.put(
-                    (
-                        "done",
-                        {
-                            "status": "failed",
-                            "message": message,
-                            "execution": {
-                                "id": 0,
-                                "task_id": task_id,
-                                "status": "failed",
-                                "started_at": log.started_at.isoformat(),
-                                "finished_at": datetime.now().isoformat(),
-                                "tree_summary": None,
-                                "message": message,
-                                "stage": log.stage,
-                                "run_log": log.render(),
-                                "adapter_snapshot": {},
-                            },
-                        },
-                    )
-                )
-            finally:
-                q.put(("done_sentinel", done_sentinel))
-
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-
-    def sse(event: str, data: object) -> bytes:
-        payload = json.dumps(data, ensure_ascii=False)
-        return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
-
-    def gen():
-        yield sse("init", init_payload)
-        while True:
-            try:
-                kind, value = q.get(timeout=15)
-            except queue.Empty:
-                yield b": ping\n\n"
-                continue
-            if kind == "log":
-                yield sse("log", {"line": str(value)})
-                continue
-            if kind == "stage":
-                yield sse("stage", {"stage": str(value)})
-                continue
-            if kind == "done":
-                yield sse("done", value)
-                continue
-            if kind == "done_sentinel":
-                break
-
-    return StreamingResponse(
-        gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.post('/run/stream', dependencies=[Depends(require_permissions_scoped(TASK_RUN))])
-def post_run_task_stream_by_payload(request: Request, payload: TaskCreateIn, current: CurrentUser = Depends(get_current_user_scoped)):
-    import uuid
-
-    init_payload = {
-        "task_id": 0,
-        "taskname": str(payload.taskname),
-        "started_at": datetime.now().isoformat(),
-        "preview": True,
-    }
-    with SessionLocal() as adb:
-        audit.write_audit_log(
-            adb,
-            actor_user_id=current.user.id,
-            action='task.run.preview_stream',
-            target_type='task',
-            target_id='0',
-            ip=request.client.host if request.client else None,
-            user_agent=request.headers.get('user-agent'),
-            success=True,
-            detail=str(payload.taskname or ""),
-        )
-        adb.commit()
-
-    q: queue.Queue[tuple[str, object]] = queue.Queue()
-    done_sentinel = object()
-
-    def emit_line(line: str) -> None:
-        q.put(("log", line))
-
-    def emit_stage(stage: str) -> None:
-        q.put(("stage", stage))
-
-    def worker() -> None:
-        with SessionLocal() as wdb:
-            log = ExecutionLog(emit_line=emit_line, emit_stage=emit_stage)
-            try:
-                from app.models.task import Task
-                from app.extensions.runtime.task_executor import TaskExecutor
-
-                task_uid = (str(payload.task_uid or "").strip() or f"preview-{uuid.uuid4().hex}")
-                wtask = Task(
-                    task_uid=task_uid,
-                    task_type=str(payload.task_type or "generic"),
-                    taskname=str(payload.taskname or ""),
-                    shareurl=str(payload.shareurl or ""),
-                    savepath=str(payload.savepath or ""),
-                    pattern=(str(payload.pattern) if payload.pattern is not None else None),
-                    replace=(str(payload.replace) if payload.replace is not None else None),
-                    ignore_extension=bool(payload.ignore_extension),
-                    account_name=(str(payload.account_name) if payload.account_name is not None else None),
-                    tmdb_id=(int(payload.tmdb_id) if payload.tmdb_id is not None else None),
-                    tmdb_media_type=(str(payload.tmdb_media_type) if payload.tmdb_media_type is not None else None),
-                    enabled=True,
-                    addition_json=json.dumps(payload.addition or {}, ensure_ascii=False),
-                    extra_json=json.dumps(payload.extra or {}, ensure_ascii=False),
-                )
-                wtask.id = 0
-                execution = TaskExecutor(wdb).run_task(wtask, log=log, persist_execution=False)
-                q.put(
-                    (
-                        "done",
-                        {
-                            "status": execution.status,
-                            "message": execution.message,
-                            "execution": _execution_out(execution).model_dump(mode="json"),
-                        },
-                    )
-                )
-            except Exception as exc:
-                wdb.rollback()
-                message = getattr(exc, "message", None) or str(exc).strip() or type(exc).__name__
-                log.section("异常")
-                log.line(message)
-                q.put(
-                    (
-                        "done",
-                        {
-                            "status": "failed",
-                            "message": message,
-                            "execution": {
-                                "id": 0,
-                                "task_id": 0,
-                                "status": "failed",
-                                "started_at": log.started_at.isoformat(),
-                                "finished_at": datetime.now().isoformat(),
-                                "tree_summary": None,
-                                "message": message,
-                                "stage": log.stage,
-                                "run_log": log.render(),
-                                "adapter_snapshot": {},
-                            },
-                        },
-                    )
-                )
-            finally:
-                q.put(("done_sentinel", done_sentinel))
-
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-
-    def sse(event: str, data: object) -> bytes:
-        payload_s = json.dumps(data, ensure_ascii=False)
-        return f"event: {event}\ndata: {payload_s}\n\n".encode("utf-8")
-
-    def gen():
-        yield sse("init", init_payload)
-        while True:
-            try:
-                kind, value = q.get(timeout=15)
-            except queue.Empty:
-                yield b": ping\n\n"
-                continue
-            if kind == "log":
-                yield sse("log", {"line": str(value)})
-                continue
-            if kind == "stage":
-                yield sse("stage", {"stage": str(value)})
-                continue
-            if kind == "done":
-                yield sse("done", value)
-                continue
-            if kind == "done_sentinel":
-                break
-
-    return StreamingResponse(
-        gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
 @router.get('/scheduler', response_model=TaskSchedulerSettingOut, dependencies=[Depends(require_permissions(TASK_READ))])
 def get_task_scheduler_setting(db: Session = Depends(get_db)):
+    setting = load_task_scheduler_setting(db)
+    if setting is not None:
+        # 纯读请求不提交、不 refresh：只回滚只读事务，省掉一次全行查询
+        return scheduler_out(setting)
     setting = get_or_create_task_scheduler_setting(db)
+    payload = scheduler_out(setting)
     db.commit()
-    db.refresh(setting)
-    return _scheduler_out(setting)
+    return payload
 
 
 @router.patch('/scheduler', response_model=TaskSchedulerSettingOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -948,616 +316,10 @@ def patch_task_scheduler_setting(request: Request, payload: TaskSchedulerSetting
     db.commit()
     db.refresh(setting)
     task_scheduler_manager.reload()
-    return _scheduler_out(setting)
+    return scheduler_out(setting)
 
 
-@router.post('/share/preview', response_model=SharePreviewOut, dependencies=[Depends(require_permissions(TASK_READ))])
-def post_share_preview(payload: SharePreviewIn, db: Session = Depends(get_db)):
-    drive_type = AdapterRegistry.detect_drive_type(payload.shareurl)
-    if drive_type is None:
-        raise bad_request('TASK_SHAREURL_INVALID', '无法识别的网盘分享链接')
-    account_name = payload.account_name or _pick_default_account_name(db, drive_type)
-    if payload.account_name and _get_active_account(db, payload.account_name) is None:
-        raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '指定账号不存在或不可用')
-    manager = DatabaseAccountManager(db, no_login=True)
-    task_payload = {"shareurl": payload.shareurl, "account_name": account_name}
-    adapter = manager.get_adapter_for_task(task_payload, allow_inactive=True)
-    if adapter is None:
-        raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的驱动账号')
-    pwd_id, passcode, extracted_pdir_fid, _ = adapter.extract_url(payload.shareurl)
-    if not pwd_id:
-        raise bad_request('TASK_SHAREURL_INVALID', '无法解析分享链接')
-    token_response = adapter.get_stoken(pwd_id, passcode or '')
-    stoken = ((token_response or {}).get("data") or {}).get("stoken")
-    # 提取分享者名称
-    author_obj = ((token_response or {}).get("data") or {}).get("author")
-    share_author_name = ""
-    if isinstance(author_obj, dict):
-        share_author_name = (
-            author_obj.get("nick_name")
-            or author_obj.get("nickname")
-            or author_obj.get("user_name")
-            or author_obj.get("name")
-            or ""
-        ).strip()
-    if not stoken:
-        message = (token_response or {}).get("message") or "获取分享 token 失败"
-        raise bad_request('TASK_SHARE_TOKEN_FAILED', str(message))
-    pdir_fid = payload.pdir_fid if payload.pdir_fid is not None else (extracted_pdir_fid or "")
-    detail = adapter.get_detail(pwd_id, stoken, pdir_fid or "")
-    if not isinstance(detail, dict) or detail.get("code") not in (None, 0, "0"):
-        message = detail.get("message") if isinstance(detail, dict) else None
-        raise bad_request('TASK_SHARE_DETAIL_FAILED', str(message or '读取分享目录失败，请重试'))
-    data = (detail or {}).get("data") or {}
-    if isinstance(data, dict):
-        resolved = str(data.get("resolved_pdir_fid") or "").strip()
-        if resolved:
-            pdir_fid = resolved
-    raw_items = (data.get("list") if isinstance(data, dict) else None) or []
-    taskname = str(payload.taskname or "")
-    pattern = str(payload.pattern or "")
-    replace = str(payload.replace or "")
-    savepath = str(payload.savepath or "").strip().rstrip("/")
-    ignore_ext = bool(payload.ignore_extension)
-
-    from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
-
-    tmdb_cfg = get_tmdb_runtime_config(get_or_create_tmdb_setting(db))
-    tmdb_series_title = None
-    tmdb_tv_seasons = None
-    tmdb_year = None
-    tmdb_id = int(payload.tmdb_id) if payload.tmdb_id is not None else 0
-    tmdb_media_type = str(payload.tmdb_media_type or "").strip().lower()
-
-    dir_file_list: list[dict] = []
-    dir_filename_list: list[str] = []
-    if savepath:
-        dest_adapter = None
-        account_row = _get_active_account(db, account_name) if account_name else None
-        if account_row is not None:
-            cfg = AdapterRegistry.parse_config_json(account_row.drive_type, account_row.config_json, account_row.cookie)
-            cookie = AdapterRegistry.serialize_config(account_row.drive_type, cfg)
-            dest_adapter = AdapterFactory.create_adapter(
-                account_row.drive_type,
-                cookie,
-                0,
-                config=cfg,
-                account_name=account_row.name,
-                no_login=False,
-            )
-            if dest_adapter is not None:
-                try:
-                    ok = dest_adapter.init()
-                except Exception:
-                    ok = None
-                if not ok:
-                    dest_adapter = None
-        normalized = re.sub(r"/+", "/", savepath)
-        dest_fid = None
-        try:
-            fid_list = (dest_adapter.get_fids([normalized]) if dest_adapter is not None else []) or []
-            match = None
-            for item in fid_list:
-                item_path = item.get("file_path") or item.get("path") or item.get("filePath")
-                if item_path == normalized:
-                    match = item
-                    break
-            if match is None and fid_list:
-                match = fid_list[0]
-            if match and match.get("fid"):
-                dest_fid = str(match.get("fid"))
-        except Exception:
-            dest_fid = None
-        if dest_fid:
-            listing = (dest_adapter.ls_dir(dest_fid, max_items=2000) if dest_adapter is not None else {}) or {}
-            dir_file_list = (((listing or {}).get("data") or {}).get("list")) or []
-            for raw in dir_file_list:
-                if _bool_is_dir(raw):
-                    continue
-                name = _pick_name(raw)
-                if name:
-                    dir_filename_list.append(name)
-
-    from app.services.magic_regex import get_enabled_magic_regex_map
-
-    mr = MagicRename(magic_regex=get_enabled_magic_regex_map(db))
-    mr.set_taskname(taskname)
-    pattern, replace = mr.magic_regex_conv(pattern, replace)
-    try:
-        compiled_search = re.compile(pattern, re.IGNORECASE) if pattern else None
-    except re.error as e:
-        raise bad_request("TASK_REGEX_INVALID", f"pattern 正则不合法: {e}")
-    video_exts = {
-        ".mp4",
-        ".mkv",
-        ".avi",
-        ".mov",
-        ".wmv",
-        ".flv",
-        ".webm",
-        ".m4v",
-        ".ts",
-        ".m2ts",
-        ".mpg",
-        ".mpeg",
-        ".3gp",
-        ".cas",
-    }
-
-    def _is_video_name(name: str) -> bool:
-        try:
-            _base, _ext = os.path.splitext(str(name or ""))
-        except Exception:
-            return False
-        return bool(_ext) and _ext.lower() in video_exts
-
-    def _to_ts(v):
-        try:
-            return float(v)
-        except Exception:
-            return None
-
-    preview_list: list[dict] = []
-    for raw in raw_items[: payload.max_items]:
-        fid = _pick_fid(raw)
-        file_name = _pick_name(raw)
-        if not fid or not file_name:
-            continue
-        is_dir = _bool_is_dir(raw)
-        updated_at = _pick_updated_at(raw)
-        size = _pick_size(raw)
-        include_items = _pick_children_count(raw) if is_dir else None
-
-        item: dict = {
-            "fid": fid,
-            "fid_token": _pick_fid_token(raw),
-            "file_name": file_name,
-            "dir": is_dir,
-            "updated_at": updated_at,
-            "size": size,
-            "include_items": include_items,
-            "file_name_re": None,
-            "file_name_saved": None,
-        }
-
-        if is_dir:
-            # 文件夹筛选/过滤检查
-            folder_filter_str = str(payload.folder_filter or "").strip()
-            folder_exclude_str = str(payload.folder_exclude or "").strip()
-            dir_min_date_str = str(payload.dir_min_date or "").strip()
-            folder_priority_str = str(payload.folder_priority or "").strip()
-            folder_priority_mode_str = str(payload.folder_priority_mode or "").strip()
-            if folder_filter_str or folder_exclude_str or dir_min_date_str or folder_priority_str:
-                name_lower = file_name.lower()
-                # 优先级匹配检查
-                if folder_priority_str:
-                    priority_keywords = [w.strip().lower() for w in folder_priority_str.split("|") if w.strip()]
-                    priority_is_any = str(folder_priority_mode_str or "all").strip().lower() == "any"
-                    if priority_keywords:
-                        if priority_is_any:
-                            if any(kw in name_lower for kw in priority_keywords):
-                                item["priority_match"] = True
-                        else:
-                            if all(kw in name_lower for kw in priority_keywords):
-                                item["priority_match"] = True
-                if folder_filter_str:
-                    folder_filter_words = [w.strip().lower() for w in folder_filter_str.split("|") if w.strip()]
-                    folder_filter_is_any = str(payload.folder_filter_mode or "all").strip().lower() == "any"
-                    if folder_filter_words:
-                        if folder_filter_is_any:
-                            if not any(w in name_lower for w in folder_filter_words):
-                                item["filtered_by_folder"] = "不包含筛选词"
-                        else:
-                            if not all(w in name_lower for w in folder_filter_words):
-                                item["filtered_by_folder"] = "不包含筛选词"
-                if folder_exclude_str and not item.get("filtered_by_folder"):
-                    folder_exclude_words = [w.strip().lower() for w in folder_exclude_str.split("|") if w.strip()]
-                    folder_exclude_is_all = str(payload.folder_exclude_mode or "any").strip().lower() == "all"
-                    if folder_exclude_words:
-                        if folder_exclude_is_all:
-                            if all(w in name_lower for w in folder_exclude_words):
-                                item["filtered_by_folder"] = "匹配过滤词"
-                        else:
-                            if any(w in name_lower for w in folder_exclude_words):
-                                item["filtered_by_folder"] = "匹配过滤词"
-                if dir_min_date_str and not item.get("filtered_by_folder"):
-                    dir_ts = updated_at
-                    if dir_ts is not None:
-                        try:
-                            from datetime import datetime as _dt
-                            if isinstance(dir_ts, (int, float)) and dir_ts > 0:
-                                dir_date = _dt.fromtimestamp(dir_ts / 1000 if dir_ts > 1e12 else dir_ts).strftime("%Y-%m-%d")
-                            else:
-                                dir_date = str(dir_ts)[:10]
-                            if dir_date < dir_min_date_str:
-                                item["filtered_by_folder"] = "早于文件夹时间过滤"
-                        except Exception:
-                            pass
-            preview_list.append(item)
-            continue
-
-        search_re = compiled_search
-        matched = (not search_re) or bool(search_re.search(file_name))
-        if matched:
-            file_name_re = file_name
-            if not is_dir:
-                file_name_re = mr.sub(pattern, replace, file_name)
-            saved = mr.is_exists(file_name_re, dir_filename_list, ignore_ext and not is_dir) if dir_filename_list else None
-            if saved:
-                item["file_name_saved"] = saved
-            else:
-                item["file_name_re"] = file_name_re
-        else:
-            if search_re:
-                item["filtered_by_search"] = True
-        preview_list.append(item)
-
-    # 最小文件大小过滤标记
-    min_size_str = str(payload.min_size or "").strip()
-    if min_size_str:
-        from app.extensions.runtime.drama_executor import _parse_size
-        min_bytes = _parse_size(min_size_str)
-        if min_bytes is not None and min_bytes > 0:
-            for f in preview_list:
-                if f.get("dir"):
-                    continue
-                file_size = _pick_size(f)
-                if file_size is not None and file_size < min_bytes:
-                    f["file_name_re"] = None
-                    f["file_name_saved"] = None
-                    f["filtered_by_size"] = True
-
-    # 关键词过滤标记
-    filter_words_str = str(payload.filter_words or "").strip()
-    if filter_words_str:
-        filter_words = [w.strip().lower() for w in filter_words_str.split("|") if w.strip()]
-        if filter_words:
-            for f in preview_list:
-                if f.get("dir") or f.get("filtered_by_size"):
-                    continue
-                fname = str(f.get("file_name") or "").lower()
-                if any(w in fname for w in filter_words):
-                    f["file_name_re"] = None
-                    f["file_name_saved"] = None
-                    f["filtered_by_keyword"] = True
-
-    # 文件筛选标记
-    file_filter_str = str(payload.file_filter or "").strip()
-    if file_filter_str:
-        file_filter_words = [w.strip().lower() for w in file_filter_str.split("|") if w.strip()]
-        if file_filter_words:
-            file_filter_is_any = str(payload.file_filter_mode or "all").strip().lower() == "any"
-            for f in preview_list:
-                if f.get("dir") or f.get("filtered_by_size") or f.get("filtered_by_keyword"):
-                    continue
-                fname = str(f.get("file_name") or "").lower()
-                if file_filter_is_any:
-                    matched = any(w in fname for w in file_filter_words)
-                else:
-                    matched = all(w in fname for w in file_filter_words)
-                if not matched:
-                    f["file_name_re"] = None
-                    f["file_name_saved"] = None
-                    f["filtered_by_file_filter"] = True
-
-    # 文件时间过滤标记
-    file_min_date_str = str(payload.file_min_date or "").strip()
-    if file_min_date_str:
-        import logging as _ft_log
-        _ft_dbg = _ft_log.getLogger(__name__)
-        from datetime import datetime as _dt
-        _ft_dbg.info("[file_time_filter] file_min_date=%r", file_min_date_str)
-        for f in preview_list:
-            if f.get("dir") or f.get("filtered_by_size") or f.get("filtered_by_keyword") or f.get("filtered_by_file_filter"):
-                continue
-            file_ts = f.get("updated_at")
-            _ft_dbg.info("[file_time_filter] file=%r updated_at=%r type=%s", f.get("file_name"), file_ts, type(file_ts).__name__)
-            if file_ts is not None:
-                try:
-                    if isinstance(file_ts, (int, float)) and file_ts > 0:
-                        file_date = _dt.fromtimestamp(file_ts / 1000 if file_ts > 1e12 else file_ts).strftime("%Y-%m-%d")
-                    else:
-                        file_date = str(file_ts)[:10]
-                    _ft_dbg.info("[file_time_filter] file_date=%r < min_date=%r -> %s", file_date, file_min_date_str, file_date < file_min_date_str)
-                    if file_date < file_min_date_str:
-                        f["file_name_re"] = None
-                        f["file_name_saved"] = None
-                        f["filtered_by_file_date"] = True
-                except Exception as e:
-                    _ft_dbg.info("[file_time_filter] error: %s", e)
-
-    # 过滤完成后再判断重命名冲突，避免已被关键词/文件规则排除的文件参与冲突。
-    best: dict[str, tuple[tuple[float, float], int]] = {}
-    for idx, f in enumerate(preview_list):
-        if f.get("file_name_saved") or f.get("dir"):
-            continue
-        target = f.get("file_name_re")
-        if not target:
-            continue
-        key = os.path.splitext(target)[0] if ignore_ext else target
-        sz = _pick_size(f)
-        ts = _to_ts(f.get("updated_at"))
-        score = (float(sz) if sz is not None else float("-inf"), ts if ts is not None else float("-inf"))
-        prev = best.get(key)
-        if prev is None or score > prev[0] or (score == prev[0] and idx > prev[1]):
-            best[key] = (score, idx)
-    if best:
-        keep_idx = set(v[1] for v in best.values())
-        for idx, f in enumerate(preview_list):
-            if idx in keep_idx or f.get("file_name_saved") or f.get("dir"):
-                continue
-            if f.get("file_name_re"):
-                f["file_name_saved"] = "重命名冲突（保留最大）"
-                f["file_name_re"] = None
-
-    items: list[SharePreviewItemOut] = []
-    for it in preview_list:
-        items.append(
-            SharePreviewItemOut(
-                fid=str(it["fid"]),
-                fid_token=it.get("fid_token"),
-                name=str(it["file_name"]),
-                name_re=it.get("file_name_re"),
-                is_dir=bool(it.get("dir")),
-                updated_at=it.get("updated_at"),
-                size=it.get("size"),
-                children_count=it.get("include_items") if it.get("dir") else None,
-                file_name=str(it["file_name"]),
-                file_name_re=it.get("file_name_re"),
-                file_name_saved=it.get("file_name_saved"),
-                filtered_by_size=bool(it.get("filtered_by_size")) if it.get("filtered_by_size") else None,
-                filtered_by_keyword=bool(it.get("filtered_by_keyword")) if it.get("filtered_by_keyword") else None,
-                filtered_by_file_filter=bool(it.get("filtered_by_file_filter")) if it.get("filtered_by_file_filter") else None,
-                filtered_by_file_date=bool(it.get("filtered_by_file_date")) if it.get("filtered_by_file_date") else None,
-                filtered_by_folder=it.get("filtered_by_folder") or None,
-                filtered_by_search=bool(it.get("filtered_by_search")) if it.get("filtered_by_search") else None,
-                priority_match=bool(it.get("priority_match")) if it.get("priority_match") else None,
-                dir=bool(it.get("dir")),
-                include_items=it.get("include_items") if it.get("dir") else None,
-            )
-        )
-    return SharePreviewOut(
-        drive_type=str(drive_type),
-        suggested_account_name=account_name,
-        pwd_id=str(pwd_id),
-        pdir_fid=str(pdir_fid or ""),
-        share_author_name=share_author_name or None,
-        items=items,
-    )
-
-
-@router.post("/share/preview-batch", response_model=SharePreviewBatchOut, dependencies=[Depends(require_permissions(TASK_READ))])
-def post_share_preview_batch(payload: SharePreviewBatchIn, db: Session = Depends(get_db)):
-    out, changed = preview_share_batch(db, payload)
-    if changed:
-        db.commit()
-    return out
-
-
-@router.post("/share/validate", response_model=ShareValidateOut, dependencies=[Depends(require_permissions(TASK_READ))])
-def post_share_validate(payload: ShareValidateIn, db: Session = Depends(get_db)):
-    """轻量级验证：只检查链接有效性 + 提取分享者信息"""
-    return validate_share_links(db, payload.shareurls)
-
-
-@router.post("/share/validate_stream", dependencies=[Depends(require_permissions(TASK_READ))])
-def post_share_validate_stream(payload: ShareValidateIn, db: Session = Depends(get_db)):
-    """流式验证：验证完一个链接立即返回结果"""
-    from fastapi.responses import StreamingResponse
-    from app.services.share_preview_batch import validate_share_links_streaming
-    import json
-
-    def event_generator():
-        for item in validate_share_links_streaming(db, payload.shareurls):
-            data = json.dumps({"shareurl": item.shareurl, "ok": item.ok, "share_author_name": item.share_author_name, "message": item.message}, ensure_ascii=False)
-            yield f"data: {data}\n\n"
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@router.post('/drive/browse', response_model=DriveBrowseOut, dependencies=[Depends(require_permissions(TASK_READ))])
-def post_drive_browse(payload: DriveBrowseIn, db: Session = Depends(get_db)):
-    drive_type: str | None = None
-    if payload.account_name:
-        account = _get_active_account(db, payload.account_name)
-        if account is None:
-            raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "指定账号不存在或不可用")
-        drive_type = str(account.drive_type)
-    if not payload.account_name:
-        if payload.shareurl:
-            drive_type = AdapterRegistry.detect_drive_type(payload.shareurl)
-            if drive_type is None:
-                raise bad_request('TASK_SHAREURL_INVALID', '无法识别的网盘分享链接')
-            payload.account_name = _pick_default_account_name(db, drive_type)
-        else:
-            any_default = _pick_any_default_account(db)
-            if any_default:
-                payload.account_name = any_default.name
-                drive_type = str(any_default.drive_type)
-    if not payload.account_name:
-        raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的驱动账号')
-    manager = DatabaseAccountManager(db)
-    task_payload = {"shareurl": payload.shareurl or "", "account_name": payload.account_name}
-    manager.init_for_tasks([task_payload])
-    adapter = manager.get_adapter_for_task(task_payload)
-    if adapter is None:
-        raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的驱动账号')
-    dir_path = str(payload.dir_path or "").strip() or "/"
-
-    is_fid_mode = ("/" not in dir_path) and (dir_path not in ("/", "0"))
-    normalized_path = re.sub(r"/+", "/", dir_path)
-    if not normalized_path.startswith("/") and not is_fid_mode:
-        normalized_path = "/" + normalized_path
-    normalized_path = normalized_path.rstrip('/')
-    paths: list[DriveBrowsePathOut] = []
-    if dir_path in ("/", "0"):
-        pdir_fid = "0"
-    elif is_fid_mode:
-        pdir_fid = dir_path
-    else:
-        fid_list = adapter.get_fids([normalized_path])
-        match = None
-        for item in fid_list or []:
-            item_path = item.get("file_path") or item.get("path") or item.get("filePath")
-            if item_path == normalized_path:
-                match = item
-                break
-        if match is None and fid_list:
-            match = fid_list[0]
-        pdir_fid = str(match.get("fid")) if match and match.get("fid") else None
-
-        segments = [s for s in normalized_path.split("/") if s]
-        if segments:
-            accum_paths = ["/" + "/".join(segments[: i + 1]) for i in range(len(segments))]
-            fid_arr = adapter.get_fids(accum_paths) or []
-            fid_map: dict[str, str] = {}
-            for it in fid_arr:
-                p = it.get("file_path") or it.get("path") or it.get("filePath")
-                f = it.get("fid")
-                if p and f:
-                    fid_map[str(p)] = str(f)
-            for i, name in enumerate(segments):
-                p = accum_paths[i]
-                fid_val = fid_map.get(p)
-                if fid_val:
-                    paths.append(DriveBrowsePathOut(fid=fid_val, name=name))
-
-    if not pdir_fid:
-        return DriveBrowseOut(
-            account_name=str(payload.account_name),
-            drive_type=str(drive_type) if drive_type else None,
-            dir_path=dir_path,
-            exists=False,
-            pdir_fid=None,
-            items=[],
-            paths=paths,
-        )
-
-    listing = adapter.ls_dir(str(pdir_fid), max_items=payload.max_items)
-    raw_items = (((listing or {}).get("data") or {}).get("list")) or []
-    items: list[DriveBrowseItemOut] = []
-    for raw in raw_items[: payload.max_items]:
-        fid = _pick_fid(raw)
-        name = _pick_name(raw)
-        if not fid or not name:
-            continue
-        is_dir = _bool_is_dir(raw)
-        items.append(
-            DriveBrowseItemOut(
-                fid=fid,
-                name=name,
-                is_dir=is_dir,
-                updated_at=_pick_updated_at(raw),
-                size=_pick_size(raw),
-                include_items=_pick_children_count(raw) if is_dir else None,
-                file_name=name,
-                dir=is_dir,
-            )
-        )
-    return DriveBrowseOut(
-        account_name=str(payload.account_name),
-        drive_type=str(drive_type) if drive_type else None,
-        dir_path=dir_path,
-        exists=True,
-        pdir_fid=str(pdir_fid),
-        items=items,
-        paths=paths,
-    )
-
-
-@router.post('/drive/mkdir', response_model=DriveMkdirOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
-def post_drive_mkdir(payload: DriveMkdirIn, db: Session = Depends(get_db)):
-    if payload.account_name and _get_active_account(db, payload.account_name) is None:
-        raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "指定账号不存在或不可用")
-    if not payload.account_name:
-        if not payload.shareurl:
-            raise bad_request('TASK_ACCOUNT_REQUIRED', '缺少 account_name 或 shareurl')
-        drive_type = AdapterRegistry.detect_drive_type(payload.shareurl)
-        if drive_type is None:
-            raise bad_request('TASK_SHAREURL_INVALID', '无法识别的网盘分享链接')
-        payload.account_name = _pick_default_account_name(db, drive_type)
-    if not payload.account_name:
-        raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的驱动账号')
-    manager = DatabaseAccountManager(db)
-    task_payload = {"shareurl": payload.shareurl or "", "account_name": payload.account_name}
-    manager.init_for_tasks([task_payload])
-    adapter = manager.get_adapter_for_task(task_payload)
-    if adapter is None:
-        raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的驱动账号')
-    response = adapter.mkdir(payload.dir_path)
-    return DriveMkdirOut(account_name=str(payload.account_name), dir_path=payload.dir_path, response=response or {})
-
-
-@router.post('/drive/delete', response_model=DriveDeleteOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
-def post_drive_delete(
-    payload: DriveDeleteIn,
-    request: Request,
-    current: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> DriveDeleteOut:
-    account_name = str(payload.account_name or "").strip()
-    drive_type: str | None = None
-    if account_name:
-        account = _get_active_account(db, account_name)
-        if account is None:
-            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '指定账号不存在或不可用')
-        drive_type = str(account.drive_type)
-    elif payload.shareurl:
-        drive_type = AdapterRegistry.detect_drive_type(payload.shareurl)
-        if not drive_type:
-            raise bad_request('TASK_SHAREURL_INVALID', '无法识别链接所属网盘')
-        account_name = _pick_default_account_name(db, drive_type)
-        account = _get_active_account(db, account_name) if account_name else None
-        if account is None:
-            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的网盘账号')
-    else:
-        any_default = _pick_any_default_account(db)
-        if any_default is None:
-            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的网盘账号')
-        account_name = any_default.name
-        drive_type = str(any_default.drive_type)
-
-    fids = [str(x).strip() for x in (payload.fids or []) if str(x).strip()]
-    if not fids:
-        raise bad_request('DRIVE_DELETE_EMPTY', '缺少要删除的文件')
-
-    manager = DatabaseAccountManager(db)
-    task_payload = {'shareurl': payload.shareurl or '', 'account_name': account_name}
-    manager.init_for_tasks([task_payload])
-    adapter = manager.get_adapter_for_task(task_payload)
-    if adapter is None:
-        raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的网盘账号')
-
-    try:
-        result = adapter.delete(fids)
-    except NotImplementedError as exc:
-        raise bad_request('DRIVE_DELETE_UNSUPPORTED', f'{drive_type or ""} 暂不支持删除') from exc
-    except Exception as exc:  # noqa: BLE001
-        logger.exception('删除网盘文件失败 account=%s', account_name)
-        raise bad_request('DRIVE_DELETE_FAILED', str(exc) or '删除失败') from exc
-
-    if isinstance(result, dict):
-        code = result.get('code')
-        if code is not None:
-            ok = code in (0, '0')
-        else:
-            ok = bool(result.get('success'))
-        message = str(result.get('message') or '')
-    else:
-        ok = False
-        message = ''
-
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action='task.drive.delete',
-        target_type='drive_file',
-        target_id=account_name,
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get('user-agent'),
-        success=bool(ok),
-        detail=f'drive_type={drive_type or ""} count={len(fids)}',
-    )
-    db.commit()
-    return DriveDeleteOut(ok=bool(ok), message=message or None, deleted=len(fids) if ok else 0)
+# 拆出去的子路由：分享预览/验证、网盘浏览/建目录/删除（路径与响应保持不变）
+router.include_router(tasks_share.router)
+router.include_router(tasks_drive.router)
+router.include_router(tasks_stream.router)

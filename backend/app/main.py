@@ -16,6 +16,7 @@ from app.core.exception_handlers import api_error_handler, http_error_handler, v
 from app.core.errors import ApiError
 from app.core.logging import setup_logging
 from app.core.settings import settings
+from app.middlewares.gzip import GZipMiddleware
 from app.db.session import SessionLocal
 from app.extensions.runtime.telegram_bot_manager import telegram_bot_manager
 from app.extensions.runtime.task_scheduler import task_scheduler_manager
@@ -91,6 +92,11 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
+    # 任务列表单次响应可达数 MB（含最近执行记录的 run_log），gzip 后通常只剩几个百分点；
+    # Starlette 的 GZipMiddleware 默认跳过 text/event-stream，SSE 事件与心跳不受影响。
+    # 注意顺序：后 add 的在外层。这里先加 gzip、再加 Timing，让 Timing 在最外层，
+    # 这样 x-response-time-ms 与慢请求日志统计的是「含压缩在内」的真实耗时。
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     app.add_middleware(TimingMiddleware)
 
     if settings.cors_origins:

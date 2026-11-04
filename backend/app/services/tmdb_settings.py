@@ -10,6 +10,9 @@ from app.models.tmdb_setting import TMDBSetting
 
 DEFAULT_TMDB_SETTING_ID = 1
 
+# 同一次请求（同一 Session）内多处需要 TMDB 语言配置时只读一次设置表
+_TMDB_LANG_PAIR_SESSION_KEY = "tmdb_lang_pair"
+
 
 def get_or_create_tmdb_setting(db: Session) -> TMDBSetting:
     item = db.get(TMDBSetting, DEFAULT_TMDB_SETTING_ID)
@@ -19,6 +22,22 @@ def get_or_create_tmdb_setting(db: Session) -> TMDBSetting:
     db.add(item)
     db.flush()
     return item
+
+
+def get_tmdb_lang_pair(db: Session) -> tuple[str, str]:
+    cached = db.info.get(_TMDB_LANG_PAIR_SESSION_KEY)
+    if cached is not None:
+        return cached
+    cfg = get_tmdb_runtime_config(get_or_create_tmdb_setting(db))
+    language = str(cfg.get("language") or "zh-CN").strip() or "zh-CN"
+    poster_language = str(cfg.get("poster_language") or "zh-CN").strip() or "zh-CN"
+    pair = (language, poster_language)
+    db.info[_TMDB_LANG_PAIR_SESSION_KEY] = pair
+    return pair
+
+
+def invalidate_tmdb_lang_pair_cache(db: Session) -> None:
+    db.info.pop(_TMDB_LANG_PAIR_SESSION_KEY, None)
 
 
 def _load_json(payload: str | None) -> dict[str, Any]:
@@ -75,4 +94,5 @@ def update_tmdb_setting(db: Session, *, payload: dict[str, Any] | None = None) -
 
     item.config_json = json.dumps(raw, ensure_ascii=False)
     db.flush()
+    invalidate_tmdb_lang_pair_cache(db)
     return item

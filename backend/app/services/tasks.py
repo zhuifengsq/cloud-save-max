@@ -5,7 +5,7 @@ import logging
 import uuid
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, noload, selectinload
 
 from app.core.errors import bad_request, not_found
 from app.extensions.runtime.adapter_registry import AdapterRegistry
@@ -19,11 +19,13 @@ logger = logging.getLogger(__name__)
 
 
 def list_tasks(db: Session) -> list[Task]:
-    return db.execute(select(Task).options(selectinload(Task.executions)).order_by(Task.id.desc())).scalars().all()
+    # 不再 eager loading 执行记录：需要最近几条请用 list_tasks_recent_executions 显式装配。
+    return db.execute(select(Task).options(noload(Task.executions)).order_by(Task.id.desc())).scalars().all()
 
 
 def list_tasks_recent_executions(db: Session, *, limit: int = 3) -> list[Task]:
-    tasks = db.execute(select(Task).order_by(Task.id.desc())).scalars().all()
+    # 显式 noload：列表只需要最近 N 条执行记录，下面会手动装配，绝不能全量加载。
+    tasks = db.execute(select(Task).options(noload(Task.executions)).order_by(Task.id.desc())).scalars().all()
     if not tasks:
         return []
 
@@ -76,10 +78,28 @@ def list_tasks_recent_executions(db: Session, *, limit: int = 3) -> list[Task]:
 
 
 def get_task(db: Session, task_id: int) -> Task:
-    task = db.execute(select(Task).options(selectinload(Task.executions)).where(Task.id == task_id)).scalars().first()
+    # 只取任务本身：调用方（执行、改状态、删除、换链）都不需要执行记录。
+    # 需要执行记录时请用 list_recent_executions 显式查询，避免全量加载 run_log。
+    task = db.execute(select(Task).where(Task.id == task_id)).scalars().first()
     if task is None:
         raise not_found('TASK_NOT_FOUND', '任务不存在')
     return task
+
+
+def list_recent_executions(db: Session, task_id: int, *, limit: int = 3) -> list[TaskExecution]:
+    """按开始时间倒序取某任务最近 N 条执行记录（替代 relationship 懒加载/全量 eager loading）。"""
+    if limit <= 0:
+        return []
+    return (
+        db.execute(
+            select(TaskExecution)
+            .where(TaskExecution.task_id == int(task_id))
+            .order_by(TaskExecution.started_at.desc(), TaskExecution.id.desc())
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
 
 
 def create_task(db: Session, **payload) -> Task:

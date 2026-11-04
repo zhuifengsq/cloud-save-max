@@ -10,6 +10,10 @@ from app.services.scheduler_validation import validate_scheduler_setting
 DEFAULT_TASK_SCHEDULER_SETTING_ID = 1
 
 
+def load_task_scheduler_setting(db: Session) -> TaskSchedulerSetting | None:
+    return db.get(TaskSchedulerSetting, DEFAULT_TASK_SCHEDULER_SETTING_ID)
+
+
 def get_or_create_task_scheduler_setting(db: Session) -> TaskSchedulerSetting:
     setting = (
         db.execute(select(TaskSchedulerSetting).where(TaskSchedulerSetting.id == DEFAULT_TASK_SCHEDULER_SETTING_ID))

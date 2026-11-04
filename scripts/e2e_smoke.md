@@ -27,5 +27,5 @@
 ## 5. 监控接口
 
 - 访问 `/api/health`
-- 访问 `/api/metrics`
-- 预期返回数据库状态与响应时间统计
+- 登录（或用配置了 METRICS_TOKEN 的 `?token=`）后访问 `/api/metrics`；未授权访问应返回 401
+- 预期返回数据库状态、响应时间统计与 counters（requests / sql_statements / external_http_calls / slow_requests）

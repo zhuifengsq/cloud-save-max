@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     tasks_share_preview_batch_db_cache_retention_seconds: int = 7 * 24 * 60 * 60
     # 每个任务保留的执行记录条数（超出后自动删除最旧的）
     task_execution_history_limit: int = 20
+    # 慢请求日志阈值（毫秒）：超过就记一条 WARNING，带 SQL 条数与外部 HTTP 耗时；<=0 关闭
+    slow_request_ms: int = 1000
+    # /api/metrics 的访问令牌；配置后只认 token，未配置则要求登录且具备 audit:read
+    metrics_token: str = ""
+    # 用户角色/权限查询的进程内缓存 TTL（秒）；<=0 关闭。用户/角色/权限变更时会主动失效
+    permission_cache_ttl_seconds: int = 30
 
     drama_runtime_retry_max_attempts: int = 3
     drama_runtime_retry_backoff_seconds: float = 1.0

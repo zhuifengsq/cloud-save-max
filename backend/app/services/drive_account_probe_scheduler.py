@@ -9,6 +9,10 @@ from app.services.scheduler_validation import validate_scheduler_setting
 DEFAULT_DRIVE_ACCOUNT_PROBE_SCHEDULER_SETTING_ID = 1
 
 
+def load_drive_account_probe_scheduler_setting(db: Session) -> DriveAccountProbeSchedulerSetting | None:
+    return db.get(DriveAccountProbeSchedulerSetting, DEFAULT_DRIVE_ACCOUNT_PROBE_SCHEDULER_SETTING_ID)
+
+
 def get_or_create_drive_account_probe_scheduler_setting(db: Session) -> DriveAccountProbeSchedulerSetting:
     item = db.get(DriveAccountProbeSchedulerSetting, DEFAULT_DRIVE_ACCOUNT_PROBE_SCHEDULER_SETTING_ID)
     if item is not None:

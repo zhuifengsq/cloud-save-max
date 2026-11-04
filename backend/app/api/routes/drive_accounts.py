@@ -15,7 +15,7 @@ from app.extensions.adapters.aliyun_adapter import AliyunAdapter
 from app.extensions.runtime.adapter_registry import AdapterRegistry
 from app.extensions.runtime.task_scheduler import task_scheduler_manager
 from app.models.drive_account import DriveAccount
-from app.services.drive_account_probe_scheduler import get_or_create_drive_account_probe_scheduler_setting, update_drive_account_probe_scheduler_setting
+from app.services.drive_account_probe_scheduler import get_or_create_drive_account_probe_scheduler_setting, load_drive_account_probe_scheduler_setting, update_drive_account_probe_scheduler_setting
 from app.services.drive_account_auth_sessions import create_auth_session, delete_auth_session, get_auth_session
 from app.services import audit
 from app.services.drive_accounts import (
@@ -68,10 +68,14 @@ def get_drive_types():
 
 @router.get('/probe/scheduler', response_model=DriveAccountProbeSchedulerSettingOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_READ))])
 def get_drive_account_probe_scheduler_setting(db: Session = Depends(get_db)):
+    setting = load_drive_account_probe_scheduler_setting(db)
+    if setting is not None:
+        # 纯读请求不提交、不 refresh：只回滚只读事务，省掉一次全行查询
+        return _probe_scheduler_out(setting)
     setting = get_or_create_drive_account_probe_scheduler_setting(db)
+    payload = _probe_scheduler_out(setting)
     db.commit()
-    db.refresh(setting)
-    return _probe_scheduler_out(setting)
+    return payload
 
 
 @router.patch('/probe/scheduler', response_model=DriveAccountProbeSchedulerSettingOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])

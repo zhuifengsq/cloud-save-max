@@ -54,6 +54,12 @@ class BaseCloudDriveAdapter(ABC):
         self._rate_limit_lock = threading.Lock()
         self._last_request_at = 0.0
 
+        # 适配器实例在进程内被多个请求线程、任务执行线程、调度线程共享，
+        # 这里记录 init() 的成功时间与结果，供 ensure_initialized() 做去重与串行化。
+        self._init_lock = threading.RLock()
+        self._init_success_at = 0.0
+        self._init_result: Any = None
+
         self.savepath_fid: Dict[str, str] = {"/": "0"}
 
     def _throttle_request(self) -> None:
@@ -158,6 +164,34 @@ class BaseCloudDriveAdapter(ABC):
         if isinstance(value, int) and not isinstance(value, bool):
             return True
         return str(value or "").strip() != ""
+
+    def ensure_initialized(self, *, ttl_seconds: float = 0.0) -> Any:
+        """线程安全地初始化账户，ttl_seconds 内成功过就复用上次结果、不重复登录。
+
+        同一账户的适配器实例会被多个请求线程、任务执行线程、调度线程共享。
+        串行化 init() 可以避免并发刷新 token / 并发登录，也避免账号状态被同时改写；
+        ttl_seconds 内的跳过则省掉重复的网络登录（每次 init 都是一次账户信息请求）。
+
+        init() 抛出的异常（例如 cloud189 验证码流程的 DriveAuthRequired）保持原样
+        向上抛出，只清掉成功标记，以便下次调用重新尝试。
+        """
+        with self._init_lock:
+            if ttl_seconds > 0 and self.is_active and self._init_success_at > 0:
+                if (time.monotonic() - self._init_success_at) < ttl_seconds:
+                    return self._init_result if self._init_result is not None else True
+            try:
+                result = self.init()
+            except Exception:
+                self._init_success_at = 0.0
+                self._init_result = None
+                raise
+            if result:
+                self._init_success_at = time.monotonic()
+                self._init_result = result
+            else:
+                self._init_success_at = 0.0
+                self._init_result = None
+            return result
 
     @abstractmethod
     def init(self) -> Any:

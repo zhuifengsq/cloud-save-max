@@ -38,7 +38,7 @@ from app.services.tmdb_cache import (
     set_ttl_seconds,
     trigger_refresh_async,
 )
-from app.services.tmdb_cache_scheduler import get_or_create_tmdb_cache_scheduler_setting, update_tmdb_cache_scheduler_setting
+from app.services.tmdb_cache_scheduler import get_or_create_tmdb_cache_scheduler_setting, load_tmdb_cache_scheduler_setting, update_tmdb_cache_scheduler_setting
 from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
 from app.extensions.runtime.task_scheduler import task_scheduler_manager
 
@@ -401,10 +401,14 @@ def post_tmdb_cache_purge(
     dependencies=[Depends(require_permissions(TASK_READ))],
 )
 def get_tmdb_cache_scheduler_setting(db: Session = Depends(get_db)):
+    setting = load_tmdb_cache_scheduler_setting(db)
+    if setting is not None:
+        # 纯读请求不提交、不 refresh：只回滚只读事务，省掉一次全行查询
+        return _scheduler_out(setting)
     setting = get_or_create_tmdb_cache_scheduler_setting(db)
+    payload = _scheduler_out(setting)
     db.commit()
-    db.refresh(setting)
-    return _scheduler_out(setting)
+    return payload
 
 
 @router.patch(

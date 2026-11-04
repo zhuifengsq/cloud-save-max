@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, noload
 
 from app.models.task import Task
 
@@ -13,7 +13,7 @@ from app.services.task_share_links import _load_extra, _store_extra
 
 def clear_drama_shareurl_update_logs(db: Session) -> int:
     deleted = 0
-    for task in db.scalars(select(Task).where(Task.task_type == 'drama')):
+    for task in db.scalars(select(Task).options(noload(Task.executions)).where(Task.task_type == 'drama')):
         extra = _load_extra(task)
         if 'shareurl_update_logs' not in extra:
             continue

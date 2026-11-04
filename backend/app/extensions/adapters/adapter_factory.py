@@ -3,10 +3,12 @@
 适配器工厂类
 负责根据配置创建不同网盘的适配器实例
 """
+import os
 import re
 import hashlib
 import json
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Type
 
 from app.extensions.adapters.base_adapter import BaseCloudDriveAdapter
@@ -56,8 +58,25 @@ class AdapterFactory:
         r"(?:www\.|app\.)?guangyapan\.com": "guangya",
     }
 
-    # 实例缓存: (drive_type, config_hash) -> adapter_instance
+    # 实例缓存: (drive_type, account_name, mode, config_hash) -> adapter_instance
     _instance_cache: Dict[str, BaseCloudDriveAdapter] = {}
+    # 请求线程 / 任务执行线程 / 调度线程会同时取同一账户的实例，查表与写入必须加锁，
+    # 否则并发首次调用会各自创建一个实例（随后只有一个留在缓存里，登录却发生多次）。
+    _cache_lock = threading.RLock()
+    # init() 成功后在 TTL 内跳过重复登录；ADAPTER_INIT_TTL_SECONDS=0 表示每次都重新登录。
+    DEFAULT_INIT_TTL_SECONDS = 180.0
+
+    @classmethod
+    def init_ttl_seconds(cls) -> float:
+        """init() 去重窗口（秒），可用环境变量 ADAPTER_INIT_TTL_SECONDS 覆盖。"""
+        raw = os.environ.get("ADAPTER_INIT_TTL_SECONDS")
+        if raw is None or not raw.strip():
+            return cls.DEFAULT_INIT_TTL_SECONDS
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            logger.warning("ADAPTER_INIT_TTL_SECONDS 不是数字: %s，改用默认值", raw)
+            return cls.DEFAULT_INIT_TTL_SECONDS
 
     @classmethod
     def _make_cache_key(
@@ -124,33 +143,35 @@ class AdapterFactory:
 
         runtime_config = adapter_class.resolve_runtime_config(config=config, cookie=cookie)
 
-        # 查找缓存
         cache_key = cls._make_cache_key(drive_type, runtime_config, account_name, no_login=no_login)
-        cached = cls._instance_cache.get(cache_key)
-        if cached is not None:
-            setattr(cached, "account_name", account_name or "")
-            return cached
+        # 查表 + 创建放在同一把锁里：并发首次调用只会创建并缓存一个实例，
+        # 避免同一账户出现多个实例、各自登录、状态互不可见。
+        with cls._cache_lock:
+            cached = cls._instance_cache.get(cache_key)
+            if cached is not None:
+                setattr(cached, "account_name", account_name or "")
+                return cached
 
-        # 创建新实例并缓存
-        try:
-            adapter = adapter_class(
-                cookie=cookie,
-                index=index,
-                config=runtime_config,
-                account_name=account_name,
-                no_login=no_login,
-            )
-            setattr(adapter, "account_name", account_name or "")
-            cls._instance_cache[cache_key] = adapter
-            return adapter
-        except Exception as e:
-            logger.exception("创建适配器失败: %s", e)
-            return None
+            try:
+                adapter = adapter_class(
+                    cookie=cookie,
+                    index=index,
+                    config=runtime_config,
+                    account_name=account_name,
+                    no_login=no_login,
+                )
+                setattr(adapter, "account_name", account_name or "")
+                cls._instance_cache[cache_key] = adapter
+                return adapter
+            except Exception as e:
+                logger.exception("创建适配器失败: %s", e)
+                return None
 
     @classmethod
     def clear_cache(cls):
         """清空实例缓存（配置更新时调用）"""
-        cls._instance_cache.clear()
+        with cls._cache_lock:
+            cls._instance_cache.clear()
 
     @classmethod
     def get_drive_type_by_url(cls, url: str) -> Optional[str]:
@@ -366,9 +387,14 @@ class AccountManager:
         Returns:
             成功初始化的数量
         """
+        ttl_seconds = AdapterFactory.init_ttl_seconds()
         success_count = 0
         for name, adapter in adapters.items():
-            if adapter.init():
+            # ensure_initialized: 同一实例的登录串行化，TTL 内成功过则跳过重复登录。
+            # 自定义适配器对象（测试替身）没有该方法时退回直接 init()。
+            ensure = getattr(adapter, "ensure_initialized", None)
+            result = ensure(ttl_seconds=ttl_seconds) if callable(ensure) else adapter.init()
+            if result:
                 success_count += 1
             else:
                 logger.warning("账户 '%s' (%s) 登录失败", name, adapter.DRIVE_TYPE)

@@ -9,6 +9,10 @@ from app.services.scheduler_validation import validate_scheduler_setting
 DEFAULT_TMDB_CACHE_SCHEDULER_SETTING_ID = 1
 
 
+def load_tmdb_cache_scheduler_setting(db: Session) -> TMDBCacheSchedulerSetting | None:
+    return db.get(TMDBCacheSchedulerSetting, DEFAULT_TMDB_CACHE_SCHEDULER_SETTING_ID)
+
+
 def get_or_create_tmdb_cache_scheduler_setting(db: Session) -> TMDBCacheSchedulerSetting:
     item = db.get(TMDBCacheSchedulerSetting, DEFAULT_TMDB_CACHE_SCHEDULER_SETTING_ID)
     if item is not None:

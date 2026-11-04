@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.deps import invalidate_permission_cache
 from app.core.errors import bad_request, not_found
 from app.core.security import hash_password
 from app.models.role import Role
@@ -43,6 +44,7 @@ def set_user_status(db: Session, *, user_id: int, is_active: bool) -> User:
     if user is None:
         raise not_found("USER_NOT_FOUND", "用户不存在")
     user.is_active = is_active
+    invalidate_permission_cache(user_id)
     return user
 
 
@@ -58,6 +60,7 @@ def set_user_roles(db: Session, *, user_id: int, role_ids: list[int]) -> User:
             raise bad_request("ROLE_NOT_FOUND", "存在无效角色")
 
     user.roles = roles
+    invalidate_permission_cache(user_id)
     return user
 
 
@@ -65,6 +68,7 @@ def batch_set_status(db: Session, *, user_ids: list[int], is_active: bool) -> in
     users = db.execute(select(User).where(User.id.in_(user_ids))).scalars().all()
     for u in users:
         u.is_active = is_active
+        invalidate_permission_cache(u.id)
     return len(users)
 
 
@@ -78,4 +82,5 @@ def batch_set_roles(db: Session, *, user_ids: list[int], role_ids: list[int]) ->
     users = db.execute(select(User).where(User.id.in_(user_ids)).options(selectinload(User.roles))).scalars().all()
     for u in users:
         u.roles = roles
+        invalidate_permission_cache(u.id)
     return len(users)

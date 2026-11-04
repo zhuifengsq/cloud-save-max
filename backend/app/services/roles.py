@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.deps import invalidate_permission_cache
 from app.core.errors import bad_request, not_found
 from app.models.permission import Permission
 from app.models.role import Role
@@ -35,6 +36,8 @@ def delete_role(db: Session, *, role_id: int) -> None:
     if role is None:
         raise not_found("ROLE_NOT_FOUND", "角色不存在")
     db.delete(role)
+    # 角色被删除后，其成员的权限集合都会变化，直接清空整个缓存
+    invalidate_permission_cache()
 
 
 def set_role_permissions(db: Session, *, role_id: int, permission_ids: list[int]) -> Role:
@@ -49,4 +52,5 @@ def set_role_permissions(db: Session, *, role_id: int, permission_ids: list[int]
             raise bad_request("PERMISSION_NOT_FOUND", "存在无效权限")
 
     role.permissions = permissions
+    invalidate_permission_cache()
     return role

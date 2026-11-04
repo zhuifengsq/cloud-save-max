@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.routes.tasks import post_share_preview
+from app.api.routes.tasks_share import post_share_preview
 from app.core.errors import ApiError, bad_request, not_found
 from app.extensions.adapters.adapter_factory import AdapterFactory
 from app.extensions.adapters.aliyun_adapter import AliyunAdapter
@@ -384,8 +384,23 @@ def _task_execution_summary(execution: TaskExecution | None) -> dict[str, Any] |
 
 def _task_to_dict(db: Session, task: Task) -> dict[str, Any]:
     latest_execution = None
-    if getattr(task, "executions", None):
-        latest_execution = sorted(task.executions, key=lambda x: x.id, reverse=True)[0]
+    if "executions" in task.__dict__:
+        # 集合已被显式装配（列表场景），直接用，空列表就代表没有执行记录。
+        loaded = task.__dict__.get("executions") or []
+        if loaded:
+            latest_execution = sorted(loaded, key=lambda x: x.id, reverse=True)[0]
+    else:
+        # 未装配时只查最近一条：绝不能 getattr(task, "executions") 触发全量懒加载。
+        latest_execution = (
+            db.execute(
+                select(TaskExecution)
+                .where(TaskExecution.task_id == int(task.id))
+                .order_by(TaskExecution.id.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
     return {
         "id": int(task.id),
         "task_uid": str(task.task_uid),

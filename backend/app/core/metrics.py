@@ -17,6 +17,8 @@ class MetricsStore:
     def __init__(self, sample_size: int = 512):
         self._sample_size = sample_size
         self._by_key: dict[str, Metric] = defaultdict(lambda: Metric(samples=deque(maxlen=sample_size)))
+        # 进程级累计计数（请求数、SQL 条数、外部 HTTP 次数、慢请求数等），重启清零。
+        self._counters: dict[str, float] = defaultdict(float)
 
     def record(self, key: str, elapsed_ms: float) -> None:
         m = self._by_key[key]
@@ -26,6 +28,13 @@ class MetricsStore:
         m.min_ms = elapsed_ms if m.min_ms == 0.0 else min(m.min_ms, elapsed_ms)
         if m.samples is not None:
             m.samples.append(elapsed_ms)
+
+    def incr(self, key: str, value: float = 1.0) -> None:
+        if value:
+            self._counters[key] += float(value)
+
+    def counters(self) -> dict[str, float]:
+        return {k: v for k, v in self._counters.items()}
 
     def snapshot(self) -> dict[str, dict[str, float]]:
         out: dict[str, dict[str, float]] = {}
