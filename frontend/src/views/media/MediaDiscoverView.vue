@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { ArrowLeft, Search } from '@element-plus/icons-vue'
 
 import { fetchDoubanCategories, fetchDoubanList, fetchTMDBDetail, searchTMDB } from '@/api/media'
 import DramaTaskDrawer from '@/components/tasks/DramaTaskDrawer.vue'
@@ -489,6 +489,11 @@ async function onSearchPageChange(page: number) {
   await runSearch(page)
 }
 
+// 从 TMDB 搜索结果回到豆瓣浏览列表，保留搜索关键字方便再次搜索
+function backToDouban() {
+  viewMode.value = 'douban'
+}
+
 const isTmdbMode = computed(() => viewMode.value === 'tmdb')
 
 const detailTitle = computed(() => {
@@ -591,7 +596,20 @@ onMounted(async () => {
     </el-card>
 
     <template v-if="isTmdbMode">
-      <el-card class="page__card" shadow="never">
+      <el-card class="page__card page__card--compact" shadow="never">
+        <template #header>
+          <div class="toolbar">
+            <el-button size="small" :icon="ArrowLeft" @click="backToDouban">返回影视发现</el-button>
+            <div class="toolbar__title">搜索结果</div>
+            <div class="toolbar__content">
+              <span class="search-result__meta">
+                <template v-if="String(searchState.q || '').trim()">「{{ String(searchState.q || '').trim() }}」· </template>
+                共 {{ searchPager.totalResults }} 条
+                <template v-if="searchPager.totalPages > 1">· 第 {{ searchPager.page }}/{{ searchPager.totalPages }} 页</template>
+              </span>
+            </div>
+          </div>
+        </template>
         <div v-loading="searchState.loading" class="poster-grid">
           <div v-for="row in searchItems" :key="String(row.id || row.title || row.name)" class="poster-card" @click="openDetailByBrief(row)">
             <div class="poster-card__cover">
@@ -880,6 +898,10 @@ onMounted(async () => {
   gap: 10px;
   flex-wrap: wrap;
   flex: 1;
+}
+.search-result__meta {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 .card__header {
   display: flex;
