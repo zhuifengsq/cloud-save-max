@@ -16,6 +16,7 @@ import type { TMDBDetail } from '@/types/media'
 import type { TaskItem } from '@/types/tasks'
 import { DRIVE_TYPE_META, detectDriveTypeByUrl, type DriveType } from '@/utils/driveType'
 import { resolveDramaEpisodeProgress, tvAiredEpisodesFromDetail, tvTotalEpisodesFromDetail } from '@/utils/dramaEpisodeProgress'
+import { getDramaSchedule } from '@/utils/dramaSchedule'
 import { getTasksVersion, subscribeTasksChanged } from '@/utils/taskChangeBus'
 
 defineOptions({ name: 'DramaCalendarView' })
@@ -529,6 +530,8 @@ function ensureDerived(id: number) {
     inferredWeekdaysById[id] = inferWeekdaysFromEpisodeDates(dates)
     inferredCycleDaysById[id] = inferCycleDaysFromEpisodeDates(dates)
     if (data && typeof data === 'object') {
+      // 工作台「即将播出」也要用这份逐集日期；先按 data 对象缓存排期，再裁掉整季明细
+      getDramaSchedule(data)
       // 已抽成日历映射，不再保留整季明细，省内存
       delete data.seasons_full
       delete data.seasons_full_meta

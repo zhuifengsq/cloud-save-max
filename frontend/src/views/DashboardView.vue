@@ -21,6 +21,7 @@ import { getTasksVersion, subscribeTasksChanged } from '@/utils/taskChangeBus'
 import type { CapacityOverview, DramaOverview } from '@/types/dashboard'
 import type { TaskItem } from '@/types/tasks'
 import { formatBytes, formatDateTime, formatPercent } from '@/utils/capacity'
+import { findUpcomingAiring } from '@/utils/dramaSchedule'
 
 const dtfBeijing = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Shanghai',
@@ -187,32 +188,35 @@ function refreshDrama(opts: { silent?: boolean; forceDetails?: boolean } = {}): 
   return dramaRefreshPromise
 }
 
+function nextAiringForTask(task: TaskItem, todayStr: string, maxDateStr: string) {
+  const tmdbId = Number(task.tmdb_id) || 0
+  if (!tmdbId) return null
+  const detail = tmdbDetailsById[tmdbId] || null
+  const data: any = detail?.data || null
+  if (!data) return null
+  return findUpcomingAiring(data, detail?.update_weekdays, todayStr, maxDateStr)
+}
+
 const contentSummary = computed(() => {
-  const tasks = dramaTasks.value
-  const today = new Date()
-  const todayStr = beijingDateStr(today)
-  const next7Str = beijingDateStr(addDays(today, 7))
+  const todayStr = beijingDateStr(new Date())
+  const next7Str = beijingDateStr(addDays(new Date(), 7))
 
   let withNextAirDateCount = 0
   let todayCount = 0
-  let next7dCount = 0
 
-  for (const task of tasks) {
-    const tmdbId = Number(task.tmdb_id) || 0
-    if (!tmdbId) continue
-    const detail = tmdbDetailsById[tmdbId] || null
-    const data: any = detail?.data || null
-    const airDate = String(data?.next_episode_to_air?.air_date || '').trim()
-    if (!airDate) continue
+  for (const task of dramaTasks.value) {
+    if (!task.enabled) continue
+    if (String(task.tmdb_media_type || '').toLowerCase() !== 'tv') continue
+    const next = nextAiringForTask(task, todayStr, next7Str)
+    if (!next) continue
     withNextAirDateCount += 1
-    if (airDate === todayStr) todayCount += 1
-    if (airDate >= todayStr && airDate <= next7Str) next7dCount += 1
+    if (next.air_date === todayStr) todayCount += 1
   }
 
   return {
     with_next_air_date_count: withNextAirDateCount,
     today_count: todayCount,
-    next7d_count: next7dCount,
+    next7d_count: withNextAirDateCount,
   }
 })
 
@@ -223,14 +227,6 @@ function titleFromTask(task: TaskItem) {
   const detail = tmdbId ? tmdbDetailsById[tmdbId] || null : null
   const data: any = detail?.data || null
   return String(data?.name || data?.title || '').trim() || String(task.taskname || '').trim() || `任务 #${task.id}`
-}
-
-function episodeLabelFromDetail(data: any, kind: 'last' | 'next') {
-  const source = kind === 'next' ? data?.next_episode_to_air : data?.last_episode_to_air
-  const season = Number(source?.season_number) || 0
-  const ep = Number(source?.episode_number) || 0
-  if (season > 0 && ep > 0) return `S${String(season).padStart(2, '0')}E${String(ep).padStart(2, '0')}`
-  return ''
 }
 
 function timeAgoFromIso(iso?: string | null) {
@@ -249,15 +245,16 @@ function timeAgoFromIso(iso?: string | null) {
 }
 
 function relativeDayLabel(isoDate: string) {
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const d = new Date(`${isoDate}T00:00:00`)
-  if (Number.isNaN(d.getTime())) return isoDate
-  const diff = Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+  // 与卡片窗口一致，按北京时间的“今天”比较，避免浏览器时区导致差一天
+  const target = Date.parse(`${isoDate}T00:00:00Z`)
+  if (Number.isNaN(target)) return isoDate
+  const [y, m, d] = beijingDateStr(new Date()).split('-').map((x) => Number(x))
+  const today = Date.UTC(y, (m || 1) - 1, d || 1)
+  const diff = Math.round((target - today) / 86400000)
   if (diff === 0) return '今天'
   if (diff === 1) return '明天'
   if (diff === 2) return '后天'
-  if (diff > 2) return `${diff}天后`
+  if (diff > 0) return `${diff}天后`
   return isoDate
 }
 
@@ -357,23 +354,23 @@ const upcomingAiring = computed(() => {
     task: TaskItem
     air_date: string
     episode: string
+    predicted: boolean
   }> = []
 
   for (const task of dramaTasks.value) {
     if (!task.enabled) continue
     if (String(task.tmdb_media_type || '').toLowerCase() !== 'tv') continue
-    const tmdbId = Number(task.tmdb_id) || 0
-    if (!tmdbId) continue
-    const detail = tmdbDetailsById[tmdbId] || null
-    const data: any = detail?.data || null
-    const airDate = String(data?.next_episode_to_air?.air_date || '').trim()
-    if (!airDate) continue
-    if (airDate < today || airDate > maxDate) continue
-    items.push({ task, air_date: airDate, episode: episodeLabelFromDetail(data, 'next') })
+    const next = nextAiringForTask(task, today, maxDate)
+    if (!next) continue
+    items.push({ task, air_date: next.air_date, episode: next.episode, predicted: next.predicted })
   }
 
-  items.sort((a, b) => String(a.air_date).localeCompare(String(b.air_date)))
-  return items.slice(0, 2)
+  items.sort((a, b) => {
+    const byDate = a.air_date.localeCompare(b.air_date)
+    if (byDate !== 0) return byDate
+    return titleFromTask(a.task).localeCompare(titleFromTask(b.task), 'zh-Hans-CN')
+  })
+  return items
 })
 
 const failures = computed(() => dramaOverview.value?.recent_failures || [])
@@ -708,8 +705,14 @@ onBeforeUnmount(() => {
             <div class="upcoming-row__left">
               <span class="update-row__icon">🗓️</span>
               <span class="upcoming-row__name">{{ titleFromTask(it.task) }}</span>
-              <span v-if="it.episode" class="meta-dot">·</span>
-              <span v-if="it.episode">{{ it.episode }}</span>
+              <template v-if="it.predicted">
+                <span class="meta-dot">·</span>
+                <span class="upcoming-row__predicted">预计更新</span>
+              </template>
+              <template v-else-if="it.episode">
+                <span class="meta-dot">·</span>
+                <span>{{ it.episode }}</span>
+              </template>
             </div>
             <div class="upcoming-row__right">{{ relativeDayLabel(it.air_date) }}</div>
           </div>
@@ -1012,6 +1015,13 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 360px;
+}
+
+.upcoming-row__predicted {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
 }
 
 .upcoming-row__right {
