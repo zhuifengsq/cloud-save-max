@@ -35,6 +35,7 @@ defineOptions({ name: 'DashboardView' })
 const DRAMA_REFRESH_MS = 60 * 1000
 const CAPACITY_REFRESH_MS = 5 * 60 * 1000
 const CHECK_TICK_MS = 60 * 1000
+const LIST_DISPLAY_LIMIT = 10
 
 const dramaDays = ref(30)
 const dramaLoading = ref(false)
@@ -332,46 +333,59 @@ const capacitySpaceText = computed(() => {
 })
 
 const recentSuccesses = computed(() => {
-  const items: Array<{
+  // 同一部剧只保留最近一条成功记录，避免任务多次执行时重复出现
+  const latestByDrama = new Map<number, {
     task: TaskItem
     started_at: string
     adapter_snapshot: Record<string, any>
-  }> = []
+  }>()
   for (const task of dramaTasks.value) {
+    const dramaKey = Number(task.tmdb_id) > 0 ? Number(task.tmdb_id) : task.id
     for (const ex of task.executions || []) {
       if (String(ex.status || '').toLowerCase() !== 'success') continue
-      items.push({ task, started_at: String(ex.started_at), adapter_snapshot: ex.adapter_snapshot || {} })
+      const started_at = String(ex.started_at)
+      const current = latestByDrama.get(dramaKey)
+      if (!current || new Date(started_at).getTime() > new Date(current.started_at).getTime()) {
+        latestByDrama.set(dramaKey, { task, started_at, adapter_snapshot: ex.adapter_snapshot || {} })
+      }
     }
   }
-  items.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
-  return items.slice(0, 2)
+  return Array.from(latestByDrama.values())
+    .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
+    .slice(0, LIST_DISPLAY_LIMIT)
 })
 
 const upcomingAiring = computed(() => {
   const today = beijingDateStr(new Date())
   const maxDate = beijingDateStr(addDays(new Date(), 7))
-  const items: Array<{
+  // 每部剧只保留最近一次播出，避免同一部剧出现多行
+  const byDrama = new Map<number, {
     task: TaskItem
     air_date: string
     episode: string
     predicted: boolean
-  }> = []
+  }>()
 
   for (const task of dramaTasks.value) {
     if (!task.enabled) continue
     if (String(task.tmdb_media_type || '').toLowerCase() !== 'tv') continue
     const next = nextAiringForTask(task, today, maxDate)
     if (!next) continue
-    items.push({ task, air_date: next.air_date, episode: next.episode, predicted: next.predicted })
+    const dramaKey = Number(task.tmdb_id) > 0 ? Number(task.tmdb_id) : task.id
+    const current = byDrama.get(dramaKey)
+    if (!current || next.air_date < current.air_date) {
+      byDrama.set(dramaKey, { task, air_date: next.air_date, episode: next.episode, predicted: next.predicted })
+    }
   }
 
-  items.sort((a, b) => {
+  return Array.from(byDrama.values()).sort((a, b) => {
     const byDate = a.air_date.localeCompare(b.air_date)
     if (byDate !== 0) return byDate
     return titleFromTask(a.task).localeCompare(titleFromTask(b.task), 'zh-Hans-CN')
   })
-  return items
 })
+
+const displayedUpcomingAiring = computed(() => upcomingAiring.value.slice(0, LIST_DISPLAY_LIMIT))
 
 const failures = computed(() => dramaOverview.value?.recent_failures || [])
 const displayFailures = computed(() => failures.value.slice(0, 3))
@@ -701,7 +715,7 @@ onBeforeUnmount(() => {
 
         <el-empty v-if="!upcomingAiring.length" description="未来 7 天暂无已识别的更新日。" :image-size="88" />
         <div v-else class="upcoming-list">
-          <div v-for="it in upcomingAiring" :key="`${it.task.id}-${it.air_date}`" class="upcoming-row">
+          <div v-for="it in displayedUpcomingAiring" :key="`${it.task.id}-${it.air_date}`" class="upcoming-row">
             <div class="upcoming-row__left">
               <span class="update-row__icon">🗓️</span>
               <span class="upcoming-row__name">{{ titleFromTask(it.task) }}</span>
