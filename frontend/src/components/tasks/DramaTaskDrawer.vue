@@ -2,7 +2,7 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 
-import { fetchTMDBDetail, searchTMDB } from '@/api/media'
+import { fetchTMDBCredits, fetchTMDBDetail, searchTMDB } from '@/api/media'
 import { browseDrive, deleteDriveFiles, fetchMagicRegex, fetchTasks, mkdirDrive, previewShare, validateShareLinksStream } from '@/api/tasks'
 import { fetchTMDBConfig } from '@/api/tmdb'
 import { fetchTaskSuggestions } from '@/api/resourceSearch'
@@ -16,6 +16,7 @@ import type { DriveBrowseItem, MagicRegexRule, SharePreviewItem, TaskItem } from
 import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 import { resolveDramaEpisodeProgress } from '@/utils/dramaEpisodeProgress'
+import { categoryFromTmdb } from '@/utils/mediaCategory'
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w185'
 
@@ -827,6 +828,14 @@ async function openCopywriting() {
     /* 忽略：拿不到详情也能生成纯文本 */
   }
 
+  // 预热演员表：WPS 文案要用，TMDB credits 较慢，先发请求，生成文案页直接复用；综艺/动漫不写主演
+  const prefetchCategory = tmdbData
+    ? categoryFromTmdb(mediaType, tmdbData)
+    : categoryFromSavepath(String(state.savepath || ''))
+  if (prefetchCategory !== '综艺' && prefetchCategory !== '动漫') {
+    void fetchTMDBCredits(mediaType, Number(state.tmdb_id), { limit: 2 }).catch(() => null)
+  }
+
   const links: { drive: string; url: string; account: string }[] = []
   const seenUrls = new Set<string>()
   const pushLink = (url: string, drive: string, account: string) => {
@@ -868,11 +877,16 @@ async function openCopywriting() {
   }
 
   const episode = mediaType === 'tv' ? resolveDramaEpisodeProgress(state.extra, tmdbData).updatedEpisode : null
+  // 综艺在文案里按「期」计数，需要把类型一起带过去；拿不到 TMDB 详情时按保存路径兜底
+  const category = tmdbData
+    ? categoryFromTmdb(mediaType, tmdbData)
+    : categoryFromSavepath(String(state.savepath || '')) || (mediaType === 'movie' ? '电影' : '电视剧')
   const draft = {
     title,
     year,
     tmdbId: Number(state.tmdb_id),
     mediaType,
+    category,
     posterPath,
     overview,
     episode: episode != null ? String(episode) : '',
@@ -1099,26 +1113,6 @@ async function taskCategory(task: TaskItem) {
   if (mt === 'movie') return '电影'
   if (mt === 'tv') return '电视剧'
   return ''
-}
-
-function categoryFromTmdb(mt: string, detail: any) {
-  const mediaType = String(mt || '').toLowerCase()
-  if (mediaType === 'movie') return '电影'
-  const genres = Array.isArray(detail?.genres) ? detail.genres : []
-  const ids = new Set<number>()
-  const names = new Set<string>()
-  for (const g of genres) {
-    const id = Number((g as any)?.id)
-    if (Number.isFinite(id) && id > 0) ids.add(id)
-    const n = String((g as any)?.name || '').trim().toLowerCase()
-    if (n) names.add(n)
-  }
-  const hasAnime = ids.has(16) || Array.from(names).some((n) => n.includes('animation') || n.includes('动画'))
-  if (hasAnime) return '动漫'
-  const varietyIds = new Set([10764, 10767, 10763])
-  const hasVariety = Array.from(varietyIds).some((id) => ids.has(id)) || Array.from(names).some((n) => n.includes('reality') || n.includes('talk') || n.includes('真人秀') || n.includes('脱口秀'))
-  if (hasVariety) return '综艺'
-  return '电视剧'
 }
 
 async function ensureTasksLoaded() {

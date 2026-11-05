@@ -76,3 +76,13 @@ class TMDBDetailOut(BaseModel):
     data: dict = {}
     update_weekdays: list[int] = []
     episode_weekdays: list[int] = []
+
+
+class TMDBCastMemberOut(BaseModel):
+    name: str = ""
+    character: str = ""
+
+
+class TMDBCreditsOut(BaseModel):
+    configured: bool = False
+    cast: list[TMDBCastMemberOut] = []

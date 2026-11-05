@@ -29,6 +29,11 @@ class TMDBCacheStatusOut(BaseModel):
     fail_count: int = 0
     last_error: str | None = None
 
+    credits_cached: bool = False
+    credits_fetched_at: datetime | None = None
+    credits_expires_at: datetime | None = None
+    credits_fail_count: int = 0
+
 
 class TMDBCacheListItem(BaseModel):
     media_type: str = Field(default="", max_length=8)
@@ -48,6 +53,11 @@ class TMDBCacheListItem(BaseModel):
     refresh_in_progress: bool = False
     fail_count: int = 0
     last_error: str | None = None
+
+    credits_cached: bool = False
+    credits_fetched_at: datetime | None = None
+    credits_expires_at: datetime | None = None
+    credits_fail_count: int = 0
 
 
 class TMDBCacheListOut(BaseModel):

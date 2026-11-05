@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, noload, selectinload
 
 from app.core.errors import bad_request, not_found
 from app.extensions.runtime.adapter_registry import AdapterRegistry
+from app.extensions.runtime.task_admission import task_admission
 from app.extensions.runtime.task_executor import TaskExecutor
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
@@ -225,8 +226,9 @@ def delete_task(db: Session, task_id: int) -> None:
 
 
 def run_task(db: Session, task_id: int):
-    task = get_task(db, task_id)
-    executor = TaskExecutor(db)
-    execution = executor.run_task(task)
-    db.flush()
-    return execution
+    with task_admission.reserve(task_id):
+        task = get_task(db, task_id)
+        executor = TaskExecutor(db)
+        execution = executor.run_task(task)
+        db.flush()
+        return execution

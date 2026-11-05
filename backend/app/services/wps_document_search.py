@@ -20,6 +20,8 @@ _cache = LRUCache(maxsize=16)
 _lock = threading.RLock()
 _fetch_lock = threading.Lock()
 _generation = 0
+_hot_cache = LRUCache(maxsize=16)
+_hot_cache_lock = threading.Lock()
 
 
 def validate_config(config: dict) -> dict:
@@ -35,6 +37,8 @@ def validate_config(config: dict) -> dict:
 
 
 def _read_response(response: requests.Response) -> str:
+    if response.is_redirect or response.status_code in (401, 403):
+        raise ValueError('无法匿名读取该文档，请确认链接公开可查看且无需密码')
     response.raise_for_status()
     chunks = []
     size = 0
@@ -51,7 +55,7 @@ def fetch_document(url: str) -> dict:
     with requests.Session() as session:
         # 与公开页面的访客返回流程一致；不是用户登录 Cookie。
         session.cookies.set('hadSingleSign', 'true', domain='.kdocs.cn')
-        with session.get(url, timeout=(4, 8), stream=True) as response:
+        with session.get(url, timeout=(4, 8), stream=True, allow_redirects=False) as response:
             html = _read_response(response)
         token = re.search(r'"csrf_token"\s*:\s*("(?:\\.|[^"\\])*")', html)
         if not token:
@@ -63,7 +67,7 @@ def fetch_document(url: str) -> dict:
         with session.post(
             f'https://www.kdocs.cn/api/v3/office/file/{file_id}/open/otl', json=body,
             headers={'x-csrf-rand': json.loads(token.group(1)), 'Origin': 'https://www.kdocs.cn', 'Referer': url},
-            timeout=(4, 8), stream=True,
+            timeout=(4, 8), stream=True, allow_redirects=False,
         ) as response:
             data = json.loads(_read_response(response))
     content = data.get('content') if isinstance(data, dict) else None
@@ -72,10 +76,12 @@ def fetch_document(url: str) -> dict:
     return content
 
 
-def _paragraphs(node: dict):
+def _document_blocks(node: dict):
     if not isinstance(node, dict):
         return
-    if node.get('type') in {'paragraph', 'heading'}:
+    if node.get('type') == 'horizontal_rule':
+        yield None
+    elif node.get('type') in {'paragraph', 'heading'}:
         texts, urls = [], []
 
         def inline(part):
@@ -94,13 +100,105 @@ def _paragraphs(node: dict):
         yield text, list(dict.fromkeys(urls))
     else:
         for child in node.get('content', []):
-            yield from _paragraphs(child)
+            yield from _document_blocks(child)
+
+
+def _share_link(raw_url: str):
+    url = raw_url.rstrip('。，,;；)）')
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return None
+    drive = DRIVES.get(parsed.netloc)
+    if parsed.scheme in {'http', 'https'} and drive and parsed.path.startswith('/s/'):
+        return {'drive': drive, 'url': url}
+    return None
+
+
+def _with_passcode(url: str, passcode: str) -> str:
+    parsed = urlsplit(url)
+    if parse_qs(parsed.query).get('pwd'):
+        return url
+    query = parsed.query + ('&' if parsed.query else '') + urlencode({'pwd': passcode})
+    return urlunsplit(parsed._replace(query=query))
+
+
+PASSCODE = re.compile(r'提取码\s*[:：]?\s*([A-Za-z0-9]{4,8})')
+HOT_HEADING = re.compile(
+    r'^[^\w]*?(20\d{2})\s*[年./-]\s*(\d{1,2})\s*[月./-]\s*(\d{1,2})\s*日?\s*\(?热门更新\)?$'
+)
+
+
+def parse_hot_updates(content: dict) -> dict:
+    blocks = list(_document_blocks(content))
+    headings = {}
+    for index, block in enumerate(blocks):
+        match = HOT_HEADING.fullmatch(block[0]) if block is not None else None
+        if match:
+            try:
+                headings[index] = datetime(*map(int, match.groups()))
+            except ValueError:
+                continue
+
+    missing = '未找到完整的热门更新区块'
+    if not headings:
+        raise ValueError(missing)
+    heading = max(headings, key=headings.__getitem__)
+    start = heading + 1
+    while start < len(blocks) and blocks[start] == ('', []):
+        start += 1
+    if start == len(blocks) or blocks[start] is not None:
+        raise ValueError(missing)
+    end = next((i for i in range(start + 1, len(blocks)) if blocks[i] is None), None)
+    if end is None or any(start < i < end for i in headings):
+        raise ValueError(missing)
+
+    entries = []
+    for block in blocks[start + 1:end]:
+        text, urls = block
+        passcode = PASSCODE.search(text)
+        if urls:
+            links = [link for url in urls if (link := _share_link(url))]
+            if passcode and len(links) == 1 and links[0]['drive'] in {'baidu', 'xunlei'}:
+                links[0]['url'] = _with_passcode(links[0]['url'], passcode[1])
+            if entries:
+                existing = entries[-1]['links']
+                existing.extend(link for link in links if link not in existing)
+        elif passcode:
+            if entries and entries[-1]['links']:
+                previous = entries[-1]['links'][-1]
+                if previous['drive'] in {'baidu', 'xunlei'}:
+                    previous['url'] = _with_passcode(previous['url'], passcode[1])
+        elif text and re.search(r'[^\W\d_]', text):
+            entries.append({'title': text, 'links': []})
+
+    return {'date': headings[heading].date().isoformat(), 'entries': entries}
+
+
+def read_hot_updates(url: str) -> dict:
+    url = validate_config({'document_url': url})['document_url']
+    with _hot_cache_lock:
+        cached = _hot_cache.get(url)
+        if cached is not None and time.monotonic() - cached[0] < CACHE_TTL:
+            return cached[1]
+        result = parse_hot_updates(fetch_document(url))
+        _hot_cache[url] = (time.monotonic(), result)
+        return result
+
+
+def clear_hot_updates_cache(url: str) -> None:
+    url = validate_config({'document_url': url})['document_url']
+    with _hot_cache_lock:
+        _hot_cache.pop(url, None)
 
 
 def parse_document(content: dict) -> list[dict]:
     rows, seen = [], set()
     title, date, previous = '', '', None
-    for text, urls in _paragraphs(content):
+    for block in _document_blocks(content):
+        if block is None:
+            continue
+        text, urls = block
         date_match = re.fullmatch(r'(20\d{2})[.年/-](\d{1,2})[.月/-](\d{1,2})日?.*', text)
         if date_match:
             try:
@@ -109,21 +207,17 @@ def parse_document(content: dict) -> list[dict]:
                 date = ''
             title, previous = '', None
             continue
-        passcode = re.search(r'提取码\s*[:：]?\s*([A-Za-z0-9]{4,8})', text)
+        passcode = PASSCODE.search(text)
         if passcode and not urls:
             if previous and previous['drive_type'] in {'baidu', 'xunlei'}:
-                parsed = urlsplit(previous['shareurl'])
-                if not parse_qs(parsed.query).get('pwd'):
-                    query = parsed.query + ('&' if parsed.query else '') + urlencode({'pwd': passcode.group(1)})
-                    previous['shareurl'] = urlunsplit(parsed._replace(query=query))
+                previous['shareurl'] = _with_passcode(previous['shareurl'], passcode[1])
             continue
         if urls:
             for raw_url in urls:
-                url = raw_url.rstrip('。，,;；)）')
-                parsed = urlsplit(url)
-                drive = DRIVES.get(parsed.netloc)
-                if not title or not drive or not parsed.path.startswith('/s/') or url in seen:
+                link = _share_link(raw_url)
+                if not title or not link or link['url'] in seen:
                     continue
+                url, drive = link['url'], link['drive']
                 seen.add(url)
                 previous = {'taskname': title, 'shareurl': url, 'datetime': date or None,
                             'drive_type': drive, 'content': f'WPS 文档标注：{title}'}

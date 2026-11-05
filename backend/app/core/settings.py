@@ -109,6 +109,11 @@ class Settings(BaseSettings):
         return "sqlite:///./data/app.db"
 
     def model_post_init(self, __context) -> None:
+        if os.getenv("XXM_TESTING", "").strip() == "1":
+            self.jwt_secret_key = self.jwt_secret_key or secrets.token_urlsafe(48)
+            self.refresh_token_pepper = self.refresh_token_pepper or secrets.token_urlsafe(48)
+            return
+
         secrets_data = _load_or_init_secrets()
 
         jwt = (self.jwt_secret_key or "").strip()

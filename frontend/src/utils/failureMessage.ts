@@ -28,6 +28,17 @@ export function summarizeFailure(message?: string | null) {
   return { summary, detail: summary === raw ? '' : raw }
 }
 
+export async function readTaskRunError(response: Response): Promise<string> {
+  const text = await response.text().catch(() => '')
+  try {
+    const body = JSON.parse(text)
+    if (typeof body?.message === 'string' && body.message) return body.message
+  } catch {
+    // An intermediary can return a plain-text error.
+  }
+  return text || `HTTP ${response.status}`
+}
+
 export function failureStageLabel(stage: string) {
   const labels: Record<string, string> = {
     start: '开始执行', select_account: '选择网盘账号', validate_account: '验证网盘账号',

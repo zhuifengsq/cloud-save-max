@@ -30,6 +30,11 @@ export interface TMDBCacheStatus {
 
   fail_count?: number
   last_error?: string | null
+
+  credits_cached?: boolean
+  credits_fetched_at?: string | null
+  credits_expires_at?: string | null
+  credits_fail_count?: number
 }
 
 export interface TMDBCacheListItem {
@@ -47,6 +52,10 @@ export interface TMDBCacheListItem {
   refresh_in_progress?: boolean
   fail_count?: number
   last_error?: string | null
+  credits_cached?: boolean
+  credits_fetched_at?: string | null
+  credits_expires_at?: string | null
+  credits_fail_count?: number
 }
 
 export interface TMDBCacheListOut {

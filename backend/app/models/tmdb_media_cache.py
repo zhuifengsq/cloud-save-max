@@ -52,6 +52,14 @@ class TMDBMediaCache(Base):
     fail_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # 演员表（credits）与详情同属一个 TMDB 媒体条目，缓存在同一行，便于在 TMDB 缓存页统一查看/删除。
+    credits_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    credits_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    credits_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    credits_fail_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    credits_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    credits_refresh_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

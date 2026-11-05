@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import threading
+from collections import deque
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
@@ -22,6 +23,7 @@ from app.core.deps import CurrentUser, get_current_user_scoped, require_permissi
 from app.core.permissions import TASK_RUN
 from app.db.session import SessionLocal
 from app.extensions.runtime.execution_log import ExecutionLog
+from app.extensions.runtime.task_admission import task_admission
 from app.extensions.runtime.task_executor import TaskExecutor
 from app.models.task import Task
 from app.schemas.task import TaskCreateIn
@@ -36,29 +38,57 @@ logger = logging.getLogger(__name__)
 
 
 class _SseQueue:
-    """阻塞线程生产者 → 事件循环消费者的桥接队列。
-
-    SSE 任务执行跑在独立线程里，事件循环只负责把队列内容写给客户端；
-    这样长时间运行的任务不再占用 anyio 线程池令牌（此前同步生成器会一直占用）。
-    """
+    """Bound pending log events and schedule at most one cross-thread wakeup."""
 
     def __init__(self) -> None:
         self._loop = asyncio.get_running_loop()
-        self._queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
-        self.stopped = threading.Event()
+        self._lock = threading.Lock()
+        self._ready = asyncio.Event()
+        self._events: deque[tuple[str, object]] = deque(maxlen=256)
+        self._terminal: deque[tuple[str, object]] = deque(maxlen=2)
+        self._wake_scheduled = False
+        self._stopped = False
+
+    def _wake(self) -> None:
+        with self._lock:
+            self._wake_scheduled = False
+            self._ready.set()
 
     def put(self, item: tuple[str, object]) -> None:
-        if self.stopped.is_set():
-            return
-        try:
-            self._loop.call_soon_threadsafe(self._queue.put_nowait, item)
-        except RuntimeError:  # 事件循环已关闭（请求已结束）
-            pass
+        with self._lock:
+            if self._stopped:
+                return
+            if item[0] in {"done", "done_sentinel"}:
+                self._terminal.append(item)
+            else:
+                self._events.append((item[0], str(item[1])[:4096]))
+            if not self._wake_scheduled:
+                self._wake_scheduled = True
+                try:
+                    self._loop.call_soon_threadsafe(self._wake)
+                except RuntimeError:  # event loop shut down
+                    self._stopped = True
+                    self._events.clear()
+                    self._terminal.clear()
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stopped = True
+            self._events.clear()
+            self._terminal.clear()
 
     async def get(self, timeout: float) -> tuple[str, object] | None:
         try:
-            return await asyncio.wait_for(self._queue.get(), timeout=timeout)
-        except asyncio.TimeoutError:
+            async with asyncio.timeout(timeout):
+                while True:
+                    with self._lock:
+                        if self._events:
+                            return self._events.popleft()
+                        if self._terminal:
+                            return self._terminal.popleft()
+                        self._ready.clear()
+                    await self._ready.wait()
+        except TimeoutError:
             return None
 
 
@@ -69,8 +99,8 @@ def _sse_bytes(event: str, data: object) -> bytes:
 
 def _stream_response(q: _SseQueue, init_payload: dict) -> StreamingResponse:
     async def gen():
-        yield _sse_bytes("init", init_payload)
         try:
+            yield _sse_bytes("init", init_payload)
             while True:
                 item = await q.get(15)
                 if item is None:
@@ -90,7 +120,7 @@ def _stream_response(q: _SseQueue, init_payload: dict) -> StreamingResponse:
                     break
         finally:
             # 客户端断开时尽快停止投递，避免执行线程继续向队列堆积无用事件。
-            q.stopped.set()
+            q.stop()
 
     return StreamingResponse(
         gen(),
@@ -122,7 +152,12 @@ async def post_run_task_stream(request: Request, task_id: int, current: CurrentU
             adb.commit()
             return payload
 
-    init_payload = await run_in_threadpool(_prepare)
+    slot = task_admission.reserve(task_id)
+    try:
+        init_payload = await run_in_threadpool(_prepare)
+    except BaseException:
+        slot.release()
+        raise
 
     q = _SseQueue()
 
@@ -186,8 +221,7 @@ async def post_run_task_stream(request: Request, task_id: int, current: CurrentU
             finally:
                 q.put(("done_sentinel", object()))
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
+    slot.start_worker(worker)
 
     return _stream_response(q, init_payload)
 
@@ -218,7 +252,12 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
             adb.commit()
             return payload_out
 
-    init_payload = await run_in_threadpool(_prepare)
+    slot = task_admission.reserve(None)
+    try:
+        init_payload = await run_in_threadpool(_prepare)
+    except BaseException:
+        slot.release()
+        raise
 
     q = _SseQueue()
 
@@ -290,7 +329,6 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
             finally:
                 q.put(("done_sentinel", object()))
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
+    slot.start_worker(worker)
 
     return _stream_response(q, init_payload)

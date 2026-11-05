@@ -3,14 +3,18 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
-import { fetchTMDBDetail } from '@/api/media'
+import { fetchTMDBCredits, fetchTMDBDetail } from '@/api/media'
+import type { TMDBCredits } from '@/types/media'
 import { copyText as writeClipboard } from '@/utils/clipboard'
+import { categoryFromTmdb, episodeUnitFor } from '@/utils/mediaCategory'
+import { buildWpsText, isPremiereToday } from '@/utils/wpsCopy'
 
 type Draft = {
   title: string
   year: string
   tmdbId: number | null
   mediaType: 'movie' | 'tv'
+  category: string
   posterPath: string
   overview: string
   episode: string
@@ -26,6 +30,7 @@ const emptyDraft: Draft = {
   year: '',
   tmdbId: null,
   mediaType: 'tv',
+  category: '',
   posterPath: '',
   overview: '',
   episode: '',
@@ -56,7 +61,12 @@ const fullPosterUrl = computed(() => {
   return TMDB_POSTER_BASE + (path.startsWith('/') ? path : `/${path}`)
 })
 
-const episodeText = computed(() => (draft.episode.trim() ? `【更${draft.episode.trim()}集】` : ''))
+// 综艺按「期」计数，其他按「集」
+const episodeUnit = computed(() => episodeUnitFor(draft.category))
+
+const episodeText = computed(() =>
+  draft.episode.trim() ? `【更${draft.episode.trim()}${episodeUnit.value}】` : '',
+)
 
 const titleLine = computed(() => {
   const title = draft.title.trim() || draft.taskname.trim() || '未命名'
@@ -116,10 +126,13 @@ onMounted(() => {
   } catch {
     /* ignore */
   }
+  syncWpsFromDraft()
   loaded.value = true
   regenerate()
+  // 页面一进来就开始预取 WPS 需要的详情/演员，切标签时不用等
+  loadWpsMeta()
 
-  if (!draft.posterPath && draft.tmdbId) {
+  if (draft.tmdbId && (!draft.posterPath || !draft.category)) {
     void loadPosterFromTMDB()
   }
 })
@@ -132,6 +145,11 @@ async function loadPosterFromTMDB() {
     const data = (detail as any)?.data || {}
     const path = String(data.poster_path || '').trim()
     if (path) draft.posterPath = path
+    // 旧草稿没有 category 时，按 TMDB 分类补上，决定文案里用「集」还是「期」
+    if (!draft.category && Array.isArray(data.genres)) {
+      draft.category = categoryFromTmdb(draft.mediaType, data)
+      syncWpsTypeFromCategory()
+    }
   } catch {
     /* ignore */
   } finally {
@@ -290,7 +308,7 @@ async function downloadPoster() {
   downloadBlob(blob, posterFileName(blob.type.includes('png') ? 'png' : 'jpg'))
 }
 
-const mode = ref<'weibo' | 'qq'>('weibo')
+const mode = ref<'weibo' | 'qq' | 'wps'>('weibo')
 const weiboQuality = ref('4K高码')
 const weiboGuide = ref('宝宝们自取点点攒攒[心][心]')
 
@@ -337,7 +355,7 @@ const weiboLine1 = computed(() => {
   const title = draft.title.trim() || draft.taskname.trim() || '未命名'
   const episode = draft.episode.trim()
   const quality = weiboQuality.value.trim() || '4K高码'
-  return `${title} ${episode ? `更${episode}集` : ''}资源${quality}【已更】`
+  return `${title} ${episode ? `更${episode}${episodeUnit.value}` : ''}资源${quality}【已更】`
 })
 
 const weiboText1 = computed(() => {
@@ -354,6 +372,135 @@ const weiboLinksText = computed(() => {
     lines.push(`${prefix}：${url}`)
   }
   return lines.join('\n')
+})
+
+// ---- WPS 文案：🔥国剧「剧名 首播更新04/30集」4K【演员】 + 百度/夸克链接 ----
+const WPS_TYPE_OPTIONS = ['国剧', '美剧', '日剧', '韩剧', '港剧', '台剧', '泰剧', '电影', '不标类型']
+
+const wpsType = ref('国剧')
+const wpsEpisode = ref('')
+const wpsTotalEpisodes = ref('')
+const wpsQuality = ref('4K')
+const wpsCast = ref('')
+const wpsPhrase = ref<'首播更新' | '更新'>('更新')
+const wpsMetaLoaded = ref(false)
+const wpsCastLoading = ref(false)
+
+const wpsTypeLabel = computed(() => (wpsType.value === '不标类型' ? '' : wpsType.value))
+
+// 综艺、动漫不写主演；综艺文案格式为「更3期」，不带总期数和话术
+const wpsHideCast = computed(() => draft.category === '综艺' || draft.category === '动漫')
+const wpsIsVariety = computed(() => episodeUnit.value === '期')
+
+const wpsText = computed(() =>
+  buildWpsText({
+    typeLabel: wpsTypeLabel.value,
+    title: draft.title.trim() || draft.taskname.trim() || '未命名',
+    phrase: wpsPhrase.value,
+    episode: wpsEpisode.value,
+    totalEpisodes: wpsTotalEpisodes.value,
+    unit: episodeUnit.value,
+    quality: wpsQuality.value,
+    cast: wpsHideCast.value ? '' : wpsCast.value,
+    links: draft.links,
+  }),
+)
+
+// 动漫/综艺不标类型；电影直接写「电影」
+function syncWpsTypeFromCategory() {
+  if (draft.category === '综艺' || draft.category === '动漫') {
+    wpsType.value = '不标类型'
+  } else if (draft.category === '电影') {
+    wpsType.value = '电影'
+  }
+}
+
+function syncWpsFromDraft() {
+  wpsEpisode.value = draft.episode.trim()
+  syncWpsTypeFromCategory()
+}
+
+// 详情走缓存（毫秒级），credits 是 TMDB 网络请求（约 1~2 秒），两者并行预取；
+// 详情先回来立即填集数/话术，主演后回来再补，切到 WPS 标签时通常已经就绪
+let wpsDetailPromise: Promise<Record<string, any> | null> | null = null
+let wpsCreditsPromise: Promise<TMDBCredits | null> | null = null
+
+function ensureWpsDetail() {
+  if (!wpsDetailPromise) {
+    const mid = Number(draft.tmdbId)
+    wpsDetailPromise =
+      mid > 0
+        ? fetchTMDBDetail(draft.mediaType, mid)
+            .then((detail) => ((detail as any)?.data || {}) as Record<string, any>)
+            .catch(() => null)
+        : Promise.resolve(null)
+  }
+  return wpsDetailPromise
+}
+
+function ensureWpsCredits() {
+  if (!wpsCreditsPromise) {
+    const mid = Number(draft.tmdbId)
+    wpsCreditsPromise =
+      mid > 0
+        ? fetchTMDBCredits(draft.mediaType, mid, { limit: 2 }).catch(() => null)
+        : Promise.resolve(null)
+  }
+  return wpsCreditsPromise
+}
+
+function applyWpsDetail(data: Record<string, any> | null) {
+  if (!data) return
+  const seasons = Array.isArray(data.seasons) ? data.seasons : []
+  const lastSeasonNumber = Number(data?.last_episode_to_air?.season_number || 0)
+  const season =
+    seasons.find((item: any) => Number(item?.season_number) === (lastSeasonNumber || 1)) || seasons[0] || null
+
+  if (!wpsTotalEpisodes.value) {
+    const total = Number(season?.episode_count || 0) || Number(data.number_of_episodes || 0) || 0
+    if (total > 0) wpsTotalEpisodes.value = String(total)
+  }
+  if (!wpsEpisode.value) {
+    const aired = Number(data?.last_episode_to_air?.episode_number || 0)
+    if (aired > 0) wpsEpisode.value = String(aired)
+  }
+  if (!draft.category && Array.isArray(data.genres)) {
+    draft.category = categoryFromTmdb(draft.mediaType, data)
+    syncWpsTypeFromCategory()
+  }
+
+  // 首播 = 最新一集就是今天更新的；否则一律叫「更新」
+  const airDate = String(
+    data?.last_episode_to_air?.air_date || data.first_air_date || data.release_date || '',
+  )
+  wpsPhrase.value = isPremiereToday(airDate) ? '首播更新' : '更新'
+}
+
+function applyWpsCredits(credits: TMDBCredits | null) {
+  if (!credits || wpsCast.value || wpsHideCast.value) return
+  const names = (credits.cast || [])
+    .map((item) => String(item?.name || '').trim())
+    .filter(Boolean)
+    .slice(0, 2)
+  if (names.length) wpsCast.value = names.join(' ')
+}
+
+// 幂等启动预取，不阻塞页面加载；结果到了直接回填
+function loadWpsMeta() {
+  if (wpsMetaLoaded.value || !Number(draft.tmdbId)) return
+  wpsMetaLoaded.value = true
+  void ensureWpsDetail().then(applyWpsDetail)
+  if (!wpsHideCast.value) {
+    wpsCastLoading.value = true
+    void ensureWpsCredits().then((credits) => {
+      applyWpsCredits(credits)
+      wpsCastLoading.value = false
+    })
+  }
+}
+
+watch(mode, (value) => {
+  if (value === 'wps') loadWpsMeta()
 })
 
 async function copyBlock(text: string, label: string) {
@@ -409,7 +556,7 @@ function goBack() {
           <div v-else class="copy-poster__empty">暂无海报</div>
         </div>
         <div class="copy-poster__meta">
-          <span>{{ draft.mediaType === 'movie' ? '电影' : '剧集' }}</span>
+          <span>{{ draft.category || (draft.mediaType === 'movie' ? '电影' : '剧集') }}</span>
           <span v-if="draft.tmdbId">TMDB #{{ draft.tmdbId }}</span>
         </div>
         <el-button text :loading="posterLoading" @click="loadPosterFromTMDB">重新获取海报</el-button>
@@ -419,6 +566,7 @@ function goBack() {
         <div class="copy-tabs">
           <button type="button" class="copy-tab" :class="{ 'is-active': mode === 'weibo' }" @click="mode = 'weibo'">微博</button>
           <button type="button" class="copy-tab" :class="{ 'is-active': mode === 'qq' }" @click="mode = 'qq'">QQ频道</button>
+          <button type="button" class="copy-tab" :class="{ 'is-active': mode === 'wps' }" @click="mode = 'wps'">WPS</button>
         </div>
 
         <template v-if="mode === 'weibo'">
@@ -428,7 +576,7 @@ function goBack() {
               <el-input v-model="draft.title" placeholder="剧名" />
             </div>
             <div class="copy-field copy-field--episode">
-              <label>更几集</label>
+              <label>更几{{ episodeUnit }}</label>
               <el-input v-model="draft.episode" placeholder="未知，可手动填写" />
             </div>
             <div class="copy-field copy-field--year">
@@ -485,7 +633,7 @@ function goBack() {
           </div>
         </template>
 
-        <template v-else>
+        <template v-else-if="mode === 'qq'">
           <div class="copy-fields">
             <div class="copy-field copy-field--title">
               <label>标题</label>
@@ -496,7 +644,7 @@ function goBack() {
               <el-input v-model="draft.year" placeholder="2026" />
             </div>
             <div class="copy-field copy-field--episode">
-              <label>更新集数</label>
+              <label>更新{{ episodeUnit }}数</label>
               <el-input v-model="draft.episode" placeholder="未知，可手动填写" />
             </div>
           </div>
@@ -541,6 +689,83 @@ function goBack() {
 
           <div class="copy-actions">
             <el-button type="primary" @click="copyText">复制文案</el-button>
+            <el-button :disabled="!posterUrl" @click="copyPoster">复制海报</el-button>
+            <el-button text :disabled="!posterUrl" @click="downloadPoster">下载海报</el-button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="copy-fields">
+            <div class="copy-field copy-field--title">
+              <label>剧名</label>
+              <el-input v-model="draft.title" placeholder="剧名" />
+            </div>
+            <div class="copy-field copy-field--wps-type">
+              <label>类型</label>
+              <el-select v-model="wpsType" placeholder="类型">
+                <el-option v-for="item in WPS_TYPE_OPTIONS" :key="item" :label="item" :value="item" />
+              </el-select>
+            </div>
+          </div>
+
+          <div class="copy-fields">
+            <div class="copy-field copy-field--episode">
+              <label>当前{{ episodeUnit }}</label>
+              <el-input v-model="wpsEpisode" placeholder="04" />
+            </div>
+            <div v-if="!wpsIsVariety" class="copy-field copy-field--episode">
+              <label>总{{ episodeUnit }}数</label>
+              <el-input v-model="wpsTotalEpisodes" placeholder="30" />
+            </div>
+            <div class="copy-field copy-field--year">
+              <label>画质</label>
+              <el-input v-model="wpsQuality" placeholder="4K" />
+            </div>
+            <div v-if="!wpsIsVariety" class="copy-field copy-field--episode">
+              <label>话术</label>
+              <el-select v-model="wpsPhrase">
+                <el-option label="首播更新" value="首播更新" />
+                <el-option label="更新" value="更新" />
+              </el-select>
+            </div>
+          </div>
+
+          <div v-if="!wpsHideCast" class="copy-field">
+            <label>主演（空格分隔）</label>
+            <el-input
+              v-model="wpsCast"
+              :placeholder="wpsCastLoading ? '正在获取主演…' : '井柏然 孙艺洲'"
+            />
+          </div>
+
+          <div class="copy-field">
+            <div class="copy-field__head">
+              <label>分享链接</label>
+              <div class="copy-field__actions">
+                <el-button size="small" text @click="addLink">+ 添加链接</el-button>
+              </div>
+            </div>
+            <div v-if="draft.links.length" class="copy-links">
+              <div v-for="(link, idx) in draft.links" :key="idx" class="copy-link-row">
+                <span class="copy-link-tag">{{ driveLabel(link.drive) }}</span>
+                <el-input v-model="link.url" placeholder="https://pan.quark.cn/s/..." />
+                <el-button text size="small" @click="removeLink(idx)">删除</el-button>
+              </div>
+            </div>
+            <div v-else class="copy-links__empty">还没有链接，点右上角「+ 添加链接」</div>
+            <div class="copy-field__hint">文案里按 百度 → 夸克 → 其他 的顺序输出</div>
+          </div>
+
+          <div class="weibo-block">
+            <div class="weibo-block__head">
+              <span class="weibo-block__title">文案</span>
+              <el-button size="small" type="primary" text @click="copyBlock(wpsText, '文案')">复制</el-button>
+            </div>
+            <pre class="weibo-block__body">{{ wpsText }}</pre>
+          </div>
+
+          <div class="copy-actions">
+            <el-button type="primary" @click="copyBlock(wpsText, '文案')">复制文案</el-button>
             <el-button :disabled="!posterUrl" @click="copyPoster">复制海报</el-button>
             <el-button text :disabled="!posterUrl" @click="downloadPoster">下载海报</el-button>
           </div>
@@ -639,6 +864,10 @@ function goBack() {
 .copy-field--year,
 .copy-field--episode {
   flex: 0 0 110px;
+}
+
+.copy-field--wps-type {
+  flex: 0 0 128px;
 }
 
 .copy-field > label {

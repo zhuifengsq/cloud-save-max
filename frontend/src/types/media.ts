@@ -64,3 +64,13 @@ export type TMDBDetail = {
   update_weekdays?: number[]
   episode_weekdays?: number[]
 }
+
+export type TMDBCastMember = {
+  name: string
+  character?: string
+}
+
+export type TMDBCredits = {
+  configured: boolean
+  cast: TMDBCastMember[]
+}

@@ -78,6 +78,10 @@ def _status_out(*, configured: bool, mt: str, tid: int, row: TMDBMediaCache | No
         refresh_started_at=_as_display_tz(row.refresh_started_at),
         fail_count=int(row.fail_count or 0),
         last_error=row.last_error,
+        credits_cached=bool(row.credits_json),
+        credits_fetched_at=_as_display_tz(row.credits_fetched_at),
+        credits_expires_at=_as_display_tz(row.credits_expires_at),
+        credits_fail_count=int(row.credits_fail_count or 0),
     )
 
 
@@ -220,6 +224,10 @@ def get_tmdb_cache_list(
             refresh_in_progress=bool(r.refresh_in_progress),
             fail_count=int(r.fail_count or 0),
             last_error=r.last_error,
+            credits_cached=bool(r.credits_json),
+            credits_fetched_at=_as_display_tz(r.credits_fetched_at),
+            credits_expires_at=_as_display_tz(r.credits_expires_at),
+            credits_fail_count=int(r.credits_fail_count or 0),
         )
         for r in rows
     ]
@@ -246,32 +254,21 @@ def post_tmdb_cache_refresh(
     language = str(cfg.get("language") or "zh-CN").strip() or "zh-CN"
     poster_language = str(cfg.get("poster_language") or "zh-CN").strip() or "zh-CN"
 
-    row = (
-        db.execute(
-            select(TMDBMediaCache).where(
-                TMDBMediaCache.media_type == mt,
-                TMDBMediaCache.tmdb_id == payload.tmdb_id,
-                TMDBMediaCache.language == language,
-                TMDBMediaCache.poster_language == poster_language,
-            )
-        )
-        .scalars()
-        .first()
+    lookup = select(TMDBMediaCache).where(
+        TMDBMediaCache.media_type == mt,
+        TMDBMediaCache.tmdb_id == payload.tmdb_id,
+        TMDBMediaCache.language == language,
+        TMDBMediaCache.poster_language == poster_language,
     )
+    row = db.scalar(lookup)
 
     queued = False
     if payload.async_refresh and row is not None:
-        trigger_refresh_async(db, media_type=mt, tmdb_id=payload.tmdb_id, language=language, poster_language=poster_language)  # type: ignore[arg-type]
-        queued = True
-        db.commit()
-        db.refresh(row)
+        queued = trigger_refresh_async(db, media_type=mt, tmdb_id=payload.tmdb_id, language=language, poster_language=poster_language)  # type: ignore[arg-type]
     else:
-        _, _data, _weekdays, _episode_weekdays, row = get_tmdb_detail_cached(
+        get_tmdb_detail_cached(
             db, media_type=mt, tmdb_id=payload.tmdb_id, force_refresh=bool(payload.force)  # type: ignore[arg-type]
         )
-        db.commit()
-        if row is not None:
-            db.refresh(row)
 
     audit.write_audit_log(
         db,
@@ -286,6 +283,7 @@ def post_tmdb_cache_refresh(
     )
     db.commit()
 
+    row = db.scalar(lookup)
     return TMDBCacheRefreshOut(queued=queued, status=_status_out(configured=configured, mt=mt, tid=payload.tmdb_id, row=row))
 
 

@@ -22,6 +22,7 @@ from app.extensions.runtime.account_manager import DatabaseAccountManager
 from app.models.task import Task
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.extensions.runtime.task_scheduler import task_scheduler_manager
+from app.extensions.runtime.task_admission import task_admission
 from app.extensions.runtime.task_executor import TaskExecutor
 from app.schemas.task_magic_regex import MagicRegexOut, MagicRegexRuleOut
 from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn
@@ -210,19 +211,20 @@ def delete_task_by_id(request: Request, task_id: int, current: CurrentUser = Dep
 
 @router.post('/{task_id:int}/run', response_model=TaskExecutionOut, dependencies=[Depends(require_permissions(TASK_RUN))])
 def post_run_task(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = get_task(db, task_id)
-    execution = TaskExecutor(db).run_task(task)
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='task.run', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=execution.status == 'success', detail=execution.message)
-    db.commit()
-    db.refresh(execution)
-    if str(getattr(task, "task_type", "") or "") == "drama":
-        try:
-            section, should_notify = build_task_section(task, execution)
-            if should_notify:
-                send_runtime(db, DRAMA_NOTIFY_TITLE, section)
-        except Exception:
-            pass
-    return execution_out(execution)
+    with task_admission.reserve(task_id):
+        task = get_task(db, task_id)
+        execution = TaskExecutor(db).run_task(task)
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='task.run', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=execution.status == 'success', detail=execution.message)
+        db.commit()
+        db.refresh(execution)
+        if str(getattr(task, "task_type", "") or "") == "drama":
+            try:
+                section, should_notify = build_task_section(task, execution)
+                if should_notify:
+                    send_runtime(db, DRAMA_NOTIFY_TITLE, section)
+            except Exception:
+                pass
+        return execution_out(execution)
 
 
 @router.post('/{task_id:int}/share', response_model=TaskShareLinkOut, dependencies=[Depends(require_permissions(TASK_WRITE))])

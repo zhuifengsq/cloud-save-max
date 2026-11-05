@@ -1,22 +1,24 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { isAxiosError } from 'axios'
+import { clearWpsHotUpdatesCache, readWpsHotUpdates, type WpsHotUpdates } from '@/api/linkExtractor'
 import { copyText } from '@/utils/clipboard'
 import {
   clipboardHtmlToText, DEFAULT_HOT_PREFIX, DEFAULT_HOT_SUFFIX, DEFAULT_QUARK_SUFFIX,
-  extractTable, filterQuark, generateHotUpdates, organizeDualDisk, type ExtractedLink,
+  extractTable, filterQuark, generateHotUpdates, organizeDualDisk, parseWpsHeadline, type ExtractedLink,
 } from '@/utils/linkExtractor'
 
 type Tab = 'table' | 'quark' | 'dual' | 'hot'
 const tabs: { key: Tab; label: string; action: string; placeholder: string }[] = [
-  { key: 'table', label: '表格提取', action: '解析提取', placeholder: '粘贴剧名和分享链接，提取为两列表格' },
+  { key: 'table', label: '表格提取', action: '解析提取', placeholder: '粘贴剧名和分享链接，例如：🔥国剧「嫁金钗 更新30/30集」4K【田曦薇 闫桉】+ 百度/夸克链接' },
   { key: 'quark', label: '夸克过滤', action: '仅保留夸克', placeholder: '粘贴包含多种网盘链接的内容，保留剧名和夸克链接' },
+  { key: 'hot', label: '热播更新', action: '生成更新文案', placeholder: '支持 🔥国剧「嫁金钗 更新30/30集」4K【田曦薇 闫桉】、🔥「后会友期 更3期」4K、尚公主 (2026) 【更23集】' },
   { key: 'dual', label: '百度/夸克整理', action: '整理格式', placeholder: '粘贴原始内容，支持普通网址、Markdown 和富文本超链接' },
-  { key: 'hot', label: '热播更新', action: '生成更新文案', placeholder: '粘贴剧名和更新集数，例如：尚公主 (2026) 【更23集】' },
 ]
 const activeTab = ref<Tab>('table')
 const tabInfo = computed(() => tabs.find((tab) => tab.key === activeTab.value)!)
-const empty = () => ({ input: '', output: '', processed: false, status: '', hasMatches: false })
+const empty = () => ({ input: '', output: '', processed: false, status: '', hasMatches: false, wpsDate: '' })
 const states = reactive({ table: empty(), quark: empty(), dual: empty(), hot: empty() })
 const current = computed(() => states[activeTab.value])
 const rows = ref<ExtractedLink[]>([])
@@ -24,17 +26,40 @@ const quarkSuffix = ref(DEFAULT_QUARK_SUFFIX)
 const hotPrefix = ref(DEFAULT_HOT_PREFIX)
 const hotSuffix = ref(DEFAULT_HOT_SUFFIX)
 const exporting = ref(false)
+const WPS_URL_STORAGE_KEY = 'link-extractor:wps-document-url'
+const wpsUrl = ref('')
+const wpsPending = ref<Tab | null>(null)
+const wpsClearing = ref(false)
+try {
+  wpsUrl.value = localStorage.getItem(WPS_URL_STORAGE_KEY) ?? ''
+} catch {
+  // The page can still read documents if browser storage is unavailable.
+}
 
-function process() {
-  const key = activeTab.value
+function process(key = activeTab.value, wps?: WpsHotUpdates) {
   const state = states[key]
+  state.wpsDate = wps?.date ?? ''
   if (key === 'table') {
-    rows.value = extractTable(state.input)
+    rows.value = wps
+      ? wps.entries.flatMap((entry) => {
+          const title = parseWpsHeadline(entry.title).title || entry.title
+          return entry.links.map(({ url }) => ({ title, url }))
+        })
+      : extractTable(state.input)
     state.hasMatches = rows.value.length > 0
-    state.status = `已提取 ${rows.value.length} 条链接`
+    state.status = wps && !state.hasMatches ? '该区块未识别到网盘链接' : `已提取 ${rows.value.length} 条链接`
   } else if (key === 'quark') {
-    state.output = filterQuark(state.input, quarkSuffix.value)
-    state.hasMatches = Boolean(filterQuark(state.input, ''))
+    if (wps) {
+      const blocks = wps.entries.flatMap((entry) => {
+        const links = entry.links.filter(({ drive }) => drive === 'quark')
+        return links.length ? [[entry.title, ...links.map(({ url }) => `夸克链接：${url}`)].join('\n')] : []
+      })
+      state.hasMatches = blocks.length > 0
+      state.output = state.hasMatches ? [...blocks, quarkSuffix.value.trim()].filter(Boolean).join('\n\n') : ''
+    } else {
+      state.output = filterQuark(state.input, quarkSuffix.value)
+      state.hasMatches = Boolean(filterQuark(state.input, ''))
+    }
     state.status = state.hasMatches ? '已保留夸克链接' : '没有识别到带剧名的夸克链接'
   } else if (key === 'dual') {
     const result = organizeDualDisk(state.input)
@@ -42,12 +67,58 @@ function process() {
     state.hasMatches = result.baiduCount + result.quarkCount > 0
     state.status = `已识别 ${result.baiduCount} 个百度链接、${result.quarkCount} 个夸克链接`
   } else {
-    const result = generateHotUpdates(state.input, hotPrefix.value, hotSuffix.value)
-    state.output = result.text
+    const input = wps ? wps.entries.map(({ title }) => title).join('\n') : state.input
+    const result = generateHotUpdates(input, hotPrefix.value, hotSuffix.value)
+    state.output = wps && !result.count ? '' : result.text
     state.hasMatches = result.count > 0
-    state.status = result.count ? `已生成 ${result.count} 部影视的更新文案` : '没有识别到包含集数的影视标题'
+    state.status = result.count ? `已生成 ${result.count} 部影视的更新文案` : '没有识别到包含集数/期数的影视标题'
   }
   state.processed = true
+}
+
+async function importWps() {
+  const key = activeTab.value
+  const url = wpsUrl.value.trim()
+  if (!url || wpsPending.value || wpsClearing.value || key === 'dual') return
+  wpsPending.value = key
+  try {
+    process(key, await readWpsHotUpdates(url))
+  } catch (error) {
+    const message = isAxiosError<{ message?: string }>(error) ? error.response?.data?.message : undefined
+    ElMessage.error(message || '读取 WPS 文档失败，请检查网络后重试')
+  } finally {
+    wpsPending.value = null
+  }
+}
+
+function saveWpsUrl() {
+  const url = wpsUrl.value.trim()
+  if (!/^https:\/\/(?:www\.)?kdocs\.cn\/l\/[A-Za-z0-9]+(?:[?#]\S*)?$/.test(url)) {
+    ElMessage.warning('请填写有效的金山文档分享链接')
+    return
+  }
+  try {
+    localStorage.setItem(WPS_URL_STORAGE_KEY, url)
+    wpsUrl.value = url
+    ElMessage.success('WPS 链接已保存')
+  } catch {
+    ElMessage.error('保存失败，浏览器无法使用本地存储')
+  }
+}
+
+async function clearWpsCache() {
+  const url = wpsUrl.value.trim()
+  if (!url || wpsPending.value || wpsClearing.value) return
+  wpsClearing.value = true
+  try {
+    await clearWpsHotUpdatesCache(url)
+    ElMessage.success('WPS 缓存已清除，下次整理将重新读取文档')
+  } catch (error) {
+    const message = isAxiosError<{ message?: string }>(error) ? error.response?.data?.message : undefined
+    ElMessage.error(message || '清除 WPS 缓存失败，请重试')
+  } finally {
+    wpsClearing.value = false
+  }
 }
 
 function clear() {
@@ -106,7 +177,6 @@ async function exportExcel() {
         <h2>链接整理</h2>
         <div class="section-header__desc">提取影视链接、整理网盘内容，生成更新文案。</div>
       </div>
-      <el-tag type="info" effect="plain">本地处理</el-tag>
     </div>
 
     <section class="glass-panel tool-panel">
@@ -114,9 +184,19 @@ async function exportExcel() {
         <el-tab-pane v-for="tab in tabs" :key="tab.key" :label="tab.label" :name="tab.key" />
       </el-tabs>
       <div class="tool-content">
+        <div v-if="activeTab !== 'dual'" class="tool-field">
+          <label for="wps-document-url">WPS 文档链接</label>
+          <div class="wps-source">
+            <el-input id="wps-document-url" v-model="wpsUrl" clearable placeholder="粘贴公开金山文档的分享链接" />
+            <div class="tool-actions">
+              <el-button :disabled="!wpsUrl.trim()" @click="saveWpsUrl">保存链接</el-button>
+              <el-button :disabled="!wpsUrl.trim() || wpsPending !== null" :loading="wpsClearing" @click="clearWpsCache">清除缓存</el-button>
+            </div>
+          </div>
+        </div>
         <div class="tool-field">
           <label for="link-source">原始内容</label>
-          <el-input id="link-source" v-model="current.input" type="textarea" :rows="9" :placeholder="tabInfo.placeholder" @paste="paste" />
+          <el-input id="link-source" v-model="current.input" type="textarea" :rows="9" :placeholder="tabInfo.placeholder" :disabled="wpsPending === activeTab" @paste="paste" />
         </div>
         <div v-if="activeTab === 'quark'" class="tool-field">
           <label for="quark-suffix">输出后缀</label>
@@ -133,14 +213,17 @@ async function exportExcel() {
           </div>
         </div>
         <div class="tool-actions">
-          <el-button @click="clear">清空</el-button>
-          <el-button type="primary" :disabled="!current.input.trim()" @click="process">{{ tabInfo.action }}</el-button>
+          <el-button :disabled="wpsPending === activeTab" @click="clear">清空</el-button>
+          <el-button type="primary" :disabled="!current.input.trim() || wpsPending === activeTab" @click="process()">{{ tabInfo.action }}</el-button>
+          <el-button v-if="activeTab !== 'dual'" type="primary" plain :loading="wpsPending === activeTab"
+            :disabled="!wpsUrl.trim() || wpsPending !== null || wpsClearing" @click="importWps">从 WPS 读取并整理</el-button>
         </div>
 
         <section v-if="current.processed" class="tool-result" aria-label="整理结果">
           <div class="result-heading">
             <div class="result-title">
               <h3>{{ activeTab === 'table' ? '提取结果' : '整理结果' }}</h3>
+              <span v-if="current.wpsDate">WPS 热门更新 · {{ current.wpsDate }}</span>
               <span role="status">{{ current.status }}</span>
             </div>
             <div class="result-actions">
@@ -172,6 +255,8 @@ async function exportExcel() {
 .tool-content { display: grid; gap: 20px; padding-top: 8px; min-width: 0; }
 .tool-field { display: grid; gap: 10px; min-width: 0; }
 .tool-field label { color: var(--ink-2); font-size: 14px; font-weight: 600; }
+.wps-source { display: flex; flex-wrap: wrap; gap: 10px; }
+.wps-source > .el-input { flex: 1 1 280px; width: auto; min-width: 0; }
 .tool-field :deep(textarea), .tool-result :deep(textarea) { line-height: 1.7; }
 .affix-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .tool-actions, .result-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }

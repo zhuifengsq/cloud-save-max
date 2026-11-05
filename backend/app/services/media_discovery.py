@@ -8,7 +8,7 @@ from typing import Any, Literal
 from cachetools import TTLCache
 from sqlalchemy.orm import Session
 
-from app.services.tmdb_cache import get_tmdb_detail_cached
+from app.services.tmdb_cache import get_tmdb_credits_cached, get_tmdb_detail_cached
 from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
 from app.thirdparty.douban_client import DoubanClient
 from app.thirdparty.tmdb_client import TMDBClient
@@ -182,6 +182,20 @@ def tmdb_detail(
 ) -> tuple[bool, dict[str, Any] | None, list[int], list[int]]:
     configured, data, update_weekdays, episode_weekdays, _row = get_tmdb_detail_cached(db, media_type=media_type, tmdb_id=tmdb_id)
     return configured, data, update_weekdays, episode_weekdays
+
+
+def tmdb_credits(
+    db: Session,
+    *,
+    media_type: MediaType,
+    tmdb_id: int,
+    limit: int = 8,
+) -> tuple[bool, list[dict[str, str]]]:
+    """返回 TMDB 演员表，按 TMDB 原始排序取前 limit 位（文案里用来填「主演」）。
+
+    走 DB 缓存：第一次 1~2 秒（TMDB 网络），之后毫秒级返回。
+    """
+    return get_tmdb_credits_cached(db, media_type=media_type, tmdb_id=tmdb_id, limit=limit)
 
 
 def _infer_tv_update_weekdays(tv_id: int, details: dict[str, Any], client: TMDBClient) -> list[int]:

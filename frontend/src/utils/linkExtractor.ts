@@ -20,6 +20,41 @@ function cleanTitle(title: string): string {
     .replace(/\s*[（(]\d{4}[）)]/g, '').replace(/\s*【.*?】/g, '').replace(/\s*\[.*?\]/g, '').trim()
 }
 
+// 生成文案里的片名行，例如：
+//   🔥国剧「嫁金钗 更新30/30集」4K【田曦薇 闫桉】 -> { title: '嫁金钗', episodeText: '更新30/30集' }
+//   🔥「后会友期 更3期」4K                    -> { title: '后会友期', episodeText: '更3期' }
+//   尚公主 (2026) 【更23集】                  -> { title: '尚公主', episodeText: '更23集' }
+const MEDIA_TYPE_WORDS = '国剧|美剧|日剧|韩剧|港剧|台剧|泰剧|英剧|电影|动漫|综艺|纪录片'
+const EPISODE_PHRASE = /(?:首播)?更新(?:至)?\s*\d+\s*(?:\/\s*\d+)?\s*[集期]|更(?:新)?\s*\d+\s*(?:\/\s*\d+)?\s*[集期]|全\s*\d+\s*[集期]/i
+const QUALITY_WORDS = /(?:4K|8K|2K|2160P|1080P|720P|HDR10?|杜比|蓝光|高清|超清)/gi
+
+export function parseWpsHeadline(raw: string): { title: string; episodeText: string } {
+  const text = raw.replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '').trim()
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+  const quoted = text.match(/[「『]([^」』]+)[」』]/)
+  const body = quoted
+    ? quoted[1]! + ' ' + text.slice(quoted.index! + quoted[0].length)
+    : text
+  const cleaned = body
+    .replace(/[（(]\s*\d{4}\s*[）)]/g, ' ')
+    .replace(new RegExp('^(?:' + MEDIA_TYPE_WORDS + ')\\s*'), ' ')
+  const episodeMatch = cleaned.match(EPISODE_PHRASE)
+  const episodeText = episodeMatch ? episodeMatch[0].replace(/\s+/g, '') : ''
+  const title = cleaned.replace(EPISODE_PHRASE, ' ').replace(QUALITY_WORDS, ' ')
+    .replace(/【[^】]*】/g, ' ')
+    .replace(/[「」『』【】\[\]（）()]/g, ' ')
+    .replace(/\s+/g, ' ').trim()
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').trim()
+  return { title, episodeText }
+}
+
+// 热播更新统一成「更N集 / 更N期」：更新30/30集 -> 更30集（取前面那个数字）；全30集保持不变。
+function normalizeHotEpisode(text: string): string {
+  const compact = text.replace(/\s+/g, '')
+  const match = compact.match(/^(?:首播)?(?:更新(?:至)?|更(?:新)?)(\d+)(?:\/\d+)?([集期])$/)
+  return match ? '更' + match[1]! + match[2]! : compact
+}
+
 export function extractTable(input: string): ExtractedLink[] {
   const text = normalizeSource(input)
     .replace(/^["“”]+|["“”]+$/gm, '')
@@ -35,11 +70,12 @@ export function extractTable(input: string): ExtractedLink[] {
     if (matches.length) {
       const prefix = line.slice(0, matches[0]!.index)
         .replace(/(?:夸克|阿里(?:云盘)?|百度(?:网盘)?|迅雷|网盘|分享|网页)?(?:链接)?[：: \t]*$/i, '').trim()
-      const inlineTitle = cleanTitle(prefix)
+      const inlineTitle = cleanTitle(parseWpsHeadline(prefix).title)
       if (inlineTitle) title = inlineTitle
       for (const match of matches) rows.push({ title: title || '未匹配到影视名称', url: cleanUrl(match[0]) })
     } else if (!/^(?:提取码|解压码|密码)/.test(line)) {
-      title = cleanTitle(line)
+      const parsedTitle = parseWpsHeadline(line).title || cleanTitle(line)
+      if (parsedTitle) title = parsedTitle
     }
   }
   return rows
@@ -85,11 +121,12 @@ export function generateHotUpdates(input: string, prefix: string, suffix: string
   for (const raw of text.split('\n')) {
     const line = raw.trim()
     if (!line || /https?:\/\//i.test(line) || /^(?:百度|夸克)(?:网盘)?链接[：:]/.test(line)) continue
-    const match = line.match(/^(.+?)(?:\s*[（(]\s*\d{4}\s*[）)])?\s*(【[^】]*集[^】]*】)\s*$/)
-    if (!match) continue
-    const parts = match[1]!.trim().split(/\s+/).filter(Boolean)
-    const title = parts.length > 1 && parts.every((s) => /^[\u3400-\u9FFF·]+$/.test(s)) ? parts[0]! : parts.join('')
-    if (title) entries.add(title + match[2]!.replace(/\s+/g, ''))
+    // 兼容两种写法：尾部【更23集】，或片名内「嫁金钗 更新30/30集」/「后会友期 更3期」。
+    const bracket = line.match(/【([^】]*[集期][^】]*)】\s*$/)
+    const parsed = parseWpsHeadline(line)
+    const episodeText = (bracket ? bracket[1]!.trim() : parsed.episodeText).replace(/\s+/g, '')
+    if (!parsed.title || !episodeText) continue
+    entries.add(parsed.title + '【' + normalizeHotEpisode(episodeText) + '】')
   }
   const lines: string[] = []
   if (prefix.trim()) lines.push(prefix.trim(), '')

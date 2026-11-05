@@ -1,18 +1,29 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
-
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
-import requests
 
 from app.core.deps import require_permissions
 from app.core.permissions import TASK_READ
 from app.core.settings import settings
 from app.db.session import get_db
-from app.schemas.media_discovery import DoubanCategoryListOut, MediaDiscoverListOut, TMDBDetailOut, TMDBSearchListOut
-from app.services.media_discovery import fetch_douban_list, list_douban_categories, tmdb_detail, tmdb_search
-from app.services.proxy_image_cache import ProxyImageCacheConfig, fetch_store_and_build_response, resolve_proxy_image_cache_dir, try_build_cached_response
+from app.schemas.media_discovery import (
+    DoubanCategoryListOut,
+    MediaDiscoverListOut,
+    TMDBCastMemberOut,
+    TMDBCreditsOut,
+    TMDBDetailOut,
+    TMDBSearchListOut,
+)
+from app.services.media_discovery import fetch_douban_list, list_douban_categories, tmdb_credits, tmdb_detail, tmdb_search
+from app.services.proxy_image_cache import (
+    ProxyImageCacheConfig,
+    ProxyImageError,
+    fetch_store_and_build_response,
+    resolve_proxy_image_cache_dir,
+    try_build_cached_response,
+    validate_image_url,
+)
 from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
 from app.thirdparty.douban_client import DoubanClient
 
@@ -93,15 +104,31 @@ def get_tmdb_detail(
     )
 
 
+@router.get("/{media_type}/{tmdb_id}/credits", response_model=TMDBCreditsOut, dependencies=[Depends(require_permissions(TASK_READ))])
+def get_tmdb_credits(
+    media_type: str,
+    tmdb_id: int,
+    limit: int = Query(8, ge=1, le=30),
+    db: Session = Depends(get_db),
+) -> TMDBCreditsOut:
+    mt = str(media_type or "").strip().lower()
+    if mt not in ("movie", "tv"):
+        return TMDBCreditsOut(configured=False, cast=[])
+    configured, cast = tmdb_credits(db, media_type=mt, tmdb_id=tmdb_id, limit=limit)  # type: ignore[arg-type]
+    db.commit()
+    return TMDBCreditsOut(
+        configured=configured,
+        cast=[TMDBCastMemberOut(name=item.get("name", ""), character=item.get("character", "")) for item in cast],
+    )
+
+
 @router.get("/proxy-image")
 def get_proxy_image(request: Request, url: str = Query(..., min_length=8, max_length=2048)):
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return Response(status_code=400)
-    host = (parsed.hostname or "").lower()
-    if not host.endswith("doubanio.com") and not host.endswith("douban.com"):
-        return Response(status_code=400)
-    
+    try:
+        validate_image_url(url)
+    except ProxyImageError as exc:
+        return Response(status_code=exc.status_code)
+
     ua = str(_douban.session.headers.get("User-Agent") or "").strip()
     if not ua:
         ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1"
@@ -135,10 +162,7 @@ def get_proxy_image(request: Request, url: str = Query(..., min_length=8, max_le
         if cached is not None:
             return cached
 
-        res, _state = fetch_store_and_build_response(cfg=cfg, session=_douban.session, url=url, cache_control=cache_control, headers=headers)
+        res, _state = fetch_store_and_build_response(cfg=cfg, url=url, cache_control=cache_control, headers=headers)
         return res
-    except requests.RequestException as exc:
-        status = 404
-        if getattr(exc, "response", None) is not None and getattr(exc.response, "status_code", None) is not None:
-            status = int(exc.response.status_code)
-        return Response(status_code=status)
+    except ProxyImageError as exc:
+        return Response(status_code=exc.status_code)

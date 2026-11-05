@@ -57,7 +57,6 @@ declare module 'vue' {
     ElResult: typeof import('element-plus/es')['ElResult']
     ElSegmented: typeof import('element-plus/es')['ElSegmented']
     ElSelect: typeof import('element-plus/es')['ElSelect']
-    ElSpace: typeof import('element-plus/es')['ElSpace']
     ElStep: typeof import('element-plus/es')['ElStep']
     ElSteps: typeof import('element-plus/es')['ElSteps']
     ElSubMenu: typeof import('element-plus/es')['ElSubMenu']

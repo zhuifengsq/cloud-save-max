@@ -478,13 +478,13 @@ onMounted(refreshAll)
     <div class="section-header">
             <div class="section-header__title">
         <h2>TMDB 缓存管理</h2>
-        <div class="section-header__desc">管理 TMDB 详情缓存：定时刷新、TTL、清理与强制更新。</div>
+        <div class="section-header__desc">管理 TMDB 详情缓存（含演员表）：定时刷新、TTL、清理与强制更新。</div>
       </div>
     </div>
 
     <el-alert
       class="page__alert"
-      title="这里管理的是 TMDB 详情缓存（用于任务统计/追剧信息复用）。可配置定时刷新、批量刷新任务关联条目、清理冷数据，并对单条缓存设置 TTL/强制刷新/删除。"
+      title="这里管理的是 TMDB 详情缓存（用于任务统计/追剧信息复用），演员表与详情存在同一条目里：删除缓存会连主演一起删掉。可配置定时刷新、批量刷新任务关联条目、清理冷数据，并对单条缓存设置 TTL/强制刷新/删除。"
       type="info"
       show-icon
       :closable="false"
@@ -543,6 +543,12 @@ onMounted(refreshAll)
             </el-table-column>
             <el-table-column prop="year" label="年" width="70" />
             <el-table-column prop="status" label="状态" width="160" />
+            <el-table-column label="主演" width="90">
+              <template #default="{ row }">
+                <el-tag v-if="row.credits_cached" size="small" type="success">已缓存</el-tag>
+                <span v-else class="mini">-</span>
+              </template>
+            </el-table-column>
             <el-table-column label="expires_at" width="170">
               <template #default="{ row }">{{ fmtTime(row.expires_at || null) }}</template>
             </el-table-column>
@@ -614,7 +620,7 @@ onMounted(refreshAll)
 
           <div class="section">
             <div class="section__title">清理冷数据</div>
-            <div class="section__desc">删除长期未访问的缓存条目（保留近 N 天）。</div>
+            <div class="section__desc">删除长期未访问的缓存条目（详情与主演一起清理，保留近 N 天）。</div>
             <div class="tool-grid">
               <div class="tool-field">
                 <div class="tool-field__label">保留天数</div>
@@ -652,6 +658,7 @@ onMounted(refreshAll)
               <div>configured：{{ quick.status.configured ? 'true' : 'false' }} / exists：{{ quick.status.exists ? 'true' : 'false' }}</div>
               <div v-if="quick.status.display_title">标题：{{ quick.status.display_title }}（{{ quick.status.year || '-' }}）</div>
               <div v-if="quick.status.expires_at">expires_at：{{ fmtTime(quick.status.expires_at) }}</div>
+              <div>主演缓存：{{ quick.status.credits_cached ? '已缓存' : '未缓存' }}<template v-if="quick.status.credits_expires_at">（至 {{ fmtTime(quick.status.credits_expires_at) }}）</template></div>
               <div v-if="quick.status.last_error">last_error：{{ quick.status.last_error }}</div>
             </div>
           </div>
@@ -730,6 +737,13 @@ onMounted(refreshAll)
                 <div class="kv__k">last_error</div>
                 <div class="kv__v kv__v--error">{{ drawer.status.last_error }}</div>
               </div>
+              <div class="kv__row"><div class="kv__k">主演缓存</div><div class="kv__v">{{ drawer.status.credits_cached ? 'true' : 'false' }}</div></div>
+              <div class="kv__row"><div class="kv__k">主演 fetched_at</div><div class="kv__v">{{ fmtTime(drawer.status.credits_fetched_at || null) }}</div></div>
+              <div class="kv__row"><div class="kv__k">主演 expires_at</div><div class="kv__v">{{ fmtTime(drawer.status.credits_expires_at || null) }}</div></div>
+              <div v-if="drawer.status.credits_fail_count" class="kv__row">
+                <div class="kv__k">主演 fail_count</div>
+                <div class="kv__v">{{ drawer.status.credits_fail_count }}</div>
+              </div>
             </div>
           </el-tab-pane>
           <el-tab-pane label="缓存数据" name="payload">
@@ -794,9 +808,9 @@ onMounted(refreshAll)
     >
       <div v-if="deleteDialog.row" class="del">
         <el-alert type="warning" show-icon :closable="false" class="del__alert">
-          <template #title>删除的是“TMDB 详情缓存”</template>
+          <template #title>删除的是“TMDB 详情缓存（含主演）”</template>
           <template #default>
-            <div class="del__text">不影响 TMDB 配置；下次访问详情接口会重新写入缓存。</div>
+            <div class="del__text">详情与演员表一起删除，不影响 TMDB 配置；下次访问详情接口会重新写入缓存。</div>
           </template>
         </el-alert>
 
@@ -816,6 +830,7 @@ onMounted(refreshAll)
               <div>fetched_at：{{ fmtTime(deleteDialog.row.fetched_at || null) }}</div>
               <div>expires_at：{{ fmtTime(deleteDialog.row.expires_at || null) }}</div>
               <div>last_accessed_at：{{ fmtTime(deleteDialog.row.last_accessed_at || null) }}</div>
+              <div>主演缓存：{{ deleteDialog.row.credits_cached ? '已缓存' : '未缓存' }}</div>
             </div>
           </el-descriptions-item>
         </el-descriptions>

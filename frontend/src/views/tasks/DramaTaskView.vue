@@ -22,6 +22,7 @@ import type { TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/task
 import { validateCrontab5, validateTimezone, describeCrontab, getNextExecutions } from '@/utils/cron'
 import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
+import { readTaskRunError } from '@/utils/failureMessage'
 import type { DriveType } from '@/utils/driveType'
 
 const auth = useAuthStore()
@@ -577,9 +578,8 @@ async function handleRunStream(opts: { title: string; url: string; body?: any; t
       signal: runLogController.signal,
     })
     if (!response.ok) {
-      const text = await response.text().catch(() => '')
       runLogDialog.status = 'failed'
-      runLogDialog.message = text || `HTTP ${response.status}`
+      runLogDialog.message = await readTaskRunError(response)
       ElMessage.error(runLogDialog.message || '任务执行失败')
       return
     }
@@ -862,9 +862,8 @@ async function confirmRunAll() {
         if (auth.accessToken) headers.Authorization = `Bearer ${auth.accessToken}`
         const response = await fetch(url, { method: 'POST', headers, signal: runAllController.signal })
         if (!response.ok) {
-          const text = await response.text().catch(() => '')
           item.status = 'failed'
-          item.message = text || `HTTP ${response.status}`
+          item.message = await readTaskRunError(response)
           continue
         }
         const reader = response.body?.getReader()

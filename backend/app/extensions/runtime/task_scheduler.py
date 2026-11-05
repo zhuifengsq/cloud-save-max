@@ -23,6 +23,7 @@ from app.services.drive_accounts import probe_drive_account, sign_in_drive_accou
 from app.services.audit_log_scheduler import get_or_create_audit_log_scheduler_setting, purge_old_audit_logs
 from app.models.drive_account import DriveAccount
 from app.extensions.runtime.account_manager import DatabaseAccountManager
+from app.extensions.runtime.task_admission import task_admission
 from app.extensions.runtime.task_executor import TaskExecutor
 from app.core.errors import ApiError
 
@@ -230,39 +231,50 @@ def run_drama_tasks() -> None:
     sections: list[str] = []
 
     for task_id in task_ids:
-        max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
-            with SessionLocal() as db:
-                try:
-                    task = db.get(Task, int(task_id))
-                    if task is None:
-                        break
-                    executor = TaskExecutor(db)
-                    execution = executor.run_task(
-                        task,
-                        account_manager=account_manager,
-                        init_account_for_task=False,
-                    )
-                    should_notify = False
+        try:
+            slot = task_admission.reserve(task_id)
+        except ApiError as exc:
+            logger.info("跳过本轮追剧任务 task_id=%s code=%s", task_id, exc.code)
+            continue
+        with slot:
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                with SessionLocal() as db:
+                    execution_started = False
                     try:
-                        section, should_notify = build_task_section(task, execution)
-                        if should_notify and section:
+                        task = db.get(Task, int(task_id))
+                        if task is None:
+                            break
+                        executor = TaskExecutor(db)
+                        execution_started = True
+                        execution = executor.run_task(
+                            task,
+                            account_manager=account_manager,
+                            init_account_for_task=False,
+                        )
+                        section = None
+                        try:
+                            section, should_notify = build_task_section(task, execution)
+                            if not should_notify:
+                                section = None
+                        except Exception:
+                            pass
+                        db.commit()
+                        if section:
                             sections.append(section)
-                    except Exception:
-                        pass
-                    db.commit()
-                    break
-                except OperationalError as exc:
-                    db.rollback()
-                    if attempt < max_attempts and "database is locked" in str(exc).lower():
-                        time.sleep(0.2 * attempt)
-                        continue
-                    logger.warning("追剧任务调度执行异常 task_id=%s err=%s", task_id, str(exc))
-                    break
-                except Exception as exc:
-                    db.rollback()
-                    logger.warning("追剧任务调度执行失败 task_id=%s err=%s", task_id, str(exc))
-                    break
+                        break
+                    except OperationalError as exc:
+                        db.rollback()
+                        # After the executor starts, its cloud writes may already have succeeded.
+                        if not execution_started and attempt < max_attempts and "database is locked" in str(exc).lower():
+                            time.sleep(0.2 * attempt)
+                            continue
+                        logger.warning("追剧任务调度执行异常 task_id=%s err=%s", task_id, str(exc))
+                        break
+                    except Exception as exc:
+                        db.rollback()
+                        logger.warning("追剧任务调度执行失败 task_id=%s err=%s", task_id, str(exc))
+                        break
 
     with SessionLocal() as db:
         if sections:

@@ -142,3 +142,9 @@ class TMDBClient:
         if language:
             return self._make_request(f"/movie/{movie_id}", {"language": language})
         return self._make_request(f"/movie/{movie_id}")
+
+    def get_tv_credits(self, tv_id: int) -> Optional[dict[str, Any]]:
+        return self._make_request(f"/tv/{tv_id}/credits")
+
+    def get_movie_credits(self, movie_id: int) -> Optional[dict[str, Any]]:
+        return self._make_request(f"/movie/{movie_id}/credits")

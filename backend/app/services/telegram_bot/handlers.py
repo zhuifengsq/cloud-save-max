@@ -4,13 +4,14 @@ import base64
 import logging
 import os
 import re
-import threading
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.errors import ApiError
 from app.db.session import SessionLocal
+from app.extensions.runtime.task_admission import task_admission
 from app.services.telegram_bot.actions import TelegramBotActions
 from app.services.telegram_bot.callbacks import parse_callback
 from app.services.telegram_bot.client import TelegramBotClient
@@ -1499,7 +1500,7 @@ class TelegramBotHandler:
             self._show_task_detail(db, chat_id, int(parts[1]), message_id=message_id, back_page=back_page, task_type=task_type or None)
         elif action == "run":
             task_id = int(parts[1])
-            self._run_async(chat_id, message_id, f"任务 #{task_id} 执行中...", lambda adb: self._actions(adb).run_task(task_id), "任务执行完成")
+            self._run_async(chat_id, message_id, task_id, f"任务 #{task_id} 执行中...", lambda adb: self._actions(adb).run_task(task_id), "任务执行完成")
         elif action == "toggle":
             item = self._actions(db).toggle_task(int(parts[1]))
             self._show_task_detail(
@@ -2339,8 +2340,17 @@ class TelegramBotHandler:
         db.commit()
         self._show_back_cancel_home(chat_id, _field_prompt(meta), message_id=message_id)
 
-    def _run_async(self, chat_id: int, message_id: int, pending_text: str, job, success_title: str) -> None:
-        self._edit_or_send(chat_id, pending_text, message_id=message_id, reply_markup=keyboard([[button("🏠 首页", "home")]]))
+    def _run_async(self, chat_id: int, message_id: int, task_id: int, pending_text: str, job, success_title: str) -> None:
+        try:
+            slot = task_admission.reserve(task_id)
+        except ApiError as exc:
+            self._edit_or_send(chat_id, exc.message, message_id=message_id, reply_markup=keyboard([[button("🏠 首页", "home")]]))
+            return
+        try:
+            self._edit_or_send(chat_id, pending_text, message_id=message_id, reply_markup=keyboard([[button("🏠 首页", "home")]]))
+        except BaseException:
+            slot.release()
+            raise
 
         def worker() -> None:
             with SessionLocal() as db:
@@ -2351,5 +2361,4 @@ class TelegramBotHandler:
                     lines = [f"{success_title}失败", str(exc)]
                 self._send(chat_id, "\n".join(lines), reply_markup=keyboard([[button("🏠 首页", "home")]]))
 
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
+        slot.start_worker(worker)

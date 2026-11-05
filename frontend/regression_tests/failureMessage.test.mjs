@@ -5,7 +5,18 @@ import ts from 'typescript'
 
 const source = readFileSync(new URL('../src/utils/failureMessage.ts', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } })
-const { summarizeFailure, failureStageLabel } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
+const { summarizeFailure, failureStageLabel, readTaskRunError } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
+
+test('task stream reads the Chinese message from duplicate and overload errors', async () => {
+  for (const [status, code, message] of [
+    [409, 'TASK_ALREADY_RUNNING', '该任务正在执行，请等待本次执行结束'],
+    [429, 'TASK_CAPACITY_EXCEEDED', '正在执行的任务过多，请稍后再试'],
+  ]) {
+    const response = new Response(JSON.stringify({ code, message, detail: null }), { status })
+    assert.equal(await readTaskRunError(response), message)
+  }
+  assert.equal(await readTaskRunError(new Response('upstream unavailable', { status: 502 })), 'upstream unavailable')
+})
 
 test('cancelled share hides response metadata from summary', () => {
   const raw = '阶段=get_stoken：get_stoken failed: 好友已取消了分享 resp={"status":404,"code":41012,"message":"好友已取消了分享","req_id":"abc","metadata":{"x":"long"}}'

@@ -1,7 +1,8 @@
 import { http } from '@/api/http'
-import type { DoubanCategoryList, MediaDiscoverList, TMDBDetail, TMDBSearchList } from '@/types/media'
+import type { DoubanCategoryList, MediaDiscoverList, TMDBCredits, TMDBDetail, TMDBSearchList } from '@/types/media'
 
 const TMDB_DETAIL_TTL_MS = 60_000
+const TMDB_CREDITS_TTL_MS = 5 * 60_000
 
 type TMDBDetailCacheEntry = {
   data: TMDBDetail
@@ -10,6 +11,14 @@ type TMDBDetailCacheEntry = {
 
 const tmdbDetailCache = new Map<string, TMDBDetailCacheEntry>()
 const tmdbDetailInFlight = new Map<string, Promise<TMDBDetail>>()
+
+type TMDBCreditsCacheEntry = {
+  data: TMDBCredits
+  expiresAt: number
+}
+
+const tmdbCreditsCache = new Map<string, TMDBCreditsCacheEntry>()
+const tmdbCreditsInFlight = new Map<string, Promise<TMDBCredits>>()
 
 function cacheKey(mediaType: 'movie' | 'tv', id: number) {
   return `${mediaType}:${id}`
@@ -76,5 +85,43 @@ export async function fetchTMDBDetail(mediaType: 'movie' | 'tv', id: number, opt
     return cloneTMDBDetail(data)
   } finally {
     tmdbDetailInFlight.delete(key)
+  }
+}
+
+export async function fetchTMDBCredits(
+  mediaType: 'movie' | 'tv',
+  id: number,
+  opts?: { force?: boolean; limit?: number },
+) {
+  const mid = Number(id) || 0
+  const limit = Number(opts?.limit) > 0 ? Math.min(30, Math.max(1, Math.floor(Number(opts?.limit)))) : 0
+  const params = limit ? { limit } : undefined
+  if (mid <= 0) {
+    const response = await http.get<TMDBCredits>(`/media/${mediaType}/${id}/credits`, { params })
+    return response.data
+  }
+
+  const key = `${mediaType}:credits:${mid}:${limit}`
+  const now = Date.now()
+
+  if (!opts?.force) {
+    const cached = tmdbCreditsCache.get(key)
+    if (cached && cached.expiresAt > now) return cached.data
+    const inflight = tmdbCreditsInFlight.get(key)
+    if (inflight) return await inflight
+  }
+
+  const p = (async () => {
+    const response = await http.get<TMDBCredits>(`/media/${mediaType}/${mid}/credits`, { params })
+    return response.data
+  })()
+
+  tmdbCreditsInFlight.set(key, p)
+  try {
+    const data = await p
+    tmdbCreditsCache.set(key, { data, expiresAt: Date.now() + TMDB_CREDITS_TTL_MS })
+    return data
+  } finally {
+    tmdbCreditsInFlight.delete(key)
   }
 }

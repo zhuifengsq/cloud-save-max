@@ -125,13 +125,6 @@ class TaskExecutor:
         except Exception:
             task_data["magic_regex"] = {}
 
-        try:
-            from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
-
-            cfg = get_tmdb_runtime_config(get_or_create_tmdb_setting(self.db))
-        except Exception:
-            pass
-
         if str(getattr(task, "task_type", "") or "") == "drama":
             extra = task_data.get("extra") or {}
             runweek_mode = str(extra.get("runweek_mode") or "manual").strip().lower()

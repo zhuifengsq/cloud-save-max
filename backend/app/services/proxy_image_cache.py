@@ -2,16 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import ipaddress
 import json
 import os
+import re
+import socket
 import threading
 import time
 import uuid
+from urllib.parse import SplitResult, urlsplit
 
 from fastapi import Response
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
-import requests
-from starlette.background import BackgroundTask
+from fastapi.responses import FileResponse
+from urllib3 import PoolManager, Timeout
+from urllib3.exceptions import HTTPError
+from urllib3.exceptions import TimeoutError as UpstreamTimeout
 
 
 @dataclass(frozen=True)
@@ -23,8 +28,120 @@ class ProxyImageCacheConfig:
     max_total_bytes: int
 
 
-_locks: dict[str, threading.Lock] = {}
-_locks_guard = threading.Lock()
+_locks = tuple(threading.Lock() for _ in range(64))
+_image_types = {
+    "image/avif", "image/bmp", "image/gif", "image/jpeg", "image/png",
+    "image/webp", "image/x-icon", "image/vnd.microsoft.icon",
+}
+_default_max_image_bytes = 10 * 1024 * 1024
+_ipv4_translation = ipaddress.IPv6Network("64:ff9b::/96")
+_image_pools = PoolManager(num_pools=32, maxsize=8)
+_public_poster_path = re.compile(r"/view/photo/[sm]_ratio_poster/public/p[0-9]+\.(?:jpg|jpeg|png|webp|avif|gif)")
+
+
+class ProxyImageError(Exception):
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+
+
+def validate_image_url(url: str) -> SplitResult:
+    try:
+        if any(ord(char) <= 32 or ord(char) == 127 or char == "\\" for char in url):
+            raise ValueError
+        parsed = urlsplit(url)
+        host = parsed.hostname or ""
+        port = 443 if parsed.scheme == "https" else 80
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in {None, port}
+            or parsed.fragment
+            or not any(host == base or host.endswith("." + base) for base in ("douban.com", "doubanio.com"))
+            or any(not label or not label.isascii() or not label.replace("-", "").isalnum() for label in host.split("."))
+        ):
+            raise ValueError
+        return parsed
+    except ValueError as exc:
+        raise ProxyImageError(400) from exc
+
+
+def _resolve_image_ip(host: str, port: int) -> str:
+    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not addresses:
+        raise ProxyImageError(502)
+    for family, _, _, _, endpoint in addresses:
+        ip = ipaddress.ip_address(endpoint[0])
+        checked = getattr(ip, "ipv4_mapped", None) or ip
+        if (
+            not checked.is_global or checked.is_multicast or checked.is_reserved
+            or (isinstance(checked, ipaddress.IPv6Address) and (
+                checked.is_site_local or checked.sixtofour is not None
+                or checked.teredo is not None or checked in _ipv4_translation
+            ))
+            or (family == socket.AF_INET6 and (len(endpoint) != 4 or endpoint[3]))
+        ):
+            raise ProxyImageError(400)
+    return next((entry[4][0] for entry in addresses if entry[0] == socket.AF_INET), addresses[0][4][0])
+
+
+def _download_image(url: str, headers: dict[str, str], max_bytes: int) -> tuple[bytes, str]:
+    parsed = validate_image_url(url)
+    host = parsed.hostname
+    scheme = parsed.scheme
+    # img9 can return an HTML challenge for public posters shared by the image nodes.
+    if host == "img9.doubanio.com" and _public_poster_path.fullmatch(parsed.path):
+        host = "img2.doubanio.com"
+        scheme = "https"
+    deadline = time.monotonic() + 15
+    port = 443 if scheme == "https" else 80
+    try:
+        address = _resolve_image_ip(host, port)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProxyImageError(504)
+        # Connect to the validated numeric address while retaining the original HTTP Host
+        # and TLS identity. A second DNS answer cannot redirect the connection.
+        tls = {"server_hostname": host, "assert_hostname": host, "cert_reqs": "CERT_REQUIRED"} if scheme == "https" else None
+        pool = _image_pools.connection_from_host(address, port, scheme=scheme, pool_kwargs=tls)
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+        response = pool.urlopen(
+            "GET", path, headers={**headers, "Host": host, "Accept-Encoding": "identity"},
+            timeout=Timeout(total=remaining, connect=4, read=4),
+            redirect=False, retries=False, preload_content=False,
+        )
+        try:
+            if response.status != 200:
+                raise ProxyImageError(response.status if 400 <= response.status <= 599 else 502)
+            content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            encoding = str(response.headers.get("Content-Encoding") or "identity").strip().lower()
+            if not _is_image_content_type(content_type) or encoding != "identity":
+                raise ProxyImageError(502)
+            length = _safe_int(response.headers.get("Content-Length"))
+            if length is not None and length > max_bytes:
+                raise ProxyImageError(413)
+            body = bytearray()
+            while True:
+                if time.monotonic() >= deadline:
+                    raise ProxyImageError(504)
+                chunk = response.read1(min(65536, max_bytes + 1 - len(body)), decode_content=False)
+                if not chunk:
+                    break
+                body.extend(chunk)
+                if len(body) > max_bytes:
+                    raise ProxyImageError(413)
+            if not body:
+                raise ProxyImageError(502)
+            return bytes(body), content_type
+        finally:
+            response.close()
+            response.release_conn()
+    except UpstreamTimeout as exc:
+        raise ProxyImageError(504) from exc
+    except (HTTPError, OSError) as exc:
+        raise ProxyImageError(502) from exc
 
 
 def _now_ts() -> int:
@@ -45,9 +162,7 @@ def _safe_int(value: str | None) -> int | None:
 
 
 def _is_image_content_type(content_type: str | None) -> bool:
-    if not content_type:
-        return False
-    return str(content_type).split(";", 1)[0].strip().lower().startswith("image/")
+    return bool(content_type and content_type.split(";", 1)[0].strip().lower() in _image_types)
 
 
 def resolve_proxy_image_cache_dir(*, database_url: str, explicit_dir: str | None) -> str:
@@ -66,15 +181,6 @@ def ensure_dir(path: str) -> bool:
         return True
     except OSError:
         return False
-
-
-def _get_lock(key: str) -> threading.Lock:
-    with _locks_guard:
-        lock = _locks.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _locks[key] = lock
-        return lock
 
 
 def _paths_for_url(cache_dir: str, url: str) -> tuple[str, str, str, str]:
@@ -138,7 +244,7 @@ def try_build_cached_response(
         return None, "MISS"
 
     meta = _read_meta(meta_path)
-    if not meta or not _is_fresh(meta):
+    if not meta or meta.get("validated_origin") != 1 or not _is_fresh(meta):
         _best_effort_delete(meta_path, bin_path)
         return None, "MISS"
 
@@ -152,6 +258,7 @@ def try_build_cached_response(
     headers = {
         "Cache-Control": cache_control,
         "ETag": etag,
+        "X-Content-Type-Options": "nosniff",
     }
 
     if _if_none_match_hit(if_none_match, etag):
@@ -165,79 +272,45 @@ def try_build_cached_response(
 def fetch_store_and_build_response(
     *,
     cfg: ProxyImageCacheConfig,
-    session: requests.Session,
     url: str,
     cache_control: str,
-    headers: dict[str, str] | None = None,
+    headers: dict[str, str],
 ) -> tuple[Response, str]:
-    if not cfg.enabled:
-        return _bypass_stream(session=session, url=url, cache_control=cache_control, headers=headers), "BYPASS"
-
+    max_bytes = cfg.max_file_bytes if cfg.max_file_bytes > 0 else _default_max_image_bytes
+    response_headers = {"Cache-Control": cache_control, "X-Content-Type-Options": "nosniff"}
     key, shard_dir, meta_path, bin_path = _paths_for_url(cfg.cache_dir, url)
-    if not ensure_dir(shard_dir):
-        return _bypass_stream(session=session, url=url, cache_control=cache_control, headers=headers), "BYPASS"
+    if not cfg.enabled or not ensure_dir(shard_dir):
+        body, content_type = _download_image(url, headers, max_bytes)
+        return Response(body, media_type=content_type, headers={**response_headers, "X-Proxy-Cache": "BYPASS"}), "BYPASS"
 
-    lock = _get_lock(key)
-    with lock:
-        cached, state = try_build_cached_response(cfg=cfg, url=url, if_none_match=None, cache_control=cache_control)
+    with _locks[int(key[:2], 16) % len(_locks)]:
+        cached, _ = try_build_cached_response(cfg=cfg, url=url, if_none_match=None, cache_control=cache_control)
         if cached is not None:
-            cached.headers["X-Proxy-Cache"] = "HIT"
             return cached, "HIT"
 
-        res = session.get(url, stream=True, timeout=15, headers=headers)
-        res.raise_for_status()
-        content_type = res.headers.get("content-type") or "image/jpeg"
-        if not _is_image_content_type(content_type):
-            _best_effort_close(res)
-            return (
-                RedirectResponse(url=url, status_code=302, headers={"Cache-Control": cache_control, "X-Proxy-Cache": "BYPASS"}),
-                "BYPASS",
-            )
-        content_length = _safe_int(res.headers.get("content-length"))
-        if cfg.max_file_bytes > 0 and (content_length is None or content_length > cfg.max_file_bytes):
-            return _bypass_stream_res(res=res, content_type=content_type, cache_control=cache_control), "BYPASS"
-
+        body, content_type = _download_image(url, headers, max_bytes)
+        etag_hex = hashlib.sha256(body).hexdigest()
         tmp_path = os.path.join(shard_dir, f"{key}.{uuid.uuid4().hex}.tmp")
-        hasher = hashlib.sha256()
-        written = 0
         try:
-            try:
-                with open(tmp_path, "wb") as f:
-                    for chunk in res.iter_content(chunk_size=8192):
-                        if not chunk:
-                            continue
-                        written += len(chunk)
-                        if cfg.max_file_bytes > 0 and written > cfg.max_file_bytes:
-                            raise ValueError("proxy image too large")
-                        hasher.update(chunk)
-                        f.write(chunk)
-            except (OSError, ValueError):
-                return _bypass_stream(session=session, url=url, cache_control=cache_control, headers=headers), "BYPASS"
-
-            etag_hex = hasher.hexdigest()
+            with open(tmp_path, "wb") as f:
+                f.write(body)
             os.replace(tmp_path, bin_path)
-            meta = {
+            _atomic_write_json(meta_path, {
                 "url": url,
                 "content_type": content_type,
                 "etag": etag_hex,
-                "size": written,
+                "size": len(body),
                 "created_at": _now_ts(),
                 "expires_at": _now_ts() + max(int(cfg.ttl_seconds), 1),
-            }
-            try:
-                _atomic_write_json(meta_path, meta)
-                _enforce_total_size_limit(cfg=cfg)
-            except OSError:
-                pass
-            headers = {
-                "Cache-Control": cache_control,
-                "ETag": _format_etag(etag_hex),
-                "X-Proxy-Cache": "MISS",
-            }
-            return FileResponse(path=bin_path, media_type=content_type, headers=headers), "MISS"
+                "validated_origin": 1,
+            })
+            _enforce_total_size_limit(cfg=cfg)
+        except OSError:
+            return Response(body, media_type=content_type, headers={**response_headers, "X-Proxy-Cache": "BYPASS"}), "BYPASS"
         finally:
-            _best_effort_close(res)
             _best_effort_delete(tmp_path, tmp_path)
+        response_headers.update({"ETag": _format_etag(etag_hex), "X-Proxy-Cache": "MISS"})
+        return Response(body, media_type=content_type, headers=response_headers), "MISS"
 
 
 def _atomic_write_json(path: str, data: dict) -> None:
@@ -251,13 +324,6 @@ def _atomic_write_json(path: str, data: dict) -> None:
     os.replace(tmp_path, path)
 
 
-def _best_effort_close(res: requests.Response) -> None:
-    try:
-        res.close()
-    except Exception:
-        return
-
-
 def _best_effort_delete(path_a: str, path_b: str) -> None:
     for p in {path_a, path_b}:
         try:
@@ -265,30 +331,6 @@ def _best_effort_delete(path_a: str, path_b: str) -> None:
                 os.remove(p)
         except OSError:
             continue
-
-
-def _bypass_stream(*, session: requests.Session, url: str, cache_control: str, headers: dict[str, str] | None = None) -> Response:
-    res = session.get(url, stream=True, timeout=15, headers=headers)
-    res.raise_for_status()
-    content_type = res.headers.get("content-type") or "image/jpeg"
-    if not _is_image_content_type(content_type):
-        _best_effort_close(res)
-        return RedirectResponse(url=url, status_code=302, headers={"Cache-Control": cache_control, "X-Proxy-Cache": "BYPASS"})
-    return _bypass_stream_res(res=res, content_type=content_type, cache_control=cache_control)
-
-
-def _bypass_stream_res(*, res: requests.Response, content_type: str, cache_control: str) -> Response:
-    def iterator():
-        for chunk in res.iter_content(chunk_size=8192):
-            if chunk:
-                yield chunk
-
-    return StreamingResponse(
-        iterator(),
-        media_type=content_type,
-        headers={"Cache-Control": cache_control, "X-Proxy-Cache": "BYPASS"},
-        background=BackgroundTask(res.close),
-    )
 
 
 def _enforce_total_size_limit(*, cfg: ProxyImageCacheConfig) -> None:
