@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import RoleAssignDialog from '@/components/users/RoleAssignDialog.vue'
+import { useIsMobile } from '@/composables/useIsMobile'
 import { USER_WRITE } from '@/constants/permissions'
 import {
   batchSetUserRoles,
@@ -18,6 +19,7 @@ import type { RoleItem, UserItem } from '@/types/user'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.permissions.includes(USER_WRITE))
+const isMobile = useIsMobile()
 
 const loading = ref(false)
 const users = ref<UserItem[]>([])
@@ -128,15 +130,17 @@ onMounted(async () => {
     <el-card shadow="never">
       <div class="toolbar">
         <div class="toolbar__left">
-          <el-input
-            v-model="query.q"
-            placeholder="搜索用户名/邮箱"
-            clearable
-            style="width: 260px"
-            @keyup.enter="loadUsers"
-            @clear="loadUsers"
-          />
-          <el-button type="primary" @click="loadUsers">搜索</el-button>
+          <div class="user-search">
+            <el-input
+              v-model="query.q"
+              class="user-search__input"
+              placeholder="搜索用户名/邮箱"
+              clearable
+              @keyup.enter="loadUsers"
+              @clear="loadUsers"
+            />
+            <el-button type="primary" class="user-search__button" @click="loadUsers">搜索</el-button>
+          </div>
         </div>
 
         <div class="toolbar__right">
@@ -173,14 +177,21 @@ onMounted(async () => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="240" fixed="right">
+        <el-table-column
+          v-if="canWrite"
+          label="操作"
+          :width="isMobile ? 124 : 240"
+          fixed="right"
+          class-name="user-op-column"
+          label-class-name="user-op-column"
+        >
           <template #default="{ row }">
-            <el-space wrap>
+            <div class="user-op">
               <el-button link type="primary" @click="toggleStatus(row, !row.is_active)">
                 {{ row.is_active ? '禁用' : '启用' }}
               </el-button>
               <el-button link type="primary" @click="openRoleDialog(row)">分配角色</el-button>
-            </el-space>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -224,3 +235,56 @@ onMounted(async () => {
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.user-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.user-search__input {
+  width: 260px;
+}
+
+.user-op {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.user-op :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+@media (max-width: 767px) {
+  .toolbar__left {
+    flex: 1 1 100%;
+  }
+
+  .user-search {
+    width: 100%;
+  }
+
+  .user-search__input {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+  }
+
+  .user-search__button {
+    flex: 0 0 auto;
+  }
+
+  .user-op {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  :deep(.user-op-column .cell) {
+    padding: 0 8px;
+  }
+}
+</style>
