@@ -280,7 +280,10 @@ async function runPurge() {
   }
 }
 
+let drawerPayloadRequest = 0
+
 async function openDrawer(row: TMDBCacheListItem) {
+  drawerPayloadRequest += 1
   drawer.visible = true
   drawer.row = row
   drawer.status = null
@@ -300,11 +303,13 @@ async function loadDrawerPayload() {
   if (!row) return
   if (drawer.payloadLoading) return
   if (drawer.payloadItem) return
+  const request = ++drawerPayloadRequest
   drawer.payloadLoading = true
   try {
-    drawer.payloadItem = await fetchTMDBCacheItem({ media_type: row.media_type, tmdb_id: row.tmdb_id })
+    const item = await fetchTMDBCacheItem({ media_type: row.media_type, tmdb_id: row.tmdb_id })
+    if (request === drawerPayloadRequest) drawer.payloadItem = item
   } finally {
-    drawer.payloadLoading = false
+    if (request === drawerPayloadRequest) drawer.payloadLoading = false
   }
 }
 
@@ -391,12 +396,16 @@ async function submitTTL() {
 
 async function refreshRow(row: TMDBCacheListItem) {
   if (!canWrite.value) return
-  await refreshTMDBCache({ media_type: row.media_type, tmdb_id: row.tmdb_id, force: true, async_refresh: false })
+  const { status } = await refreshTMDBCache({ media_type: row.media_type, tmdb_id: row.tmdb_id, force: true, async_refresh: false })
   ElMessage.success('已刷新')
-  await loadList()
   if (drawer.visible && drawer.row && drawer.row.tmdb_id === row.tmdb_id && drawer.row.media_type === row.media_type) {
-    drawer.status = await fetchTMDBCacheStatus({ media_type: row.media_type, tmdb_id: row.tmdb_id })
+    drawer.status = status
+    drawerPayloadRequest += 1
+    drawer.payloadItem = null
+    drawer.payloadLoading = false
+    if (drawer.tab === 'payload') await loadDrawerPayload()
   }
+  await loadList()
 }
 
 function openDeleteDialog(row: TMDBCacheListItem) {

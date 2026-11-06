@@ -63,18 +63,20 @@ export async function ensureTmdbDetail(
     if (failedAt && Date.now() - failedAt < FAILURE_RETRY_MS) return tmdbDetailsById[id] ?? null
   }
 
+  const version = versions[id] || 0
   const request = (async () => {
     try {
       const detail = await fetchTMDBDetail('tv', id, force ? { force: true } : undefined)
+      if ((versions[id] || 0) !== version) return tmdbDetailsById[id] ?? null
       tmdbDetailsById[id] = detail
       fetchedAt[id] = Date.now()
-      versions[id] = (versions[id] || 0) + 1
+      versions[id] = version + 1
       storeVersion += 1
       delete failureAt[id]
       return detail
     } catch {
       // 失败时保留上一次成功的资料，调用方继续展示旧内容
-      failureAt[id] = Date.now()
+      if ((versions[id] || 0) === version) failureAt[id] = Date.now()
       return tmdbDetailsById[id] ?? null
     }
   })()
@@ -82,7 +84,7 @@ export async function ensureTmdbDetail(
   try {
     return await request
   } finally {
-    inFlight.delete(id)
+    if (inFlight.get(id) === request) inFlight.delete(id)
   }
 }
 
@@ -114,9 +116,13 @@ export async function ensureTmdbDetails(
 }
 
 export function invalidateTmdbDetails(ids?: number[]) {
-  const targets = ids?.length ? ids.map((id) => Number(id) || 0) : Object.keys(tmdbDetailsById).map((id) => Number(id))
+  const targets = ids?.length
+    ? ids.map((id) => Number(id) || 0)
+    : new Set([...Object.keys(tmdbDetailsById).map(Number), ...inFlight.keys()])
   for (const id of targets) {
     if (id <= 0) continue
+    versions[id] = (versions[id] || 0) + 1
+    inFlight.delete(id)
     delete tmdbDetailsById[id]
     delete fetchedAt[id]
     delete failureAt[id]

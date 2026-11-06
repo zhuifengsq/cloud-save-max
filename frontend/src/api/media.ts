@@ -81,10 +81,12 @@ export async function fetchTMDBDetail(mediaType: 'movie' | 'tv', id: number, opt
   tmdbDetailInFlight.set(key, p)
   try {
     const data = await p
-    tmdbDetailCache.set(key, { data, expiresAt: now + TMDB_DETAIL_TTL_MS })
+    if (tmdbDetailInFlight.get(key) === p) {
+      tmdbDetailCache.set(key, { data, expiresAt: now + TMDB_DETAIL_TTL_MS })
+    }
     return cloneTMDBDetail(data)
   } finally {
-    tmdbDetailInFlight.delete(key)
+    if (tmdbDetailInFlight.get(key) === p) tmdbDetailInFlight.delete(key)
   }
 }
 

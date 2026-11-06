@@ -1258,11 +1258,12 @@ onActivated(() => {
     return
   }
   refreshTodayKey()
+  const detailsChanged = derivedStoreVersion !== getTmdbDetailStoreVersion()
   syncDerivedFromCache()
   startAutoCheck()
   if (refreshPromise) return
   // 离开期间任务被增删改/启停/执行过，或超过兜底时间，就静默刷新
-  if (getTasksVersion() !== loadedTasksVersion || Date.now() - lastLoadedAt >= TASK_CHECK_INTERVAL_MS) {
+  if (detailsChanged || getTasksVersion() !== loadedTasksVersion || Date.now() - lastLoadedAt >= TASK_CHECK_INTERVAL_MS) {
     refreshData({ silent: true })
   }
 })

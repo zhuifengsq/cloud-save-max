@@ -1,4 +1,6 @@
 import { http } from '@/api/http'
+import { invalidateTMDBDetailCache } from '@/api/media'
+import { invalidateTmdbDetails } from '@/stores/tmdbDetailCache'
 import type { TMDBCacheItem, TMDBCacheListOut, TMDBCacheSchedulerSetting, TMDBCacheStatus } from '@/types/tmdbCache'
 
 export async function fetchTMDBCacheScheduler() {
@@ -35,7 +37,13 @@ export async function fetchTMDBCacheList(params: {
 
 export async function refreshTMDBCache(payload: { media_type: string; tmdb_id: number; force?: boolean; async_refresh?: boolean }) {
   const response = await http.post<{ queued: boolean; status: TMDBCacheStatus }>('/tmdb/cache/refresh', payload)
-  return response.data
+  const result = response.data
+  const type = payload.media_type
+  if (!result.queued && result.status.exists && !result.status.last_error && !result.status.refresh_in_progress) {
+    if (type === 'movie' || type === 'tv') invalidateTMDBDetailCache(type, payload.tmdb_id)
+    if (type === 'tv') invalidateTmdbDetails([payload.tmdb_id])
+  }
+  return result
 }
 
 export async function refreshLinkedTasks(payload: { enabled_only?: boolean; max_items?: number; force?: boolean }) {
