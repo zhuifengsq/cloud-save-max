@@ -13,7 +13,7 @@ from app.extensions.runtime.task_admission import task_admission
 from app.extensions.runtime.task_executor import TaskExecutor
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
-from app.services.task_share_links import drop_task_share_link, merge_task_extra
+from app.services.task_share_links import SHARE_LINK_KEY, drop_task_share_link, merge_task_extra
 from app.services.shareurl_update_logs import append_shareurl_update_log
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,7 @@ def create_task(db: Session, **payload) -> Task:
         tmdb_media_type=tmdb_media_type,
         enabled=payload.get('enabled', True),
         addition_json=json.dumps(payload.get('addition') or {}, ensure_ascii=False),
-        extra_json=json.dumps(payload.get('extra') or {}, ensure_ascii=False),
+        extra_json=json.dumps({k: v for k, v in (payload.get('extra') or {}).items() if k != SHARE_LINK_KEY}, ensure_ascii=False),
     )
     db.add(task)
     db.flush()

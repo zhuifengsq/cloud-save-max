@@ -46,6 +46,7 @@ export function failureStageLabel(stage: string) {
     ensure_dest_dir: '准备保存目录', fetch_share_items: '读取分享文件', plan_transfer: '准备转存',
     save_file: '转存文件', move_files: '移动文件', rename: '重命名文件',
     execute_drama: '执行追剧任务', execute_generic: '执行转存任务', end: '执行结束',
+    generated_share_check: '分享链接检测失败',
   }
   return labels[stage] || stage
 }

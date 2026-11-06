@@ -43,7 +43,8 @@ from app.services.drive_accounts import (
 )
 from app.services.magic_regex import list_enabled_effective_rules_for_picker
 from app.services.media_discovery import tmdb_detail, tmdb_search
-from app.services.notifications.sender import send_test
+from app.services.notifications.sender import send_runtime, send_test
+from app.services.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_share_check_section
 from app.services.notifications import legacy_notify
 from app.services.notifications.settings import (
     get_or_create_notification_setting,
@@ -479,6 +480,12 @@ class TelegramBotActions:
         execution = TaskExecutor(self.db).run_task(task)
         self.db.commit()
         self.db.refresh(execution)
+        section = build_share_check_section(task, execution)
+        if section:
+            try:
+                send_runtime(self.db, DRAMA_NOTIFY_TITLE, section)
+            except Exception:
+                self.db.rollback()
         return _task_execution_summary(execution) or {}
 
     def list_task_executions(self, task_id: int, *, limit: int = 5) -> list[dict[str, Any]]:

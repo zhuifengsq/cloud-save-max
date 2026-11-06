@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, noload
 
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
+from app.services.generated_share_check import FAILURE_STAGE, read_share_check
 from app.services.task_scheduler import get_or_create_task_scheduler_setting
 
 
@@ -109,6 +110,7 @@ def build_drama_overview(db: Session, *, days: int = 30) -> dict:
                 TaskExecution.task_id,
                 TaskExecution.stage,
                 TaskExecution.message,
+                TaskExecution.adapter_snapshot,
                 Task.taskname,
             )
             .join(Task, Task.id == TaskExecution.task_id)
@@ -118,7 +120,7 @@ def build_drama_overview(db: Session, *, days: int = 30) -> dict:
         .all()
     )
 
-    for status, started_at, finished_at, task_id, stage, message, taskname in executions:
+    for status, started_at, finished_at, task_id, stage, message, snapshot, taskname in executions:
         status = str(status or "").strip().lower()
         execution_total += 1
         if status == "success":
@@ -162,6 +164,17 @@ def build_drama_overview(db: Session, *, days: int = 30) -> dict:
                     "message": str(message or "").strip() or None,
                 }
             )
+        if len(recent_failures) < 12:
+            check = read_share_check(snapshot)
+            if check.get("status") in {"invalid", "error"}:
+                recent_failures.append({
+                    "task_id": int(task_id),
+                    "taskname": str(taskname or "").strip() or f"任务 #{task_id}",
+                    "status": "failed",
+                    "started_at": check.get("checked_at") or started_at,
+                    "stage": FAILURE_STAGE,
+                    "message": check.get("message"),
+                })
 
     trend: list[dict] = []
     for d in _daterange(start_day, end_day):

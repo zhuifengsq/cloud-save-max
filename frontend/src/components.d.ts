@@ -68,6 +68,7 @@ declare module 'vue' {
     ElTag: typeof import('element-plus/es')['ElTag']
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     FailureReason: typeof import('./components/dashboard/FailureReason.vue')['default']
+    GeneratedShareStatus: typeof import('./components/tasks/GeneratedShareStatus.vue')['default']
     HelloWorld: typeof import('./components/HelloWorld.vue')['default']
     InteractiveLineChart: typeof import('./components/dashboard/InteractiveLineChart.vue')['default']
     NotificationChannelCard: typeof import('./components/extensions/NotificationChannelCard.vue')['default']

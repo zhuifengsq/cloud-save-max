@@ -855,14 +855,18 @@ class BaiduAdapter(BaseCloudDriveAdapter):
             return []
 
     # ==================== 公共接口实现 ====================
-    def get_stoken(self, pwd_id: str, passcode: str = "") -> Dict:
+    def get_stoken(self, pwd_id: str, passcode: str = "", *, check_errno: bool = False) -> Dict:
         """获取分享令牌（验证分享链接有效性）"""
         if not self._session:
             return {"status": 500, "code": 1, "message": "百度网盘客户端未初始化"}
 
         try:
             share_url = f"https://pan.baidu.com/s/{pwd_id}"
-            self._api_access_shared(share_url, passcode)
+            result = self._api_access_shared(share_url, passcode)
+            if check_errno:
+                errno = int(result.get("errno") or result.get("error_code") or 0)
+                if errno:
+                    return {"status": 400, "code": errno, "message": self._get_error_message(errno)}
             return {
                 "status": 200,
                 "code": 0,

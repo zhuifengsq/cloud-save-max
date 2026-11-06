@@ -19,6 +19,7 @@ from app.extensions.runtime.execution_log import ExecutionLog
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
 from app.services.drama_share_autoupdate import is_auto_update_task, resolve_drama_shareurl_update
+from app.services.generated_share_check import SNAPSHOT_KEY, check_generated_share
 from app.services.shareurl_update_logs import append_shareurl_update_log
 
 
@@ -101,6 +102,7 @@ class TaskExecutor:
         init_account_for_task: bool = True,
         _auto_update_depth: int = 0,
         _tried_shareurls: set[str] | None = None,
+        _generated_share_check: dict | None = None,
     ) -> TaskExecution:
         if not task.enabled:
             raise bad_request('TASK_DISABLED', '任务已禁用')
@@ -117,6 +119,12 @@ class TaskExecutor:
         external_manager = account_manager is not None
         if account_manager is None:
             account_manager = DatabaseAccountManager(self.db)
+        if persist_execution and task.id and task.task_type == "drama" and _auto_update_depth == 0:
+            _generated_share_check = check_generated_share(self.db, task, account_manager)
+            if _generated_share_check:
+                log.section("分享链接检测")
+                log.line(_generated_share_check["message"])
+        share_snapshot = {SNAPSHOT_KEY: _generated_share_check} if _generated_share_check else {}
         task_data = self._task_to_dict(task)
         try:
             from app.services.magic_regex import get_enabled_magic_regex_map
@@ -178,7 +186,7 @@ class TaskExecutor:
                 message='没有可用的驱动账号',
                 stage=log.stage,
                 run_log=log.render(),
-                adapter_snapshot=json.dumps({}, ensure_ascii=False),
+                adapter_snapshot=json.dumps(share_snapshot, ensure_ascii=False),
             )
             if not persist_execution:
                 execution.id = 0
@@ -318,6 +326,7 @@ class TaskExecutor:
                             init_account_for_task=False,
                             _auto_update_depth=_auto_update_depth + 1,
                             _tried_shareurls=_tried_shareurls,
+                            _generated_share_check=_generated_share_check,
                         )
                         return re_execution
                     else:
@@ -367,7 +376,7 @@ class TaskExecutor:
             message=payload.message,
             stage=payload.stage,
             run_log=payload.run_log,
-            adapter_snapshot=json.dumps(payload.adapter_snapshot, ensure_ascii=False),
+            adapter_snapshot=json.dumps({**payload.adapter_snapshot, **share_snapshot}, ensure_ascii=False),
         )
         if not persist_execution:
             execution.id = 0

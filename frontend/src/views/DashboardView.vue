@@ -663,7 +663,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="failures-list">
-            <div v-for="f in displayFailures" :key="`${f.task_id}-${f.started_at}`" class="failure-row">
+            <div v-for="f in displayFailures" :key="`${f.task_id}-${f.started_at}-${f.stage}`" class="failure-row">
               <div class="failure-row__main">
                 <div class="failure-row__title">{{ f.taskname }}</div>
                 <div class="failure-row__desc">
@@ -680,7 +680,7 @@ onBeforeUnmount(() => {
 
             <el-collapse-transition>
               <div v-if="showAllFailures && hiddenFailures.length" class="failures-list">
-                <div v-for="f in hiddenFailures" :key="`${f.task_id}-${f.started_at}`" class="failure-row">
+                <div v-for="f in hiddenFailures" :key="`${f.task_id}-${f.started_at}-${f.stage}`" class="failure-row">
                   <div class="failure-row__main">
                     <div class="failure-row__title">{{ f.taskname }}</div>
                     <div class="failure-row__desc">

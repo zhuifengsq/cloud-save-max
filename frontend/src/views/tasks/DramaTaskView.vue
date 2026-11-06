@@ -3,6 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import DramaTaskDrawer from '@/components/tasks/DramaTaskDrawer.vue'
 import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
+import GeneratedShareStatus from '@/components/tasks/GeneratedShareStatus.vue'
 import {
   createTask,
   createTaskShareLink,
@@ -1138,6 +1139,7 @@ onBeforeUnmount(() => {
               >复制</button>
             </div>
             <span v-else class="task-share-link task-share-link--empty">未生成</span>
+            <GeneratedShareStatus :link="storedShareLink(row as TaskItem)" :executions="row.executions" />
           </template>
         </el-table-column>
         <el-table-column label="完结" width="84">
@@ -1263,6 +1265,7 @@ onBeforeUnmount(() => {
                 </el-tooltip>
                 <button type="button" class="task-share-copy" @click.stop="copyStoredShareLink(row)">复制</button>
               </div>
+              <GeneratedShareStatus :link="storedShareLink(row)" :executions="row.executions" />
             </div>
             <div class="task-card__meta-row">
               <span class="task-card__label">完结</span>

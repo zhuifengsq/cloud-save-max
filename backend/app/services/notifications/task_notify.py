@@ -4,6 +4,7 @@ import re
 
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
+from app.services.generated_share_check import read_share_check
 
 
 DRAMA_NOTIFY_TITLE = "【智能追剧平台】"
@@ -43,7 +44,21 @@ def format_root_file_tree(names: list[str]) -> str:
     return "\n".join(lines)
 
 
+def build_share_check_section(task: Task, execution: TaskExecution) -> str:
+    check = read_share_check(getattr(execution, "adapter_snapshot", None))
+    if check.get("status") == "invalid" and check.get("notify"):
+        return f"⚠️《{task.taskname}》生成的分享链接已失效：\n{check['message']}"
+    return ""
+
+
 def build_task_section(task: Task, execution: TaskExecution) -> tuple[str, bool]:
+    transfer_section, _ = _build_transfer_section(task, execution)
+    share_section = build_share_check_section(task, execution)
+    sections = "\n\n".join(filter(None, (transfer_section, share_section)))
+    return sections, bool(sections)
+
+
+def _build_transfer_section(task: Task, execution: TaskExecution) -> tuple[str, bool]:
     status = str(getattr(execution, "status", "") or "")
     taskname = str(getattr(task, "taskname", "") or "")
     message = str(getattr(execution, "message", "") or "").strip()

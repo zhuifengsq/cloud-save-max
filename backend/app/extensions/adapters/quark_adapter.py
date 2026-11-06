@@ -126,6 +126,7 @@ class QuarkAdapter(BaseCloudDriveAdapter):
             )
             del headers["cookie"]
         try:
+            kwargs.setdefault("timeout", (5, 30))
             response = requests.request(method, url, headers=headers, **kwargs)
             return response
         except Exception as e:
@@ -219,6 +220,8 @@ class QuarkAdapter(BaseCloudDriveAdapter):
         pdir_fid: str,
         _fetch_share: int = 0,
         fetch_share_full_path: int = 0,
+        *,
+        first_page: bool = False,
     ) -> Dict:
         """获取分享文件详情"""
         list_merge = []
@@ -242,7 +245,7 @@ class QuarkAdapter(BaseCloudDriveAdapter):
                 "fetch_share_full_path": fetch_share_full_path,
             }
             response = self._send_request("GET", url, params=querystring).json()
-            if response["code"] != 0:
+            if response["code"] != 0 or first_page:
                 return response
             if response["data"]["list"]:
                 list_merge += response["data"]["list"]

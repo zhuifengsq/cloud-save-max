@@ -32,7 +32,15 @@ export type TaskExecutionItem = {
   message?: string | null
   stage?: string | null
   run_log?: string | null
-  adapter_snapshot: Record<string, any>
+  adapter_snapshot: Record<string, any> & {
+    generated_share_check?: {
+      share_id: string
+      saved_at: string
+      status: 'valid' | 'invalid' | 'error'
+      message: string
+      checked_at: string
+    }
+  }
 }
 
 export type TaskShareLink = {
