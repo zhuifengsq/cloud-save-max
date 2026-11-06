@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     # 用户角色/权限查询的进程内缓存 TTL（秒）；<=0 关闭。用户/角色/权限变更时会主动失效
     permission_cache_ttl_seconds: int = 30
 
+    # 追剧任务引流文件预览令牌有效期（秒）
+    drama_lead_in_preview_token_ttl_seconds: int = 600
+
     drama_runtime_retry_max_attempts: int = 3
     drama_runtime_retry_backoff_seconds: float = 1.0
     drama_runtime_retry_max_backoff_seconds: float = 8.0

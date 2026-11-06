@@ -46,6 +46,7 @@ from app.services.task_share_links import save_task_share_link
 from app.services.tmdb_settings import get_tmdb_lang_pair
 
 from app.api.routes import tasks_drive, tasks_share, tasks_stream
+from app.services.drama_lead_in import load_lead_in_summary_map
 from app.services.drive_accounts import get_active_account, pick_default_account_name
 from app.services.task_serialization import execution_out, scheduler_out, task_out
 from app.services.tmdb_view import load_tmdb_payload_map, load_tmdb_status_map
@@ -100,12 +101,15 @@ def get_tasks(db: Session = Depends(get_db)):
     items = list_tasks_recent_executions(db, limit=3)
     tmdb_status_map = load_tmdb_status_map(db, items)
     tmdb_payload_map = load_tmdb_payload_map(db, items)
+    # 一次 IN 查询取全部任务的引流摘要，避免列表 N+1。
+    lead_in_map = load_lead_in_summary_map(db, [item.id for item in items])
     return [
         task_out(
             db,
             item,
             tmdb_status_map=tmdb_status_map,
             tmdb_payload_map=tmdb_payload_map,
+            lead_in_map=lead_in_map,
         )
         for item in items
     ]
@@ -189,7 +193,7 @@ def patch_task(request: Request, task_id: int, payload: TaskUpdateIn, current: C
     audit.write_audit_log(db, actor_user_id=current.user.id, action='task.update', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.commit()
     db.refresh(task)
-    return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3))
+    return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3), lead_in_map=load_lead_in_summary_map(db, [task.id]))
 
 
 @router.patch('/{task_id:int}/status', response_model=TaskOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -198,7 +202,7 @@ def patch_task_status(request: Request, task_id: int, payload: TaskStatusIn, cur
     audit.write_audit_log(db, actor_user_id=current.user.id, action='task.status', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True, detail=f'enabled={payload.enabled}')
     db.commit()
     db.refresh(task)
-    return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3))
+    return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3), lead_in_map=load_lead_in_summary_map(db, [task.id]))
 
 
 @router.delete('/{task_id:int}', dependencies=[Depends(require_permissions(TASK_WRITE))])

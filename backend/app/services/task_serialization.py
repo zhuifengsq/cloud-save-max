@@ -39,6 +39,7 @@ def task_out(
     tmdb_status_map: dict[tuple[str, int], str | None] | None = None,
     tmdb_payload_map: dict[tuple[str, int], dict[str, object] | None] | None = None,
     executions: list | None = None,
+    lead_in_map: dict[int, dict[str, object]] | None = None,
 ) -> TaskOut:
     # executions 显式传入时不再碰 relationship；未传时才读取已装配的集合，避免触发全量懒加载。
     raw_executions = list(executions) if executions is not None else list(getattr(item, "executions", None) or [])
@@ -59,6 +60,11 @@ def task_out(
         tmdb_details = tmdb_payload_map.get(key) if (isinstance(tmdb_payload_map, dict) and key is not None and key[0] == "tv") else None
         drama_update_progress = build_drama_update_progress(tmdb_details=tmdb_details, saved_latest=saved_latest)
 
+    # 引流摘要由调用方批量查询后传入（列表只做一次 IN 查询，禁止 N+1）。
+    lead_in_summary = (lead_in_map or {}).get(int(item.id))
+    if not isinstance(lead_in_summary, dict):
+        lead_in_summary = {"state": "none", "last_added_at": None}
+
     return TaskOut(
         id=item.id,
         task_uid=item.task_uid,
@@ -75,6 +81,7 @@ def task_out(
         tmdb_status=tmdb_status,
         tmdb_is_ended=tmdb_is_ended,
         drama_update_progress=drama_update_progress,
+        lead_in=lead_in_summary,
         enabled=item.enabled,
         addition=json.loads(item.addition_json) if item.addition_json else {},
         extra=json.loads(item.extra_json) if item.extra_json else {},

@@ -13,6 +13,7 @@ from app.models.role import Role
 from app.models.system_setting import SystemSetting
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
+from app.models.task_lead_in import TaskLeadInRecord
 from app.models.task_scheduler_setting import TaskSchedulerSetting
 from app.models.task_template import TaskTemplate
 from app.models.tmdb_cache_scheduler_setting import TMDBCacheSchedulerSetting
@@ -39,6 +40,7 @@ __all__ = [
     "SystemSetting",
     "Task",
     "TaskExecution",
+    "TaskLeadInRecord",
     "TaskSchedulerSetting",
     "TaskTemplate",
     "TMDBCacheSchedulerSetting",

@@ -17,6 +17,7 @@ from base64 import standard_b64encode
 import requests
 
 from app.extensions.adapters.base_adapter import BaseCloudDriveAdapter
+from app.extensions.adapters.lead_in_support import DramaLeadInMixin
 
 
 logger = logging.getLogger(__name__)
@@ -83,11 +84,19 @@ class PanNode:
         return f"{PAN_BAIDU_COM}/{node}"
 
 
-class BaiduAdapter(BaseCloudDriveAdapter):
+class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
     """百度网盘适配器"""
 
     DRIVE_TYPE = "baidu"
     DRIVE_NAME = "百度网盘"
+
+    # 是否支持"追剧任务引流文件"能力
+    SUPPORTS_DRAMA_LEAD_IN = True
+    # 是否支持「本账号文件」素材模式（账号内精确路径定位 + 网盘内部复制）
+    SUPPORTS_LEAD_IN_OWN_FILE = True
+    # 是否支持浏览本账号目录（设置页选择「本账号文件」素材时使用）
+    SUPPORTS_LEAD_IN_OWN_BROWSE = True
+
     CONFIG_FORMAT = "raw"
     default_config = {
         "cookie": "",
@@ -1008,6 +1017,7 @@ class BaiduAdapter(BaseCloudDriveAdapter):
             "size": item.get("size", 0),
             "updated_at": item.get("server_mtime", 0),
             "share_fid_token": fs_id,
+            "md5": str(item.get("md5") or "").lower(),
             "path": path,
         }
 
@@ -1042,6 +1052,7 @@ class BaiduAdapter(BaseCloudDriveAdapter):
                     "size": item.get("size", 0),
                     "updated_at": item.get("server_mtime", 0),
                     "share_fid_token": fs_id,
+                    "md5": str(item.get("md5") or "").lower(),
                     "path": path,
                 }
                 file_list.append(file_info)
@@ -1419,3 +1430,452 @@ class BaiduAdapter(BaseCloudDriveAdapter):
                 pdir_fid = match_fid.group(1)
 
         return pwd_id, passcode, pdir_fid, paths
+
+    # ==================== 任务引流（引流文件） ====================
+
+    def lead_in_resolve_material(
+        self,
+        shareurl: str,
+        passcode: str = "",
+        selected_fid: str = "",
+    ) -> Dict[str, Any]:
+        """解析百度分享链接，定位唯一的引流素材文件"""
+        shareurl = str(shareurl or "").strip()
+        if not shareurl:
+            return self._lead_in_error("LEAD_IN_FAILED", "请先填写素材分享链接")
+        try:
+            pwd_id, url_passcode, pdir_fid, _paths = self.extract_url(shareurl)
+        except Exception as exc:
+            logger.error("[Baidu] 解析引流素材链接失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"解析素材分享链接失败：{exc}")
+        if not pwd_id:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE",
+                "无法从分享链接中识别百度分享标识，请检查链接是否为百度网盘分享地址",
+            )
+        use_passcode = str(passcode or "").strip() or str(url_passcode or "").strip()
+        try:
+            token_response = self.get_stoken(pwd_id, use_passcode, check_errno=True)
+        except Exception as exc:
+            logger.error("[Baidu] 获取引流素材分享令牌失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"获取分享令牌失败：{exc}")
+        if not isinstance(token_response, dict) or token_response.get("status") != 200:
+            return self._lead_in_baidu_stoken_error(token_response, use_passcode)
+        token_data = token_response.get("data") if isinstance(token_response.get("data"), dict) else {}
+        stoken = str(token_data.get("stoken") or "").strip()
+        if not stoken:
+            return self._lead_in_error("LEAD_IN_FAILED", "获取分享令牌失败：网盘未返回令牌")
+        try:
+            detail = self.get_detail(pwd_id, stoken, str(pdir_fid or "/"))
+        except Exception as exc:
+            logger.error("[Baidu] 读取引流素材分享列表失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_MATERIAL_UNAVAILABLE", f"读取分享文件列表失败：{exc}")
+        if not isinstance(detail, dict) or detail.get("code") not in (0, "0"):
+            message = str((detail or {}).get("message") or "").strip() if isinstance(detail, dict) else ""
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE",
+                f"读取分享文件列表失败：{message or '分享链接可能已失效'}",
+            )
+        raw_items = ((detail.get("data") or {}).get("list")) or []
+        entries = [
+            self._lead_in_entry(item)
+            for item in raw_items
+            if isinstance(item, dict)
+        ]
+        entries = [entry for entry in entries if entry.get("fid") and entry.get("name")]
+        if not entries:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE",
+                "分享内没有可用文件，请检查分享链接是否有效或是否需要提取码",
+            )
+        entry, error = self._lead_in_pick_entry(entries, selected_fid)
+        if error:
+            # 分享内不唯一时把文件列表一并返回，前端据此让用户选择素材
+            if error.get("code") == "LEAD_IN_MATERIAL_AMBIGUOUS":
+                error["data"] = {
+                    "files": self._lead_in_public_files(entries),
+                    "pwd_id": pwd_id,
+                    "stoken": stoken,
+                }
+            return error
+        material = self._lead_in_build_material(
+            entry,
+            pwd_id=pwd_id,
+            stoken=stoken,
+            shareurl=shareurl,
+            passcode=use_passcode,
+        )
+        return self._lead_in_ok(
+            {
+                "files": self._lead_in_public_files(entries),
+                "material": material,
+                "pwd_id": pwd_id,
+                "stoken": stoken,
+            }
+        )
+
+    def _lead_in_baidu_stoken_error(
+        self, response: Dict[str, Any], passcode: str
+    ) -> Dict[str, Any]:
+        """把百度分享校验失败映射成引流错误码"""
+        data = response if isinstance(response, dict) else {}
+        status = data.get("status")
+        errno = self._lead_in_to_int(data.get("code"), 0)
+        message = str(data.get("message") or "").strip()
+        if status == 500:
+            return self._lead_in_error(
+                "LEAD_IN_FAILED",
+                "百度网盘账号未登录或 Cookie 已失效，请先保存有效账号",
+            )
+        if errno in (4, 200025) or "提取码" in message:
+            if not passcode:
+                return self._lead_in_error(
+                    "LEAD_IN_PASSCODE_REQUIRED",
+                    "该分享需要提取码，请填写提取码后重试",
+                )
+            return self._lead_in_error(
+                "LEAD_IN_PASSCODE_INVALID",
+                f"提取码错误，请检查后重试（{message or '提取码错误'}）",
+            )
+        if errno in (-1, -9, 105, 145, -7) or any(
+            word in message for word in ("不存在", "已失效", "失效", "过期", "审核", "删除")
+        ):
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE",
+                f"素材分享链接不可用：{message or '链接不存在或已失效'}",
+            )
+        if errno == -62:
+            return self._lead_in_error(
+                "LEAD_IN_FAILED",
+                "该分享需要验证码，请先在网盘网页端打开一次分享并完成验证后再试",
+            )
+        if errno == -6:
+            return self._lead_in_error(
+                "LEAD_IN_FAILED",
+                "百度网盘认证失败，请检查账号 Cookie 是否有效",
+            )
+        return self._lead_in_error(
+            "LEAD_IN_FAILED",
+            f"访问素材分享失败：{message or f'errno={errno}'}",
+        )
+
+    def lead_in_resolve_dir(self, dir_path: str) -> Dict[str, Any]:
+        """按任务保存目录定位百度目标文件夹"""
+        path, error = self._lead_in_normalize_dir_path(dir_path)
+        if error:
+            return error
+        if not self._session:
+            return self._lead_in_error("LEAD_IN_FAILED", "百度网盘客户端未初始化，请先保存有效账号")
+        parent = path.rsplit("/", 1)[0] or "/"
+        try:
+            info = self._api_list(parent)
+        except Exception as exc:
+            logger.error("[Baidu] 读取引流目标目录父目录失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
+        if not isinstance(info, dict):
+            return self._lead_in_error("LEAD_IN_FAILED", "读取保存目录失败：网盘返回异常")
+        errno = self._lead_in_to_int(info.get("errno") or info.get("error_code"), 0)
+        if errno:
+            if errno in (-9, 31066):
+                return self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
+            return self._lead_in_error(
+                "LEAD_IN_FAILED",
+                f"读取保存目录失败：{self._get_error_message(errno)}",
+            )
+        folder = None
+        for item in info.get("list") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("path") or "").rstrip("/") == path:
+                folder = item
+                break
+        if folder is None:
+            return self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
+        if str(folder.get("isdir")) != "1":
+            return self._lead_in_error("LEAD_IN_DIR_INVALID", f"保存路径不是文件夹：{path}")
+        try:
+            listing = self.ls_dir(path, max_items=0)
+        except Exception as exc:
+            logger.error("[Baidu] 读取引流目标目录失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
+        raw_items = None
+        if isinstance(listing, dict):
+            data = listing.get("data")
+            if isinstance(data, dict) and isinstance(data.get("list"), list):
+                raw_items = data.get("list")
+        if not isinstance(raw_items, list):
+            message = str((listing or {}).get("message") or "").strip() if isinstance(listing, dict) else ""
+            return self._lead_in_error(
+                "LEAD_IN_FAILED",
+                f"读取保存目录失败：{message or path}",
+            )
+        entries = [
+            self._lead_in_public_entry(self._lead_in_entry(item))
+            for item in raw_items
+            if isinstance(item, dict)
+        ]
+        name = path.rsplit("/", 1)[-1]
+        return self._lead_in_ok(
+            {
+                "dir": {"fid": path, "path": path, "name": name},
+                "entries": entries,
+            }
+        )
+
+    def lead_in_add(
+        self,
+        material: Dict[str, Any],
+        target: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """只把选中的那一个素材文件同步转存到目标目录"""
+        data, error = self._lead_in_prepare_material(material)
+        if error:
+            return error
+        fid = str(data.get("fid") or "").strip()
+        name = str(data.get("name") or "").strip()
+        token = str(data.get("material_token") or "").strip() or fid
+        dir_info, error = self._lead_in_target_dir(target)
+        if error:
+            return error
+        if not fid:
+            return self._lead_in_error("LEAD_IN_MATERIAL_UNAVAILABLE", "素材文件信息不完整，请重新解析素材")
+        dir_path = str(dir_info.get("fid") or "").strip()
+        pwd_id = str(data.get("pwd_id") or "").strip()
+        stoken = str(data.get("stoken") or "").strip()
+        if not self._session:
+            return self._lead_in_error("LEAD_IN_FAILED", "百度网盘客户端未初始化，请先保存有效账号")
+        try:
+            result = self.save_file(
+                [fid],
+                [token],
+                dir_path,
+                pwd_id,
+                stoken,
+                file_names=[name],
+            )
+        except Exception as exc:
+            logger.error("[Baidu] 引流素材转存请求异常: %s", exc)
+            return self._lead_in_error(
+                "LEAD_IN_TIMEOUT",
+                f"转存请求异常，添加结果待确认：{exc}",
+            )
+        if not isinstance(result, dict):
+            return self._lead_in_error("LEAD_IN_FAILED", "转存接口返回异常，请稍后重试")
+        code = result.get("code")
+        status = result.get("status")
+        if code not in (0, "0") or status not in (None, 200, "200"):
+            errno = self._lead_in_to_int(code, 1)
+            message = str(result.get("message") or "").strip()
+            if errno == 31061 or "已存在" in message:
+                return self._lead_in_error(
+                    "LEAD_IN_NAME_CONFLICT",
+                    f"目标目录已存在同名文件，未覆盖：{message or '文件已存在'}",
+                )
+            if errno in (-6, -1, 105, 145, 4, 200025, -7) or any(
+                word in message for word in ("分享", "提取码", "失效", "不存在")
+            ):
+                return self._lead_in_error(
+                    "LEAD_IN_MATERIAL_UNAVAILABLE",
+                    f"素材分享不可用：{message or '请重新解析素材'}",
+                )
+            if errno == -3:
+                return self._lead_in_error("LEAD_IN_FAILED", "转存文件数超过网盘限制")
+            return self._lead_in_error("LEAD_IN_FAILED", f"转存失败：{message or '未知原因'}")
+        result_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        task_id = str(result_data.get("task_id") or result_data.get("taskId") or "").strip()
+        if not task_id:
+            return self._lead_in_error("LEAD_IN_FAILED", "转存任务提交失败（未返回任务 ID），请稍后重试")
+        saved_fids = result_data.get("save_as_top_fids") or []
+        saved_fid = str(saved_fids[0]) if saved_fids else ""
+        handle = {
+            "task_id": task_id,
+            "dir_fid": dir_path,
+            "fid": saved_fid,
+            "name": name,
+            "size": self._lead_in_to_int(data.get("size")),
+            "md5": str(data.get("md5") or ""),
+            "pwd_id": pwd_id,
+            "stoken": stoken,
+        }
+        return self._lead_in_ok({"handle": handle, "sync": True})
+
+    def _lead_in_query_write_state(self, handle: Dict[str, Any]) -> Tuple[str, str]:
+        """百度转存为同步接口；本账号文件复制为异步接口，只能靠目标目录轮询确认"""
+        if isinstance(handle, dict) and handle.get("source") == "own_file":
+            return "unknown", ""
+        return "done", ""
+
+    # ==================== 任务引流（本账号文件） ====================
+
+    def lead_in_resolve_own_file(self, file_path: str) -> Dict[str, Any]:
+        """在本账号内按完整路径精确定位引流素材文件（只按父目录精确匹配文件名，不做全盘搜索）"""
+        path, error = self._lead_in_normalize_own_path(file_path)
+        if error:
+            return error
+        if not getattr(self, "_session", None):
+            return self._lead_in_error(
+                "LEAD_IN_FAILED", "百度网盘客户端未初始化，请先保存有效账号"
+            )
+        name = path.rsplit("/", 1)[-1]
+        parent = path.rsplit("/", 1)[0] or "/"
+        try:
+            info = self._api_list(parent)
+        except Exception as exc:
+            logger.error("[百度] 读取素材所在文件夹失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"读取素材所在文件夹失败：{exc}")
+        errno = info.get("errno") if isinstance(info, dict) else None
+        if errno not in (0, "0", None):
+            errno_value = self._lead_in_to_int(errno)
+            if errno_value in (-9, 31066):
+                return self._lead_in_error(
+                    "LEAD_IN_MATERIAL_UNAVAILABLE", f"素材文件不存在，请检查路径：{path}"
+                )
+            if errno_value == -6:
+                return self._lead_in_error(
+                    "LEAD_IN_FAILED",
+                    f"读取素材所在文件夹失败：{self._get_error_message(errno_value)}",
+                )
+            if errno_value in (105, 145, -7):
+                return self._lead_in_error(
+                    "LEAD_IN_MATERIAL_UNAVAILABLE",
+                    f"素材文件不可用：{self._get_error_message(errno_value)}",
+                )
+            return self._lead_in_error(
+                "LEAD_IN_FAILED",
+                f"读取素材所在文件夹失败：{self._get_error_message(errno_value)}",
+            )
+        items = info.get("list") if isinstance(info, dict) else None
+        if not isinstance(items, list):
+            return self._lead_in_error("LEAD_IN_FAILED", "读取素材所在文件夹失败：返回数据异常")
+        target_item = None
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("server_filename") or "") != name:
+                continue
+            item_path = str(item.get("path") or "").strip()
+            if item_path and item_path.rstrip("/") != path:
+                continue
+            target_item = item
+            break
+        if target_item is None:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE", f"素材文件不存在，请检查路径：{path}"
+            )
+        if str(target_item.get("isdir") or "0") == "1":
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE", "只能选择文件，不能选择文件夹"
+            )
+        fs_id = str(target_item.get("fs_id") or "").strip()
+        if not fs_id:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE", f"素材文件不存在，请检查路径：{path}"
+            )
+        md5 = str(target_item.get("md5") or "").strip().lower()
+        return self._lead_in_ok(
+            {
+                "file": {
+                    "fid": fs_id,
+                    "name": name,
+                    "path": path,
+                    "size": self._lead_in_to_int(target_item.get("size")),
+                    "md5": md5,
+                    "dir": False,
+                }
+            }
+        )
+
+    def lead_in_add_own_file(
+        self,
+        material: Dict[str, Any],
+        target: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """把本账号内的单个素材文件内部复制到目标目录（百度异步复制，ondup=fail 绝不覆盖）"""
+        material = material if isinstance(material, dict) else {}
+        dir_info, error = self._lead_in_target_dir(target)
+        if error:
+            return error
+        dest_dir = str(dir_info.get("fid") or dir_info.get("path") or "").strip()
+        if not dest_dir:
+            return self._lead_in_error("LEAD_IN_FAILED", "保存目录信息不完整，请刷新后重试")
+        path = str(material.get("path") or "").strip()
+        name = str(material.get("name") or "").strip()
+        if not path:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE", "素材文件信息不完整，请重新读取文件"
+            )
+        if not name:
+            name = path.rstrip("/").rsplit("/", 1)[-1]
+        if not getattr(self, "_session", None):
+            return self._lead_in_error(
+                "LEAD_IN_FAILED", "百度网盘客户端未初始化，请先保存有效账号"
+            )
+        payload = [{"path": path, "dest": dest_dir, "newname": name, "ondup": "fail"}]
+        params: Dict[str, Any] = {
+            "opera": "copy",
+            "onnest": "fail",
+            "async": 1,
+            "newVerify": 1,
+            "clienttype": 0,
+            "web": 1,
+            "app_id": PAN_APP_ID,
+        }
+        # bdstoken 可能尚未获取：_get_bdstoken() 自带缓存，必要时现场读取 /disk/home。
+        bdstoken = self._get_bdstoken()
+        if bdstoken:
+            params["bdstoken"] = bdstoken
+        url = f"{PAN_BAIDU_COM}/api/filemanager"
+        try:
+            response = self._request(
+                "POST",
+                url,
+                params=params,
+                data={"filelist": json.dumps(payload, ensure_ascii=False)},
+            )
+        except Exception as exc:
+            logger.error("[百度] 本账号素材复制请求异常: %s", exc)
+            return self._lead_in_error(
+                "LEAD_IN_TIMEOUT", f"复制请求异常，添加结果待确认：{exc}"
+            )
+        try:
+            result = self._check_response(response.json())
+        except Exception as exc:
+            logger.error("[百度] 本账号素材复制响应解析失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"复制接口返回异常：{exc}")
+        if not isinstance(result, dict):
+            return self._lead_in_error("LEAD_IN_FAILED", "复制接口返回异常，请稍后重试")
+        errno_value = self._lead_in_to_int(result.get("errno"))
+        if errno_value not in (0, None):
+            message = str(result.get("errmsg") or "").strip()
+            if not message:
+                message = self._get_error_message(errno_value)
+            mapped = self._lead_in_copy_error(
+                message,
+                code=errno_value,
+                conflict_codes=(12, 31061),
+                unavailable_codes=(-9, 105, 145, -1),
+            )
+            if mapped:
+                return mapped
+            return self._lead_in_error("LEAD_IN_FAILED", f"复制素材失败：{message}")
+        task_id = str(
+            result.get("taskid") or result.get("task_id") or ""
+        ).strip()
+        if not task_id:
+            info_list = result.get("info")
+            if isinstance(info_list, list) and info_list and isinstance(info_list[0], dict):
+                task_id = str(
+                    info_list[0].get("taskid") or info_list[0].get("task_id") or ""
+                ).strip()
+        handle = {
+            "source": "own_file",
+            "async": True,
+            "task_id": task_id,
+            "dir_fid": dest_dir,
+            "path": path,
+            "name": name,
+            "fid": "",
+            "size": self._lead_in_to_int(material.get("size")),
+            "md5": str(material.get("md5") or "").strip().lower(),
+        }
+        return self._lead_in_ok({"handle": handle, "sync": False})

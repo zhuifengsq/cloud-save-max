@@ -12,12 +12,13 @@ from typing import Dict, List, Tuple, Optional, Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.extensions.adapters.base_adapter import BaseCloudDriveAdapter
+from app.extensions.adapters.lead_in_support import DramaLeadInMixin
 
 
 logger = logging.getLogger(__name__)
 
 
-class QuarkAdapter(BaseCloudDriveAdapter):
+class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
     """夸克网盘适配器"""
 
     DRIVE_TYPE = "quark"
@@ -40,6 +41,13 @@ class QuarkAdapter(BaseCloudDriveAdapter):
     BASE_URL = "https://drive-pc.quark.cn"
     BASE_URL_APP = "https://drive-m.quark.cn"
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/3.14.2 Chrome/112.0.5615.165 Electron/24.1.3.8 Safari/537.36 Channel/pckk_other_ch"
+
+    # 是否支持"追剧任务引流文件"能力
+    SUPPORTS_DRAMA_LEAD_IN = True
+    # 是否支持「本账号文件」素材模式（账号内精确路径定位 + 网盘内部复制）
+    SUPPORTS_LEAD_IN_OWN_FILE = True
+    # 是否支持浏览本账号目录（设置页选择「本账号文件」素材时使用）
+    SUPPORTS_LEAD_IN_OWN_BROWSE = True
 
     def __init__(
         self,
@@ -516,6 +524,481 @@ class QuarkAdapter(BaseCloudDriveAdapter):
             paths.append({"fid": fid, "name": name})
         pdir_fid = paths[-1]["fid"] if matches else 0
         return pwd_id, passcode, pdir_fid, paths
+
+    # ==================== 任务引流（引流文件） ====================
+
+    def lead_in_resolve_material(
+        self,
+        shareurl: str,
+        passcode: str = "",
+        selected_fid: str = "",
+    ) -> Dict[str, Any]:
+        """解析夸克分享链接，定位唯一的引流素材文件"""
+        shareurl = str(shareurl or "").strip()
+        if not shareurl:
+            return self._lead_in_error("LEAD_IN_FAILED", "请先填写素材分享链接")
+        try:
+            pwd_id, url_passcode, pdir_fid, paths = self.extract_url(shareurl)
+        except Exception as exc:
+            logger.error("[Quark] 解析引流素材链接失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"解析素材分享链接失败：{exc}")
+        if not pwd_id:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE",
+                "无法从分享链接中识别夸克分享标识，请检查链接是否为夸克分享地址",
+            )
+        use_passcode = str(passcode or "").strip() or str(url_passcode or "").strip()
+        stoken, error = self._lead_in_quark_stoken(pwd_id, use_passcode)
+        if error:
+            return error
+        # 深层链接（/s/xxx/fid-name）下的相对路径，用于拼素材完整路径
+        base_path = ""
+        path_names = [
+            str(item.get("name") or "").strip()
+            for item in (paths or [])
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        ]
+        if path_names:
+            base_path = "/" + "/".join(path_names)
+        root_fid = str(pdir_fid or "0")
+        try:
+            detail = self.get_detail(pwd_id, stoken, root_fid)
+        except Exception as exc:
+            logger.error("[Quark] 读取引流素材分享列表失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_MATERIAL_UNAVAILABLE", f"读取分享文件列表失败：{exc}")
+        if not isinstance(detail, dict) or detail.get("code") not in (0, "0"):
+            message = str((detail or {}).get("message") or "").strip() if isinstance(detail, dict) else ""
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE",
+                f"读取分享文件列表失败：{message or '分享链接可能已失效'}",
+            )
+        raw_items = ((detail.get("data") or {}).get("list")) or []
+        entries = [
+            self._lead_in_entry(item, base_path)
+            for item in raw_items
+            if isinstance(item, dict)
+        ]
+        entries = [entry for entry in entries if entry.get("fid") and entry.get("name")]
+        if not entries:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE",
+                "分享内没有可用文件，请检查分享链接是否有效或是否需要提取码",
+            )
+        entry, error = self._lead_in_pick_entry(entries, selected_fid)
+        if error:
+            # 分享内不唯一时把文件列表一并返回，前端据此让用户选择素材
+            if error.get("code") == "LEAD_IN_MATERIAL_AMBIGUOUS":
+                error["data"] = {
+                    "files": self._lead_in_public_files(entries),
+                    "pwd_id": pwd_id,
+                    "stoken": stoken,
+                }
+            return error
+        material = self._lead_in_build_material(
+            entry,
+            pwd_id=pwd_id,
+            stoken=stoken,
+            shareurl=shareurl,
+            passcode=use_passcode,
+        )
+        return self._lead_in_ok(
+            {
+                "files": self._lead_in_public_files(entries),
+                "material": material,
+                "pwd_id": pwd_id,
+                "stoken": stoken,
+            }
+        )
+
+    def _lead_in_quark_stoken(
+        self, pwd_id: str, passcode: str
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """获取夸克分享令牌并把错误映射成引流错误码"""
+        try:
+            response = self.get_stoken(pwd_id, passcode)
+        except Exception as exc:
+            logger.error("[Quark] 获取引流素材分享令牌失败: %s", exc)
+            return None, self._lead_in_error("LEAD_IN_FAILED", f"获取分享令牌失败：{exc}")
+        if not isinstance(response, dict):
+            return None, self._lead_in_error("LEAD_IN_FAILED", "获取分享令牌失败：网盘返回异常")
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        stoken = str(data.get("stoken") or "").strip()
+        code = response.get("code")
+        status = response.get("status")
+        if stoken and code in (None, 0, "0") and status in (None, 200, "200"):
+            return stoken, None
+        message = str(response.get("message") or "").strip()
+        if self._lead_in_quark_passcode_issue(response):
+            if not passcode:
+                return None, self._lead_in_error(
+                    "LEAD_IN_PASSCODE_REQUIRED",
+                    "该分享需要提取码，请填写提取码后重试",
+                )
+            return None, self._lead_in_error(
+                "LEAD_IN_PASSCODE_INVALID",
+                f"提取码错误，请检查后重试（{message or '请确认提取码'}）",
+            )
+        if code in (41004, 41005, 41009, 41012) or any(
+            word in message for word in ("不存在", "已失效", "失效", "取消", "过期", "违规", "删除")
+        ):
+            return None, self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE",
+                f"素材分享链接不可用：{message or '链接不存在或已失效'}",
+            )
+        return None, self._lead_in_error(
+            "LEAD_IN_FAILED",
+            f"获取分享令牌失败：{message or '未知原因'}",
+        )
+
+    @staticmethod
+    def _lead_in_quark_passcode_issue(response: Dict[str, Any]) -> bool:
+        """判断夸克响应是否是提取码问题"""
+        if not isinstance(response, dict):
+            return False
+        message = str(response.get("message") or "")
+        lowered = message.lower()
+        if "提取码" in message or "密码" in message or "口令" in message:
+            return True
+        if "passcode" in lowered or "password" in lowered:
+            return True
+        return response.get("code") in (41006, 41008)
+
+    def lead_in_resolve_dir(self, dir_path: str) -> Dict[str, Any]:
+        """按任务保存目录定位夸克目标文件夹"""
+        path, error = self._lead_in_normalize_dir_path(dir_path)
+        if error:
+            return error
+        try:
+            candidates = self.get_fids([path]) or []
+        except Exception as exc:
+            logger.error("[Quark] 定位引流目标目录失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"定位保存目录失败：{exc}")
+        folder = None
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            file_path = str(item.get("file_path") or item.get("path") or "").rstrip("/")
+            if file_path == path:
+                folder = item
+                break
+        if folder is None:
+            return self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
+        fid = str(folder.get("fid") or "").strip()
+        if not fid:
+            return self._lead_in_error("LEAD_IN_DIR_INVALID", f"保存目录无法精确定位：{path}")
+        if folder.get("dir") is False or folder.get("is_dir") is False or str(folder.get("file_type") or "") == "1":
+            return self._lead_in_error("LEAD_IN_DIR_INVALID", f"保存路径不是文件夹：{path}")
+        try:
+            listing = self.ls_dir(fid, max_items=0)
+        except Exception as exc:
+            logger.error("[Quark] 读取引流目标目录失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
+        raw_items = None
+        if isinstance(listing, dict):
+            data = listing.get("data")
+            if isinstance(data, dict) and isinstance(data.get("list"), list):
+                raw_items = data.get("list")
+        if not isinstance(raw_items, list):
+            message = str((listing or {}).get("message") or "").strip() if isinstance(listing, dict) else ""
+            return self._lead_in_error(
+                "LEAD_IN_DIR_INVALID",
+                f"保存路径不是文件夹或无法访问：{path}" + (f"（{message}）" if message else ""),
+            )
+        entries = [
+            self._lead_in_public_entry(self._lead_in_entry(item))
+            for item in raw_items
+            if isinstance(item, dict)
+        ]
+        name = path.rsplit("/", 1)[-1]
+        return self._lead_in_ok(
+            {
+                "dir": {"fid": fid, "path": path, "name": name},
+                "entries": entries,
+            }
+        )
+
+    def lead_in_add(
+        self,
+        material: Dict[str, Any],
+        target: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """只提交选中的那一个素材文件转存（夸克转存为异步任务）"""
+        data, error = self._lead_in_prepare_material(material)
+        if error:
+            return error
+        fid = str(data.get("fid") or "").strip()
+        name = str(data.get("name") or "").strip()
+        token = str(data.get("material_token") or "").strip() or fid
+        dir_info, error = self._lead_in_target_dir(target)
+        if error:
+            return error
+        if not fid:
+            return self._lead_in_error("LEAD_IN_MATERIAL_UNAVAILABLE", "素材文件信息不完整，请重新解析素材")
+        dir_fid = str(dir_info.get("fid") or "").strip()
+        pwd_id = str(data.get("pwd_id") or "").strip()
+        stoken = str(data.get("stoken") or "").strip()
+        try:
+            result = self.save_file([fid], [token], dir_fid, pwd_id, stoken)
+        except Exception as exc:
+            logger.error("[Quark] 引流素材转存请求异常: %s", exc)
+            return self._lead_in_error(
+                "LEAD_IN_TIMEOUT",
+                f"转存请求异常，添加结果待确认：{exc}",
+            )
+        if not isinstance(result, dict):
+            return self._lead_in_error("LEAD_IN_FAILED", "转存接口返回异常，请稍后重试")
+        code = result.get("code")
+        status = result.get("status")
+        if code not in (0, "0") or status not in (None, 200, "200"):
+            message = str(result.get("message") or "").strip()
+            if any(word in message for word in ("已存在", "同名", "重复")):
+                return self._lead_in_error(
+                    "LEAD_IN_NAME_CONFLICT",
+                    f"目标目录已存在同名文件，未覆盖：{message}",
+                )
+            if code in (41004, 41005, 41009) or any(
+                word in message for word in ("分享", "提取码", "失效", "不存在")
+            ):
+                return self._lead_in_error(
+                    "LEAD_IN_MATERIAL_UNAVAILABLE",
+                    f"素材分享不可用：{message or '请重新解析素材'}",
+                )
+            return self._lead_in_error("LEAD_IN_FAILED", f"转存失败：{message or '未知原因'}")
+        result_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        task_id = str(result_data.get("task_id") or result_data.get("taskId") or "").strip()
+        if not task_id:
+            return self._lead_in_error("LEAD_IN_FAILED", "转存任务提交失败（未返回任务 ID），请稍后重试")
+        handle = {
+            "task_id": task_id,
+            "dir_fid": dir_fid,
+            "fid": fid,
+            "name": name,
+            "size": self._lead_in_to_int(data.get("size")),
+            "md5": str(data.get("md5") or ""),
+            "pwd_id": pwd_id,
+            "stoken": stoken,
+        }
+        return self._lead_in_ok({"handle": handle, "sync": False})
+
+    def _lead_in_query_task_once(self, task_id: str) -> Dict[str, Any]:
+        """单次查询夸克转存任务（核验阶段不能用无界的 query_task）"""
+        import random
+        import time as _time
+        from datetime import datetime
+
+        url = f"{self.BASE_URL}/1/clouddrive/task"
+        querystring = {
+            "pr": "ucpro",
+            "fr": "pc",
+            "uc_param_str": "",
+            "task_id": task_id,
+            "retry_index": 0,
+            "__dt": int(random.uniform(1, 5) * 60 * 1000),
+            "__t": datetime.now().timestamp(),
+        }
+        return self._send_request("GET", url, params=querystring).json()
+
+    def _lead_in_query_write_state(self, handle: Dict[str, Any]) -> Tuple[str, str]:
+        """查询夸克转存任务状态（done/running/failed）"""
+        task_id = str((handle or {}).get("task_id") or "").strip()
+        if not task_id:
+            return "unknown", ""
+        try:
+            response = self._lead_in_query_task_once(task_id)
+        except Exception as exc:
+            logger.warning("[Quark] 查询引流转存任务失败: %s", exc)
+            return "unknown", str(exc)
+        if not isinstance(response, dict):
+            return "unknown", ""
+        if response.get("status") not in (None, 200, "200"):
+            message = str(response.get("message") or "").strip()
+            if any(word in message for word in ("不存在", "失效", "过期")):
+                return "failed", f"转存任务已失效：{message}"
+            return "unknown", message
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        task_status = self._lead_in_to_int(data.get("status"), -1)
+        if task_status == 2:
+            return "done", ""
+        if task_status in (3, 4, -1):
+            message = str(data.get("message") or data.get("task_title") or "").strip()
+            return "failed", f"网盘转存任务失败：{message or '未知原因'}"
+        fail_code = data.get("fail_code") or data.get("code")
+        if fail_code not in (None, 0, "0"):
+            return "failed", f"网盘转存任务失败（code={fail_code}）"
+        # 任务仍在进行中（status 0/1 等），交给调用方继续有界轮询
+        return "running", ""
+
+    # ==================== 任务引流（本账号文件） ====================
+
+    def lead_in_resolve_own_file(self, file_path: str) -> Dict[str, Any]:
+        """在本账号内按完整路径精确定位引流素材文件（只按精确路径，不按文件名搜索）"""
+        path, error = self._lead_in_normalize_own_path(file_path)
+        if error:
+            return error
+        name = path.rsplit("/", 1)[-1]
+        # 夸克 path_list 对文件返回空列表（只稳定支持目录），不能先用它校验文件；
+        # 因此先按完整路径定位父目录 fid，再在父目录的精确列表中按同名文件定位（不做全盘搜索）。
+        parent_path = path.rsplit("/", 1)[0] or "/"
+        parent_fid = "0"
+        if parent_path != "/":
+            try:
+                parents = self.get_fids([parent_path]) or []
+            except Exception as exc:
+                logger.error("[Quark] 定位素材所在文件夹失败: %s", exc)
+                return self._lead_in_error("LEAD_IN_FAILED", f"定位素材所在文件夹失败：{exc}")
+            parent_item = None
+            for item in parents:
+                if not isinstance(item, dict):
+                    continue
+                if self._lead_in_quark_normalize_path(
+                    item.get("file_path") or item.get("path")
+                ) == parent_path:
+                    parent_item = item
+                    break
+            if parent_item is None or not str(parent_item.get("fid") or "").strip():
+                return self._lead_in_error(
+                    "LEAD_IN_MATERIAL_UNAVAILABLE",
+                    f"素材文件不存在，请检查路径：{path}",
+                )
+            parent_fid = str(parent_item.get("fid")).strip()
+        try:
+            listing = self.ls_dir(parent_fid, max_items=2000)
+        except Exception as exc:
+            logger.error("[Quark] 读取素材所在文件夹失败: %s", exc)
+            return self._lead_in_error("LEAD_IN_FAILED", f"读取素材所在文件夹失败：{exc}")
+        raw_items = None
+        if isinstance(listing, dict):
+            if listing.get("code") not in (0, "0", None):
+                message = str(listing.get("message") or "").strip()
+                return self._lead_in_error(
+                    "LEAD_IN_FAILED",
+                    "读取素材所在文件夹失败" + (f"：{message}" if message else ""),
+                )
+            data = listing.get("data")
+            if isinstance(data, dict) and isinstance(data.get("list"), list):
+                raw_items = data.get("list")
+        if raw_items is None:
+            message = (
+                str(listing.get("message") or "").strip()
+                if isinstance(listing, dict)
+                else ""
+            )
+            return self._lead_in_error(
+                "LEAD_IN_FAILED",
+                "读取素材所在文件夹失败" + (f"：{message}" if message else ""),
+            )
+        entry = None
+        folder_entry = None
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            entry_item = self._lead_in_entry(item)
+            if entry_item.get("name") != name:
+                continue
+            if entry_item.get("dir"):
+                folder_entry = entry_item
+            elif entry is None:
+                entry = entry_item
+        if entry is None and folder_entry is not None:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE", "只能选择文件，不能选择文件夹"
+            )
+        if entry is None:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE", f"素材文件不存在，请检查路径：{path}"
+            )
+        fid = str(entry.get("fid") or "").strip()
+        if not fid:
+            return self._lead_in_error(
+                "LEAD_IN_MATERIAL_UNAVAILABLE", f"素材文件不存在，请检查路径：{path}"
+            )
+        md5 = str(entry.get("md5") or "").strip().lower()
+        return self._lead_in_ok(
+            {
+                "file": {
+                    "fid": fid,
+                    "name": name,
+                    "path": path,
+                    "size": self._lead_in_to_int(entry.get("size")),
+                    "md5": md5,
+                    "dir": False,
+                }
+            }
+        )
+
+    @staticmethod
+    def _lead_in_quark_normalize_path(raw_path: Any) -> str:
+        """归一夸克返回的路径，便于与用户输入的完整路径做精确比较"""
+        return "/" + "/".join(
+            part for part in str(raw_path or "").replace("\\", "/").split("/") if part
+        )
+
+    def lead_in_add_own_file(
+        self,
+        material: Dict[str, Any],
+        target: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """把本账号内的单个素材文件内部复制到目标目录（夸克为异步任务）"""
+        material = material if isinstance(material, dict) else {}
+        dir_info, error = self._lead_in_target_dir(target)
+        if error:
+            return error
+        dir_fid = str(dir_info.get("fid") or "").strip()
+        fid = str(material.get("fid") or "").strip()
+        name = str(material.get("name") or "").strip()
+        if not fid:
+            path, path_error = self._lead_in_normalize_own_path(
+                str(material.get("path") or "")
+            )
+            if path_error:
+                return path_error
+            resolved = self.lead_in_resolve_own_file(path)
+            if resolved.get("code") != 0:
+                return resolved
+            file_info = (resolved.get("data") or {}).get("file") or {}
+            fid = str(file_info.get("fid") or "").strip()
+            name = name or str(file_info.get("name") or "").strip()
+            if not fid:
+                return self._lead_in_error(
+                    "LEAD_IN_MATERIAL_UNAVAILABLE", "素材文件信息不完整，请重新读取文件"
+                )
+        if not name:
+            name = str(material.get("path") or "").rstrip("/").rsplit("/", 1)[-1]
+        url = f"{self.BASE_URL}/1/clouddrive/file/copy"
+        querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
+        payload = {"filelist": [fid], "to_pdir_fid": dir_fid}
+        try:
+            response = self._send_request(
+                "POST", url, json=payload, params=querystring
+            ).json()
+        except Exception as exc:
+            logger.error("[Quark] 本账号素材复制请求异常: %s", exc)
+            return self._lead_in_error(
+                "LEAD_IN_TIMEOUT", f"复制请求异常，添加结果待确认：{exc}"
+            )
+        if not isinstance(response, dict):
+            return self._lead_in_error("LEAD_IN_FAILED", "复制接口返回异常，请稍后重试")
+        code = response.get("code")
+        if code not in (0, "0"):
+            message = str(response.get("message") or "").strip()
+            mapped = self._lead_in_copy_error(message, code=code)
+            if mapped:
+                return mapped
+            return self._lead_in_error(
+                "LEAD_IN_FAILED", f"复制素材失败：{message or '未知原因'}"
+            )
+        result_data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        task_id = str(result_data.get("task_id") or result_data.get("taskId") or "").strip()
+        handle = {
+            "source": "own_file",
+            "task_id": task_id,
+            "dir_fid": dir_fid,
+            "fid": fid,
+            "name": name,
+            "size": self._lead_in_to_int(material.get("size")),
+            "md5": str(material.get("md5") or "").strip().lower(),
+        }
+        return self._lead_in_ok({"handle": handle, "sync": False})
 
     # 以下为夸克特有方法，不在基类接口中
 

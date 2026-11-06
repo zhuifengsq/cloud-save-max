@@ -1,3 +1,5 @@
+import type { TaskLeadInSummary } from '@/types/dramaLeadIn'
+
 export type TaskExtraConfig = Record<string, any> & {
   auto_update_shareurl?: boolean | null
   auto_update_115_shareurl?: boolean | null
@@ -86,6 +88,8 @@ export type TaskItem = {
   created_at: string
   updated_at: string
   executions?: TaskExecutionItem[]
+  // 引流文件状态（由后端任务详情接口返回）
+  lead_in?: TaskLeadInSummary | null
 }
 
 export type TaskSchedulerSetting = {

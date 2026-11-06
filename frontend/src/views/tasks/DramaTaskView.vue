@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+import DramaLeadInDialog from '@/components/tasks/DramaLeadInDialog.vue'
 import DramaTaskDrawer from '@/components/tasks/DramaTaskDrawer.vue'
 import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
 import GeneratedShareStatus from '@/components/tasks/GeneratedShareStatus.vue'
@@ -18,6 +19,7 @@ import {
 import { fetchDriveAccounts } from '@/api/extensions'
 import { TASK_RUN, TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
+import type { TaskLeadInSummary } from '@/types/dramaLeadIn'
 import type { DriveAccountItem } from '@/types/extensions'
 import type { TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/tasks'
 import { validateCrontab5, validateTimezone, describeCrontab, getNextExecutions } from '@/utils/cron'
@@ -83,6 +85,37 @@ const shareDialog = reactive({
   fromStored: false,
   result: null as TaskShareLink | null,
 })
+
+const leadInDialog = reactive({
+  visible: false,
+  task: null as TaskItem | null,
+})
+
+type LeadInBadge = { label: string; type: 'success' | 'info' | 'warning' | 'danger' }
+
+const LEAD_IN_STATE_META: Record<string, LeadInBadge> = {
+  added: { label: '已添加', type: 'success' },
+  exists: { label: '已存在', type: 'success' },
+  conflict: { label: '同名冲突', type: 'danger' },
+  pending: { label: '待确认', type: 'warning' },
+  failed: { label: '添加失败', type: 'danger' },
+}
+
+function leadInBadge(row: TaskItem): LeadInBadge | null {
+  const state = String(row.lead_in?.state || '')
+  if (!state || state === 'none' || state === 'absent') return null
+  return LEAD_IN_STATE_META[state] || { label: state, type: 'info' }
+}
+
+function openLeadInDialog(row: TaskItem) {
+  leadInDialog.task = row
+  leadInDialog.visible = true
+}
+
+function onLeadInUpdated(payload: { taskId: number; lead_in: TaskLeadInSummary }) {
+  const target = tasks.value.find((item) => item.id === payload.taskId)
+  if (target) target.lead_in = payload.lead_in
+}
 
 const runLogPre = ref<HTMLElement | null>(null)
 let runLogController: AbortController | null = null
@@ -438,6 +471,10 @@ async function confirmDelete() {
 function handleRowCommand(command: string, row: TaskItem) {
   if (command === 'share') {
     handleShare(row)
+    return
+  }
+  if (command === 'lead_in') {
+    openLeadInDialog(row)
     return
   }
   if (command === 'edit') {
@@ -1142,6 +1179,15 @@ onBeforeUnmount(() => {
             <GeneratedShareStatus :link="storedShareLink(row as TaskItem)" :executions="row.executions" />
           </template>
         </el-table-column>
+        <el-table-column label="引流" width="150">
+          <template #default="{ row }">
+            <div v-if="leadInBadge(row as TaskItem)" class="lead-in-cell">
+              <el-tag :type="leadInBadge(row as TaskItem)!.type" size="small" effect="plain">{{ leadInBadge(row as TaskItem)!.label }}</el-tag>
+              <span v-if="row.lead_in?.last_added_at" class="lead-in-cell__time">{{ formatShareSavedAt(row.lead_in.last_added_at) }}</span>
+            </div>
+            <span v-else class="task-empty">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="完结" width="84">
           <template #default="{ row }">
             <el-tag v-if="row.tmdb_media_type === 'tv' && row.tmdb_is_ended === true" type="success" effect="plain">完结</el-tag>
@@ -1154,7 +1200,7 @@ onBeforeUnmount(() => {
             <el-tag :type="row.enabled ? 'primary' : 'danger'" effect="light">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" :width="showAllActions ? 330 : 200" fixed="right">
+        <el-table-column label="操作" :width="showAllActions ? 430 : 200" fixed="right">
           <template #default="{ row }">
             <div v-if="showAllActions" class="task-actions">
               <el-button v-if="canWrite" :type="row.enabled ? 'danger' : 'primary'" text bg  @click="handleToggle(row, !row.enabled)">{{ row.enabled ? '禁用' : '启用' }}</el-button>
@@ -1169,6 +1215,7 @@ onBeforeUnmount(() => {
               </el-button>
               <el-button v-if="canWrite" text bg @click="openEditDrawer(row)">编辑</el-button>
               <el-button v-if="canWrite" text bg type="primary" :loading="shareDialog.loadingTaskId === row.id" @click="handleShare(row as TaskItem)">分享</el-button>
+              <el-button v-if="canWrite" text bg type="primary" @click="openLeadInDialog(row as TaskItem)">引流文件</el-button>
               <el-button v-if="canWrite" text bg type="danger"  @click="openDeleteDialog(row)">删除</el-button>
             </div>
             <div v-else class="task-actions">
@@ -1188,6 +1235,7 @@ onBeforeUnmount(() => {
                   <el-dropdown-menu>
                     <el-dropdown-item command="edit">编辑</el-dropdown-item>
                     <el-dropdown-item command="share">分享</el-dropdown-item>
+                    <el-dropdown-item command="lead_in">引流文件</el-dropdown-item>
                     <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
@@ -1267,6 +1315,11 @@ onBeforeUnmount(() => {
               </div>
               <GeneratedShareStatus :link="storedShareLink(row)" :executions="row.executions" />
             </div>
+            <div v-if="leadInBadge(row)" class="task-card__meta-row">
+              <span class="task-card__label">引流</span>
+              <el-tag :type="leadInBadge(row)!.type" size="small" effect="plain">{{ leadInBadge(row)!.label }}</el-tag>
+              <span v-if="row.lead_in?.last_added_at" class="lead-in-cell__time">{{ formatShareSavedAt(row.lead_in.last_added_at) }}</span>
+            </div>
             <div class="task-card__meta-row">
               <span class="task-card__label">完结</span>
               <span v-if="row.tmdb_media_type === 'tv' && row.tmdb_is_ended === true">完结</span>
@@ -1296,6 +1349,7 @@ onBeforeUnmount(() => {
               </el-button>
               <el-button v-if="canWrite" text bg @click="openEditDrawer(row)">编辑</el-button>
               <el-button v-if="canWrite" text bg type="primary" :loading="shareDialog.loadingTaskId === row.id" @click="handleShare(row)">分享</el-button>
+              <el-button v-if="canWrite" text bg type="primary" @click="openLeadInDialog(row)">引流文件</el-button>
               <el-button v-if="canWrite" text bg type="danger" @click="openDeleteDialog(row)">删除</el-button>
             </div>
           </div>
@@ -1310,6 +1364,8 @@ onBeforeUnmount(() => {
       :submitting="submitting"
       @save="submitTask"
     />
+
+    <DramaLeadInDialog v-model="leadInDialog.visible" :task="leadInDialog.task" @updated="onLeadInUpdated" />
 
     <el-dialog v-model="shareDialog.visible" title="转存文件分享链接" :width="isMobile ? '92vw' : '580px'">
       <template v-if="shareDialog.result">
@@ -1674,6 +1730,18 @@ onBeforeUnmount(() => {
 
 .task-empty {
   color: var(--el-text-color-placeholder);
+}
+
+.lead-in-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.lead-in-cell__time {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .task-name {

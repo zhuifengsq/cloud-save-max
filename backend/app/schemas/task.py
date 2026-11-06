@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.schemas.drama_lead_in import TaskLeadInSummaryOut
+
 
 class TaskBase(BaseModel):
     task_type: str = Field(default="generic", max_length=32)
@@ -98,6 +100,7 @@ class TaskOut(BaseModel):
     tmdb_status: str | None = None
     tmdb_is_ended: bool | None = None
     drama_update_progress: DramaUpdateProgressOut | None = None
+    lead_in: TaskLeadInSummaryOut = Field(default_factory=TaskLeadInSummaryOut)
     enabled: bool
     addition: dict[str, Any] = {}
     extra: dict[str, Any] = {}

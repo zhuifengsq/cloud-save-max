@@ -33,8 +33,8 @@ class AdapterFactory:
     # 适配器映射表
     ADAPTER_MAP: Dict[str, Type[BaseCloudDriveAdapter]] = {
         "quark": QuarkAdapter,
-        "115": Cloud115Adapter,
         "baidu": BaiduAdapter,
+        "115": Cloud115Adapter,
         "xunlei": XunleiAdapter,
         "aliyun": AliyunAdapter,
         "uc": UCAdapter,
