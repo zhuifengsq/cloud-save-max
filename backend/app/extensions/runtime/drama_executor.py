@@ -37,11 +37,11 @@ def _parse_size(size_str: str) -> int | None:
         if s.endswith(suffix):
             try:
                 return int(float(s[: -len(suffix)]) * multiplier)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
                 return None
     try:
         return int(float(s))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
@@ -426,6 +426,43 @@ class DramaTaskExecutor:
             result.append(raw)
         return result
 
+    def _file_filter_rules(self) -> tuple[int, list[str], list[str], bool]:
+        addition = self.task_data.get("addition") or {}
+        min_bytes = _parse_size(str(addition.get("min_size") or "")) or 0
+        blocked = [word.strip().lower() for word in str(addition.get("filter_words") or "").split("|") if word.strip()]
+        required = [word.strip().lower() for word in str(addition.get("file_filter") or "").split("|") if word.strip()]
+        match_any = str(addition.get("file_filter_mode") or "").strip().lower() == "any"
+        return min_bytes, blocked, required, match_any
+
+    def _filter_transfer_files(self, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        min_bytes, blocked, required, match_any = self._file_filter_rules()
+        if min_bytes > 0:
+            def size(raw: dict[str, Any]) -> int:
+                try:
+                    return int(raw.get("size") or 0)
+                except (TypeError, ValueError, OverflowError):
+                    return 0
+
+            before = len(files)
+            files = [file for file in files if size(file) >= min_bytes]
+            if before != len(files):
+                min_size = (self.task_data.get("addition") or {}).get("min_size")
+                self._line(f"大小过滤：移除 {before - len(files)} 个低于 {min_size} 的文件")
+
+        if blocked:
+            before = len(files)
+            files = [file for file in files if not any(word in _get_name(file).lower() for word in blocked)]
+            if before != len(files):
+                self._line(f"关键词过滤：移除 {before - len(files)} 个匹配的文件")
+
+        if required:
+            matches = any if match_any else all
+            before = len(files)
+            files = [file for file in files if matches(word in _get_name(file).lower() for word in required)]
+            if before != len(files):
+                self._line(f"文件筛选：移除 {before - len(files)} 个不匹配的文件")
+        return files
+
     def _plan_transfer(self, *, share_files: list[dict[str, Any]], dest_file_list: list[dict[str, Any]]) -> list[DramaPlanItem]:
         taskname = str(self.task_data.get("taskname") or "")
         pattern = str(self.task_data.get("pattern") or "")
@@ -498,58 +535,7 @@ class DramaTaskExecutor:
                 }
             )
 
-        def _to_size(v):
-            try:
-                return int(v)
-            except Exception:
-                return None
-
-        # 最小文件大小过滤
-        addition = self.task_data.get("addition") or {}
-        min_size_str = str(addition.get("min_size") or "").strip()
-        if min_size_str:
-            min_bytes = _parse_size(min_size_str)
-            if min_bytes is not None and min_bytes > 0:
-                before = len(candidates)
-                candidates = [f for f in candidates if (_to_size(f.get("size")) or 0) >= min_bytes]
-                removed = before - len(candidates)
-                if removed:
-                    self._line(f"大小过滤：移除 {removed} 个低于 {min_size_str} 的文件")
-
-        # 关键词过滤
-        filter_words_str = str(addition.get("filter_words") or "").strip()
-        if filter_words_str:
-            filter_words = [w.strip().lower() for w in filter_words_str.split("|") if w.strip()]
-            if filter_words:
-                before = len(candidates)
-                candidates = [
-                    f for f in candidates
-                    if not any(w in _get_name(f).lower() for w in filter_words)
-                ]
-                removed = before - len(candidates)
-                if removed:
-                    self._line(f"关键词过滤：移除 {removed} 个匹配的文件")
-
-        # 文件关键词筛选
-        file_filter_str = str(addition.get("file_filter") or "").strip()
-        if file_filter_str:
-            file_filter_words = [w.strip().lower() for w in file_filter_str.split("|") if w.strip()]
-            if file_filter_words:
-                file_filter_mode = str(addition.get("file_filter_mode") or "all").strip().lower()
-                before = len(candidates)
-                if file_filter_mode == "any":
-                    candidates = [
-                        f for f in candidates
-                        if any(w in _get_name(f).lower() for w in file_filter_words)
-                    ]
-                else:
-                    candidates = [
-                        f for f in candidates
-                        if all(w in _get_name(f).lower() for w in file_filter_words)
-                    ]
-                removed = before - len(candidates)
-                if removed:
-                    self._line(f"文件筛选：移除 {removed} 个不匹配的文件")
+        candidates = self._filter_transfer_files(candidates)
 
         # 过滤完成后再判断重命名冲突，避免已排除的文件抢占目标名称。
         best: dict[str, tuple[tuple[float, float], int]] = {}
@@ -893,7 +879,7 @@ class DramaTaskExecutor:
                 if name:
                     existing_names.add(_normalize_name(name, ignore_extension))
             plan: list[DramaPlanItem] = []
-            for raw in self._iter_files(root_files):
+            for raw in self._filter_transfer_files(self._iter_files(root_files)):
                 name = _get_name(raw)
                 fid = _get_fid(raw)
                 token = _get_fid_token(raw)
@@ -1003,7 +989,7 @@ class DramaTaskExecutor:
         self._add_saved_names(existing_names)
 
         plan: list[DramaPlanItem] = []
-        for item in files:
+        for item in self._filter_transfer_files(files):
             name = _get_name(item)
             fid = _get_fid(item)
             token = _get_fid_token(item)
@@ -1081,8 +1067,9 @@ class DramaTaskExecutor:
             except Exception as exc:
                 self._line(f"统计已存在目录失败: {exc}")
             return []
-        # 优先整包转存目录 fid
-        if share_token:
+        # 按目录 ID 直转无法检查其中的文件，存在文件规则时走逐文件路径。
+        min_bytes, blocked, required, _ = self._file_filter_rules()
+        if share_token and not (min_bytes > 0 or blocked or required):
             try:
                 plan = [
                     DramaPlanItem(
