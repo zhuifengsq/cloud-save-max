@@ -325,7 +325,7 @@ class MySearchPlugin(BaseSearchPlugin):
             </div>
             <div class="source-card__actions">
               <el-button @click="openTest('plugin', item.key, item.name || item.key)">测试搜索</el-button>
-              <WpsPluginSettings v-if="item.key === 'wps' && item.configurable" :plugin="item" :can-write="canWrite" @changed="refresh" />
+              <WpsPluginSettings v-if="item.configurable && (item.key === 'wps' || item.key === 'wps_movie')" :plugin="item" :can-write="canWrite" @changed="refresh" />
             </div>
           </el-card>
         </div>

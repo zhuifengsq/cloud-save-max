@@ -58,7 +58,7 @@ async function clear() {
       </template>
       <template v-else>暂无缓存，首次搜索时读取文档</template>
     </span>
-    <el-dialog v-model="visible" title="WPS 文档搜索配置" width="min(580px, 94vw)" append-to-body :close-on-click-modal="!saving">
+    <el-dialog v-model="visible" :title="`${plugin.name}配置`" width="min(580px, 94vw)" append-to-body :close-on-click-modal="!saving">
       <el-form label-position="top" @submit.prevent="save">
         <el-form-item label="WPS 文档链接">
           <el-input v-model="documentUrl" placeholder="https://www.kdocs.cn/l/…" :disabled="saving" />
