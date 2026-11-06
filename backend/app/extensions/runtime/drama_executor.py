@@ -45,6 +45,13 @@ def _parse_size(size_str: str) -> int | None:
         return None
 
 
+def _to_size(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _validate_code_status(action: str, resp: Any) -> RetryResult:
     if not isinstance(resp, dict):
         return RetryResult(value=resp, ok=True)
@@ -437,14 +444,8 @@ class DramaTaskExecutor:
     def _filter_transfer_files(self, files: list[dict[str, Any]]) -> list[dict[str, Any]]:
         min_bytes, blocked, required, match_any = self._file_filter_rules()
         if min_bytes > 0:
-            def size(raw: dict[str, Any]) -> int:
-                try:
-                    return int(raw.get("size") or 0)
-                except (TypeError, ValueError, OverflowError):
-                    return 0
-
             before = len(files)
-            files = [file for file in files if size(file) >= min_bytes]
+            files = [file for file in files if (_to_size(file.get("size")) or 0) >= min_bytes]
             if before != len(files):
                 min_size = (self.task_data.get("addition") or {}).get("min_size")
                 self._line(f"大小过滤：移除 {before - len(files)} 个低于 {min_size} 的文件")
