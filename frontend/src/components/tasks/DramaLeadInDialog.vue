@@ -96,11 +96,26 @@ async function loadPreview() {
   state.preview = null
   try {
     state.preview = await previewTaskLeadIn(props.task.id)
+    syncLeadInSummary()
   } catch (error) {
     state.error = readLeadInErrorMessage(error, '读取引流状态失败')
   } finally {
     state.loading = false
   }
+}
+
+// 预览时网盘查重会重新确认目标目录里有没有该文件。若查重结果显示未添加，
+// 说明文件已被删除（或其他原因不在目录里），把列表「引流」列同步成「—」，
+// 后端预览同时会清掉过期记录，刷新后仍保持未添加。
+function syncLeadInSummary() {
+  const task = props.task
+  const preview = state.preview
+  if (!preview?.available || !task) return
+  const previewState = String(preview.state || '')
+  if (previewState !== 'absent' && previewState !== 'none') return
+  const current = String(task.lead_in?.state || '')
+  if (!current || current === 'none' || current === 'absent') return
+  emit('updated', { taskId: task.id, lead_in: { state: 'none', last_added_at: null } })
 }
 
 async function reloadPreviewAfterConfirm() {

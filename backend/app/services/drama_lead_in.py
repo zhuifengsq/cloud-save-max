@@ -921,7 +921,13 @@ def build_task_lead_in_preview(db: Session, task: Task) -> dict[str, Any]:
     result["state_message"] = str(inspect_data.get("message") or "")
 
     record = get_lead_in_record(db, task_id, drive_type)
-    if record is not None and record.status == "added":
+    if result["state"] == "absent":
+        # 目标目录里已经查不到该文件（例如用户在网盘手动删除）：清掉过期记录，
+        # 让任务列表的「引流」列回到「—」，最近添加时间也一并消失。
+        if record is not None:
+            db.delete(record)
+            db.commit()
+    elif record is not None and record.status == "added":
         result["last_added_at"] = normalize_api_datetime(record.updated_at)
 
     ttl = preview_token_ttl_seconds()
