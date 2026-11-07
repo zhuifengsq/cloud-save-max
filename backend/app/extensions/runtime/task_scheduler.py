@@ -295,7 +295,9 @@ def run_tmdb_cache_refresh() -> None:
 
         try:
             if only_linked:
-                result = refresh_linked_tasks(db, enabled_only=True, max_items=max_items, force=True)
+                # force=False：按各自的 expires_at 判断，没到期的剧不再重拉，
+                # 否则 6 小时一次的定时任务会把所有追剧任务无视 TTL 全部重刷一遍
+                result = refresh_linked_tasks(db, enabled_only=True, max_items=max_items, force=False)
             else:
                 result = refresh_expired_cache(db, max_items=max_items, force=True)
             deleted = purge_cold_cache(db, retention_days=retention_days)

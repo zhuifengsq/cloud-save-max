@@ -11,6 +11,13 @@ from urllib3.util.retry import Retry
 logger = logging.getLogger(__name__)
 
 
+# TMDB 对同一集同时维护“基础记录”和“各语言翻译记录”，翻译记录里的播出日期/时长常常是旧的
+# （例如 show 307853 第 6 集：zh-CN 记录 2026-11-08 且无时长，基础记录是 2026-11-07、46 分钟，
+# 而 TMDB 网站显示的就是基础记录）。请求一个 TMDB 不认识的语言码时，API 会直接返回未本地化的
+# 基础记录，用它来校正剧集事实字段。
+BASE_LANGUAGE = "xx"
+
+
 class TMDBClient:
     def __init__(self, api_key: str | None = None, *, language: str = "zh-CN"):
         self.api_key = api_key
@@ -40,10 +47,11 @@ class TMDBClient:
         if not self.is_configured():
             return None
 
-        if params is None:
-            params = {}
-
-        params.update({"api_key": self.api_key, "language": self.language, "include_adult": False})
+        params = dict(params or {})
+        params.setdefault("api_key", self.api_key)
+        # 调用方显式传入的 language 优先（拉基础记录靠它），没传才用客户端默认语言
+        params.setdefault("language", self.language)
+        params.setdefault("include_adult", False)
 
         try:
             from time import time as _now

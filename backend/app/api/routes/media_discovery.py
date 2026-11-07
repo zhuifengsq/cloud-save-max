@@ -89,12 +89,15 @@ def get_tmdb_search(
 def get_tmdb_detail(
     media_type: str,
     tmdb_id: int,
+    force: bool = Query(False, description="绕过缓存，强制从 TMDB 重新拉取"),
     db: Session = Depends(get_db),
 ) -> TMDBDetailOut:
     mt = str(media_type or "").strip().lower()
     if mt not in ("movie", "tv"):
         return TMDBDetailOut(media_type=mt or media_type, data={}, update_weekdays=[], episode_weekdays=[])
-    configured, data, update_weekdays, episode_weekdays = tmdb_detail(db, media_type=mt, tmdb_id=tmdb_id)  # type: ignore[arg-type]
+    configured, data, update_weekdays, episode_weekdays = tmdb_detail(
+        db, media_type=mt, tmdb_id=tmdb_id, force_refresh=force  # type: ignore[arg-type]
+    )
     db.commit()
     return TMDBDetailOut(
         media_type=mt,

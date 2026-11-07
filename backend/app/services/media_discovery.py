@@ -179,8 +179,11 @@ def tmdb_detail(
     *,
     media_type: MediaType,
     tmdb_id: int,
+    force_refresh: bool = False,
 ) -> tuple[bool, dict[str, Any] | None, list[int], list[int]]:
-    configured, data, update_weekdays, episode_weekdays, _row = get_tmdb_detail_cached(db, media_type=media_type, tmdb_id=tmdb_id)
+    configured, data, update_weekdays, episode_weekdays, _row = get_tmdb_detail_cached(
+        db, media_type=media_type, tmdb_id=tmdb_id, force_refresh=force_refresh
+    )
     return configured, data, update_weekdays, episode_weekdays
 
 

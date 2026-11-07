@@ -19,6 +19,7 @@ from app.models.task import Task
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.models.tmdb_setting import TMDBSetting
 from app.services.tmdb_settings import DEFAULT_TMDB_SETTING_ID, get_tmdb_runtime_config
+from app.thirdparty.tmdb_client import BASE_LANGUAGE as TMDB_BASE_LANGUAGE
 from app.thirdparty.tmdb_client import TMDBClient
 
 
@@ -330,6 +331,111 @@ def _extract_summary(details: dict[str, Any], *, media_type: MediaType) -> dict[
     }
 
 
+
+def _merge_episode_with_base(localized: dict[str, Any] | None, base: dict[str, Any]) -> dict[str, Any]:
+    """以 TMDB 基础记录为准，文字字段（剧集名/简介）优先用本地化记录。
+
+    翻译记录里的 air_date/runtime/still_path 常常是建条目时填的旧值，基础记录才是 TMDB 网站显示的那份。
+    """
+    merged = dict(base)
+    if isinstance(localized, dict):
+        for key in ("name", "overview"):
+            value = localized.get(key)
+            if isinstance(value, str) and value.strip():
+                merged[key] = value
+        for key, value in localized.items():
+            if merged.get(key) is None and value is not None:
+                merged[key] = value
+    return merged
+
+
+def _merge_tv_season_with_base(localized: Any, base: Any) -> Any:
+    if not isinstance(base, dict) or not base.get("episodes"):
+        return localized
+    if not isinstance(localized, dict) or not localized.get("episodes"):
+        return base
+    localized_episodes: dict[int, dict[str, Any]] = {}
+    for ep in localized.get("episodes") or []:
+        if not isinstance(ep, dict):
+            continue
+        try:
+            number = int(ep.get("episode_number") or 0)
+        except Exception:
+            continue
+        localized_episodes[number] = ep
+    merged_episodes: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for ep in base.get("episodes") or []:
+        if not isinstance(ep, dict):
+            continue
+        try:
+            number = int(ep.get("episode_number") or 0)
+        except Exception:
+            number = 0
+        seen.add(number)
+        merged_episodes.append(_merge_episode_with_base(localized_episodes.get(number), ep))
+    for number, ep in localized_episodes.items():
+        if number not in seen:
+            merged_episodes.append(dict(ep))
+    merged = dict(localized)
+    merged["episodes"] = merged_episodes
+    for key in ("air_date", "episode_count"):
+        if base.get(key):
+            merged[key] = base[key]
+    return merged
+
+
+def _merge_tv_details_with_base(localized: dict[str, Any], base: Any) -> dict[str, Any]:
+    if not isinstance(base, dict) or not base:
+        return localized
+    merged = dict(localized)
+    for key in (
+        "first_air_date",
+        "last_air_date",
+        "status",
+        "in_production",
+        "number_of_episodes",
+        "number_of_seasons",
+        "episode_run_time",
+        "vote_average",
+        "vote_count",
+    ):
+        if base.get(key) is not None:
+            merged[key] = base[key]
+    for key in ("last_episode_to_air", "next_episode_to_air"):
+        base_ep = base.get(key)
+        if isinstance(base_ep, dict) and base_ep:
+            merged[key] = _merge_episode_with_base(
+                localized.get(key) if isinstance(localized.get(key), dict) else None, base_ep
+            )
+    return merged
+
+
+def _season_needs_base(season: Any, *, is_latest: bool, cutoff: date) -> bool:
+    """判断某一季是否需要再拉一份 TMDB 基础记录来校正事实字段。
+
+    基础记录只在最近在播/即将播出的季里和翻译记录有差异，所以只对最新一季、以及有
+    cutoff 之后（或还缺）播出日期的季额外请求，避免每季都翻倍打 TMDB。
+    """
+    if is_latest:
+        return True
+    if not isinstance(season, dict):
+        return False
+    for ep in season.get("episodes") or []:
+        if not isinstance(ep, dict):
+            continue
+        air = str(ep.get("air_date") or "").strip()[:10]
+        if not air:
+            return True
+        try:
+            aired = date.fromisoformat(air)
+        except ValueError:
+            continue
+        if aired >= cutoff:
+            return True
+    return False
+
+
 def _get_runtime_tmdb_config(db: Session) -> tuple[bool, str, str, str]:
     with db.no_autoflush:
         setting = db.get(TMDBSetting, DEFAULT_TMDB_SETTING_ID)
@@ -358,6 +464,9 @@ def _fetch_tmdb_detail(
         details = client.get_movie_details(tmdb_id)
     else:
         details = client.get_tv_details(tmdb_id)
+        if details:
+            # 基础记录里的播出进度/集数比本地化记录新，事实字段以它为准
+            details = _merge_tv_details_with_base(details, client.get_tv_details(tmdb_id, language=TMDB_BASE_LANGUAGE))
     if not details:
         return None, [], []
 
@@ -391,8 +500,13 @@ def _fetch_tmdb_detail(
 
         seasons_full: list[dict[str, Any]] = []
         failed: list[int] = []
+        base_cutoff = date.today() - timedelta(days=45)
+        latest_season = season_numbers[-1] if season_numbers else None
         for sn in season_numbers:
             season = client.get_tv_season(tmdb_id, int(sn))
+            if _season_needs_base(season, is_latest=int(sn) == latest_season, cutoff=base_cutoff):
+                base_season = client.get_tv_season(tmdb_id, int(sn), language=TMDB_BASE_LANGUAGE)
+                season = _merge_tv_season_with_base(season, base_season)
             if isinstance(season, dict) and season:
                 seasons_full.append(season)
             else:
@@ -777,8 +891,17 @@ def purge_cold_cache(db: Session, *, retention_days: int = 60) -> int:
         select(1).where(and_(Task.tmdb_id == TMDBMediaCache.tmdb_id, Task.tmdb_media_type == TMDBMediaCache.media_type))
     )
     stmt = delete(TMDBMediaCache).where(
-        TMDBMediaCache.last_accessed_at.is_not(None),
-        TMDBMediaCache.last_accessed_at < cutoff,
+        or_(
+            and_(TMDBMediaCache.last_accessed_at.is_not(None), TMDBMediaCache.last_accessed_at < cutoff),
+            # 从未被访问过的孤儿缓存（任务删了、换过语言留下的行）也要能清掉，
+            # 否则 last_accessed_at 永远是 NULL，它们会一直占着 payload。
+            and_(
+                TMDBMediaCache.expires_at.is_not(None),
+                TMDBMediaCache.expires_at < cutoff,
+                TMDBMediaCache.fetched_at.is_not(None),
+                TMDBMediaCache.fetched_at < cutoff,
+            ),
+        ),
         ~referenced,
     )
     res = db.execute(stmt)

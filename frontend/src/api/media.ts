@@ -58,8 +58,10 @@ export async function searchTMDB(params: { q: string; type?: 'multi' | 'movie' |
 
 export async function fetchTMDBDetail(mediaType: 'movie' | 'tv', id: number, opts?: { force?: boolean }) {
   const mid = Number(id) || 0
+  const forceParams = opts?.force ? { params: { force: 1 } } : undefined
+
   if (mid <= 0) {
-    const response = await http.get<TMDBDetail>(`/media/${mediaType}/${id}`)
+    const response = await http.get<TMDBDetail>(`/media/${mediaType}/${id}`, forceParams)
     return response.data
   }
 
@@ -74,7 +76,8 @@ export async function fetchTMDBDetail(mediaType: 'movie' | 'tv', id: number, opt
   }
 
   const p = (async () => {
-    const response = await http.get<TMDBDetail>(`/media/${mediaType}/${mid}`)
+    // 手动“刷新追剧数据”带 force：后端要收到 force 参数才会绕过 DB 缓存重新打 TMDB
+    const response = await http.get<TMDBDetail>(`/media/${mediaType}/${mid}`, forceParams)
     return response.data
   })()
 

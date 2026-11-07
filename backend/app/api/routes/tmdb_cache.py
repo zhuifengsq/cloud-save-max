@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
@@ -49,11 +49,16 @@ router = APIRouter()
 _DISPLAY_TZ = ZoneInfo("Asia/Shanghai")
 
 
+_SERVER_TZ = datetime.now().astimezone().tzinfo
+
+
 def _as_display_tz(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        # 库里存的是 datetime.now()（服务器本地时间的 naive 值），按服务器本地时区解释，
+        # 不能再当 UTC 处理，否则缓存管理页上的时间会整体偏移一个时区（+8 小时那 8 小时）
+        dt = dt.replace(tzinfo=_SERVER_TZ)
     return dt.astimezone(_DISPLAY_TZ)
 
 
