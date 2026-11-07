@@ -430,7 +430,12 @@ class DramaLeadInMixin:
 
     # ==================== 目录处理 ====================
     def _lead_in_normalize_dir_path(self, dir_path: str) -> Tuple[str, Optional[Dict[str, Any]]]:
-        """归一保存目录路径，拒绝根目录/非法路径"""
+        """归一保存目录路径，拒绝根目录/非法路径
+
+        只丢弃空路径段（重复的 /）与 .，路径段内的空白原样保留：网盘目录名可以
+        带首尾空格（例如 `/自动转存/ 走马 | 上任`），若在这里 trim 每段就会把
+        用户真实存在的目录拼成另一个路径，导致「保存目录不存在」。
+        """
         raw = str(dir_path or "").strip().replace("\\", "/")
         if not raw:
             return "", self._lead_in_error("LEAD_IN_DIR_INVALID", "请先选择任务保存目录")
@@ -439,14 +444,51 @@ class DramaLeadInMixin:
         parts: List[str] = []
         for part in raw.split("/"):
             text = part.strip()
-            if not text or text == ".":
+            if not text:
+                # 重复的 /（或纯空白段）视为分隔符，直接合并
+                continue
+            if text == ".":
                 continue
             if text == "..":
                 return "", self._lead_in_error("LEAD_IN_DIR_INVALID", "保存目录不能包含上级路径")
-            parts.append(text)
+            parts.append(part)
         if not parts:
             return "", self._lead_in_error("LEAD_IN_DIR_INVALID", "不能使用网盘根目录作为保存目录")
         return "/" + "/".join(parts), None
+
+    @staticmethod
+    def _lead_in_path_segments(path: str) -> List[str]:
+        """按 / 切分路径并丢弃空段，用于逐级定位目录"""
+        return [
+            part
+            for part in str(path or "").replace("\\", "/").split("/")
+            if part
+        ]
+
+    @staticmethod
+    def _lead_in_dir_name_matches(left: str, right: str) -> bool:
+        """比较目录/文件名：先精确比较，再忽略首尾空白比较
+
+        网盘上真实目录名可能带首尾空格（用户新建目录时手输），而任务保存路径
+        可能被手输成不带空格的形式；两侧只差首尾空格时仍视为同一目录。
+        """
+        source = str(left or "")
+        target = str(right or "")
+        if source == target:
+            return True
+        source = source.strip()
+        target = target.strip()
+        return bool(source) and source == target
+
+    @classmethod
+    def _lead_in_item_dir_name(cls, item: Dict[str, Any]) -> str:
+        """取目录列表项的文件名，优先使用完整路径的末段"""
+        if not isinstance(item, dict):
+            return ""
+        path = str(item.get("path") or item.get("file_path") or "").rstrip("/")
+        if path:
+            return path.rsplit("/", 1)[-1]
+        return str(item.get("file_name") or item.get("server_filename") or "")
 
     def _lead_in_target_dir(self, target: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
         """取出目标目录信息，返回 (目录, 错误)"""

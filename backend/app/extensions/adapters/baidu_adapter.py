@@ -96,6 +96,8 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
     SUPPORTS_LEAD_IN_OWN_FILE = True
     # 是否支持浏览本账号目录（设置页选择「本账号文件」素材时使用）
     SUPPORTS_LEAD_IN_OWN_BROWSE = True
+    # 目录列表接口单页条数（分页拉取全量时使用）
+    _API_LIST_PAGE_SIZE = 200
 
     CONFIG_FORMAT = "raw"
     default_config = {
@@ -483,8 +485,11 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
 
     # ==================== 文件列表操作 ====================
     def _api_list(self, remotepath: str) -> Dict:
-        """调用文件列表 API"""
+        """调用文件列表 API（首页，兼容既有调用）"""
+        return self._api_list_page(remotepath, 1)
 
+    def _api_list_page(self, remotepath: str, page: int = 1) -> Dict:
+        """调用文件列表 API 的指定页"""
         url = PanNode.url(PanNode.FILE)
         params = {
             "clienttype": "0",
@@ -494,12 +499,38 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             "dp-logid": '81153300882182800128',
             "order": "time",
             "desc": "1",
-            "num": "200",
-            "page": "1",
+            "num": str(self._API_LIST_PAGE_SIZE),
+            "page": str(max(1, int(page or 1))),
             "dir": remotepath,
         }
         resp = self._request("POST", url, params=params)
         return self._check_response(resp.json())
+
+    def _api_list_all(self, remotepath: str, max_pages: int = 20) -> Dict:
+        """分页拉取目录全部子项
+
+        单个目录的子项可能超过单页上限（200），只读首页会漏掉目标目录，
+        从而误报「保存目录不存在」，因此这里按页合并直到取完。
+        """
+        items: List[Dict] = []
+        first: Optional[Dict] = None
+        page = 1
+        while page <= max_pages:
+            info = self._api_list_page(remotepath, page)
+            if not isinstance(info, dict):
+                break
+            if first is None:
+                first = info
+            if self._lead_in_list_errno(info):
+                break
+            chunk = [item for item in (info.get("list") or []) if isinstance(item, dict)]
+            items.extend(chunk)
+            if len(chunk) < self._API_LIST_PAGE_SIZE:
+                break
+            page += 1
+        result = dict(first or {})
+        result["list"] = items
+        return result
 
     def _api_makedir(self, directory: str) -> Dict:
         """调用创建目录 API"""
@@ -1559,42 +1590,106 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             f"访问素材分享失败：{message or f'errno={errno}'}",
         )
 
+    def _lead_in_list_errno(self, info: Any) -> int:
+        """取目录列表接口的错误码"""
+        if not isinstance(info, dict):
+            return -1
+        return self._lead_in_to_int(info.get("errno") or info.get("error_code"), 0)
+
+    def _lead_in_dir_read_error(self, errno: int, path: str) -> Dict[str, Any]:
+        """把目录列表错误码映射成引流错误"""
+        if errno in (-9, 31066):
+            return self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
+        return self._lead_in_error(
+            "LEAD_IN_FAILED",
+            f"读取保存目录失败：{self._get_error_message(errno)}",
+        )
+
+    def _lead_in_pick_dir_item(
+        self, items: Any, parent_path: str, name: str
+    ) -> Optional[Dict[str, Any]]:
+        """在父目录列表中挑选目标目录项：先精确匹配完整路径，再容忍首尾空白"""
+        parent = str(parent_path or "/").rstrip("/")
+        child_path = f"{parent}/{name}" if parent else f"/{name}"
+        tolerant: Optional[Dict[str, Any]] = None
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("path") or "").rstrip("/") == child_path:
+                return item
+            if tolerant is None and self._lead_in_dir_name_matches(
+                self._lead_in_item_dir_name(item), name
+            ):
+                tolerant = item
+        return tolerant
+
+    def _lead_in_locate_dir_chain(
+        self, path: str
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """逐级定位目录并返回网盘真实路径（父目录列表读取失败时兜底）"""
+        segments = self._lead_in_path_segments(path)
+        current = "/"
+        for index, segment in enumerate(segments):
+            try:
+                info = self._api_list_all(current)
+            except Exception as exc:
+                logger.error("[Baidu] 逐级定位引流目标目录失败: %s", exc)
+                return "", self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
+            errno = self._lead_in_list_errno(info)
+            if errno:
+                return "", self._lead_in_dir_read_error(errno, path)
+            found = self._lead_in_pick_dir_item(info.get("list"), current, segment)
+            if found is None:
+                return "", self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
+            if str(found.get("isdir")) != "1":
+                if index == len(segments) - 1:
+                    return "", self._lead_in_error("LEAD_IN_DIR_INVALID", f"保存路径不是文件夹：{path}")
+                return "", self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
+            item_path = str(found.get("path") or "").rstrip("/")
+            if not item_path:
+                item_name = self._lead_in_item_dir_name(found)
+                item_path = f"{current.rstrip('/')}/{item_name}" if current != "/" else f"/{item_name}"
+            current = item_path
+        return current or "/", None
+
     def lead_in_resolve_dir(self, dir_path: str) -> Dict[str, Any]:
-        """按任务保存目录定位百度目标文件夹"""
+        """按任务保存目录定位百度目标文件夹
+
+        任务保存路径可能是手输的，网盘上的真实目录名可能与它只差首尾空格
+        （例如保存路径为 `/自动转存/走马 | 上任`，网盘目录为
+        `/自动转存/ 走马 | 上任`）。这里先按父目录列表精确定位，匹配不到时
+        再忽略首尾空白匹配，并用网盘返回的真实路径继续后续读写。
+        """
         path, error = self._lead_in_normalize_dir_path(dir_path)
         if error:
             return error
         if not self._session:
             return self._lead_in_error("LEAD_IN_FAILED", "百度网盘客户端未初始化，请先保存有效账号")
         parent = path.rsplit("/", 1)[0] or "/"
+        name = path.rsplit("/", 1)[-1]
+        folder_path = path
         try:
-            info = self._api_list(parent)
+            info = self._api_list_all(parent)
         except Exception as exc:
             logger.error("[Baidu] 读取引流目标目录父目录失败: %s", exc)
             return self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
-        if not isinstance(info, dict):
-            return self._lead_in_error("LEAD_IN_FAILED", "读取保存目录失败：网盘返回异常")
-        errno = self._lead_in_to_int(info.get("errno") or info.get("error_code"), 0)
+        errno = self._lead_in_list_errno(info)
         if errno:
-            if errno in (-9, 31066):
+            if errno not in (-9, 31066):
+                return self._lead_in_dir_read_error(errno, path)
+            # 父目录本身也读不到时，按目录名（容忍首尾空白）逐级定位真实路径
+            folder_path, chain_error = self._lead_in_locate_dir_chain(path)
+            if chain_error:
+                return chain_error
+        else:
+            folder = self._lead_in_pick_dir_item(info.get("list"), parent, name)
+            if folder is None:
                 return self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
-            return self._lead_in_error(
-                "LEAD_IN_FAILED",
-                f"读取保存目录失败：{self._get_error_message(errno)}",
-            )
-        folder = None
-        for item in info.get("list") or []:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("path") or "").rstrip("/") == path:
-                folder = item
-                break
-        if folder is None:
-            return self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
-        if str(folder.get("isdir")) != "1":
-            return self._lead_in_error("LEAD_IN_DIR_INVALID", f"保存路径不是文件夹：{path}")
+            if str(folder.get("isdir")) != "1":
+                return self._lead_in_error("LEAD_IN_DIR_INVALID", f"保存路径不是文件夹：{path}")
+            folder_path = str(folder.get("path") or "").rstrip("/") or path
         try:
-            listing = self.ls_dir(path, max_items=0)
+            listing = self.ls_dir(folder_path, max_items=0)
         except Exception as exc:
             logger.error("[Baidu] 读取引流目标目录失败: %s", exc)
             return self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
@@ -1614,10 +1709,10 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             for item in raw_items
             if isinstance(item, dict)
         ]
-        name = path.rsplit("/", 1)[-1]
+        dir_name = folder_path.rsplit("/", 1)[-1]
         return self._lead_in_ok(
             {
-                "dir": {"fid": path, "path": path, "name": name},
+                "dir": {"fid": folder_path, "path": folder_path, "name": dir_name},
                 "entries": entries,
             }
         )

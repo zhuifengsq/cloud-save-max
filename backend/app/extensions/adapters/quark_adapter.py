@@ -663,8 +663,83 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             return True
         return response.get("code") in (41006, 41008)
 
+    @classmethod
+    def _lead_in_pick_quark_entry(
+        cls, items: Any, name: str
+    ) -> Optional[Dict[str, Any]]:
+        """在目录列表里挑选目标项：先精确匹配名称，再容忍首尾空白"""
+        tolerant: Optional[Dict[str, Any]] = None
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            item_name = cls._lead_in_item_dir_name(item)
+            if item_name == name:
+                return item
+            if tolerant is None and cls._lead_in_dir_name_matches(item_name, name):
+                tolerant = item
+        return tolerant
+
+    def _lead_in_locate_dir_chain(
+        self, path: str
+    ) -> Tuple[Optional[Dict[str, Any]], str, Optional[Dict[str, Any]]]:
+        """逐级枚举目录定位目标文件夹（精确路径匹配失败时兜底，容忍首尾空白）
+
+        返回 (目录项, 网盘真实路径, 错误)；真实路径用于后续按 fid 读写时
+        回填进目录描述，避免把用户手输的路径当作真实路径。
+        """
+        segments = self._lead_in_path_segments(path)
+        fid = "0"
+        current = "/"
+        folder: Optional[Dict[str, Any]] = None
+        for index, segment in enumerate(segments):
+            try:
+                listing = self.ls_dir(fid, max_items=0)
+            except Exception as exc:
+                logger.error("[Quark] 逐级定位引流目标目录失败: %s", exc)
+                return None, "", self._lead_in_error(
+                    "LEAD_IN_FAILED", f"定位保存目录失败：{exc}"
+                )
+            raw_items = None
+            if isinstance(listing, dict):
+                data = listing.get("data")
+                if isinstance(data, dict) and isinstance(data.get("list"), list):
+                    raw_items = data.get("list")
+            if not isinstance(raw_items, list):
+                return None, "", self._lead_in_error(
+                    "LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}"
+                )
+            folder = self._lead_in_pick_quark_entry(raw_items, segment)
+            if folder is None:
+                return None, "", self._lead_in_error(
+                    "LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}"
+                )
+            if (
+                folder.get("dir") is False
+                or folder.get("is_dir") is False
+                or str(folder.get("file_type") or "") == "1"
+            ):
+                if index == len(segments) - 1:
+                    return None, "", self._lead_in_error(
+                        "LEAD_IN_DIR_INVALID", f"保存路径不是文件夹：{path}"
+                    )
+                return None, "", self._lead_in_error(
+                    "LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}"
+                )
+            fid = str(folder.get("fid") or "").strip()
+            if not fid:
+                return None, "", self._lead_in_error(
+                    "LEAD_IN_DIR_INVALID", f"保存目录无法精确定位：{path}"
+                )
+            item_name = self._lead_in_item_dir_name(folder)
+            current = f"{current.rstrip('/')}/{item_name}" if current != "/" else f"/{item_name}"
+        return folder, current or "/", None
+
     def lead_in_resolve_dir(self, dir_path: str) -> Dict[str, Any]:
-        """按任务保存目录定位夸克目标文件夹"""
+        """按任务保存目录定位夸克目标文件夹
+
+        任务保存路径可能是手输的，网盘上的真实目录名可能与它只差首尾空格；
+        精确路径匹配失败时逐级枚举目录兜底定位，并用真实路径继续后续操作。
+        """
         path, error = self._lead_in_normalize_dir_path(dir_path)
         if error:
             return error
@@ -681,6 +756,11 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             if file_path == path:
                 folder = item
                 break
+        if folder is None:
+            folder, chain_path, chain_error = self._lead_in_locate_dir_chain(path)
+            if chain_error:
+                return chain_error
+            path = chain_path or path
         if folder is None:
             return self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
         fid = str(folder.get("fid") or "").strip()
