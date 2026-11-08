@@ -16,7 +16,7 @@
 > presenter 变纯函数、列表查询条数与任务数无关（回归测试计数锁定）。
 > 非阻塞小项② 前端契约 golden 已完成（方案 §10.19，2026-11-09）：后端模型字段/顺序、`frontend/src/types/tasks.ts` 字段集合、
 > SSE 逐字节线格式、错误体全部落盘为 `backend/regression_tests/golden/frontend_contract.json`，两侧任一方改动不更新 golden 即失败。
-> 当前基线：回归 **505 passed / 2 skipped**、分层违规 **0**、deferred 84、250 模块，
+> 当前基线：回归 **509 passed / 2 skipped**、分层违规 **0**、deferred 84、250 模块，
 > `backend/.layering-baseline.json` = `{"violations":0,"deferred_imports":84,"cycles":0}`。
 > 非阻塞小项③ 3 篇 ADR 已完成（方案 §10.20，2026-11-09）：[0001 TMDB 写路径例外](adr/0001-tmdb-cache-writer-isolation.md)、
 > [0002 准入保留在调用点](adr/0002-task-admission-stays-at-call-sites.md)、
@@ -69,7 +69,7 @@
 | schema 漂移 | `python scripts/check_schema_drift.py --ignore-file scripts/schema_drift_allowlist.txt` | `drift=0`（白名单只含 10 张已确认遗留表；`model_only` 永不豁免） |
 | 迁移预检 | `python scripts/migration_preflight.py` | 报告 current/head/pending、库体积、WAL、freelist、最近备份 |
 | 备份+校验 | `python scripts/backup_db.py --keep 5` | integrity_check/quick_check 均为 ok |
-| 测试 | `cd backend && python -m pytest tests regression_tests -q` | 当前基线 505 passed, 2 skipped |
+| 测试 | `cd backend && python -m pytest tests regression_tests -q` | 当前基线 509 passed, 2 skipped |
 
 CI 侧已有三个 workflow：`layering-gate`（分层预算）、`db-schema-gate`（空库跑完整迁移链→drift→preflight）、
 `docker-publish`（镜像构建与 `regression_tests`）。`backend/tests` 的 299 项目前只在本地跑。

@@ -25,7 +25,8 @@ function cleanTitle(title: string): string {
 //   🔥「后会友期 更3期」4K                    -> { title: '后会友期', episodeText: '更3期' }
 //   尚公主 (2026) 【更23集】                  -> { title: '尚公主', episodeText: '更23集' }
 const MEDIA_TYPE_WORDS = '国剧|美剧|日剧|韩剧|港剧|台剧|泰剧|英剧|电影|动漫|综艺|纪录片'
-const EPISODE_PHRASE = /(?:首播)?更新(?:至)?\s*\d+\s*(?:\/\s*\d+)?\s*[集期]|更(?:新)?\s*\d+\s*(?:\/\s*\d+)?\s*[集期]|全\s*\d+\s*[集期]/i
+// 期数支持小数写法（如「我家那闺女 更11.8期」），集数仍按整数处理。
+const EPISODE_PHRASE = /(?:首播)?更新(?:至)?\s*\d+(?:\.\d+)?\s*(?:\/\s*\d+)?\s*[集期]|更(?:新)?\s*\d+(?:\.\d+)?\s*(?:\/\s*\d+)?\s*[集期]|全\s*\d+\s*[集期]/i
 const QUALITY_WORDS = /(?:4K|8K|2K|2160P|1080P|720P|HDR10?|杜比|蓝光|高清|超清)/gi
 
 export function parseWpsHeadline(raw: string): { title: string; episodeText: string } {
@@ -51,7 +52,7 @@ export function parseWpsHeadline(raw: string): { title: string; episodeText: str
 // 热播更新统一成「更N集 / 更N期」：更新30/30集 -> 更30集（取前面那个数字）；全30集保持不变。
 function normalizeHotEpisode(text: string): string {
   const compact = text.replace(/\s+/g, '')
-  const match = compact.match(/^(?:首播)?(?:更新(?:至)?|更(?:新)?)(\d+)(?:\/\d+)?([集期])$/)
+  const match = compact.match(/^(?:首播)?(?:更新(?:至)?|更(?:新)?)(\d+(?:\.\d+)?)(?:\/\d+)?([集期])$/)
   return match ? '更' + match[1]! + match[2]! : compact
 }
 

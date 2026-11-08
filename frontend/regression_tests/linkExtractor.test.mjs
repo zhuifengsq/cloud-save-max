@@ -5,7 +5,7 @@ import ts from 'typescript'
 
 const source = readFileSync(new URL('../src/utils/linkExtractor.ts', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } })
-const { extractTable, filterQuark, organizeDualDisk, generateHotUpdates } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
+const { extractTable, filterQuark, organizeDualDisk, generateHotUpdates, parseWpsHeadline } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
 
 test('table extracts a title with multiple drives and strips year and progress', () => {
   assert.deepEqual(extractTable('尚公主 (2026) 【更23集】\n百度链接：https://pan.baidu.com/s/abc?pwd=1111\n夸克链接：https://pan.quark.cn/s/def'), [
@@ -44,6 +44,16 @@ test('hot updates remove links and years, deduplicate, keep prefix and suffix', 
   const result = generateHotUpdates('尚公主 (2026) 【更23集】\nhttps://pan.quark.cn/s/a\n尚公主 (2026) 【更23集】\n小城良方【更18集】', '今日更新', '汇总地址')
   assert.equal(result.count, 2)
   assert.equal(result.text, '今日更新\n\n尚公主【更23集】\n小城良方【更18集】\n汇总地址')
+})
+
+test('decimal variety-show episode numbers are recognized in table and hot updates', () => {
+  assert.deepEqual(parseWpsHeadline('🔥「我家那闺女 更11.8期」4K'), { title: '我家那闺女', episodeText: '更11.8期' })
+  assert.deepEqual(extractTable('🔥「我家那闺女 更11.8期」4K\n百度链接：https://pan.baidu.com/s/a'), [
+    { title: '我家那闺女', url: 'https://pan.baidu.com/s/a' },
+  ])
+  const hot = generateHotUpdates('🔥「我家那闺女 更11.8期」4K', '', '')
+  assert.equal(hot.count, 1)
+  assert.equal(hot.text, '我家那闺女【更11.8期】')
 })
 
 test('empty and unrelated input produces no fabricated resources', () => {

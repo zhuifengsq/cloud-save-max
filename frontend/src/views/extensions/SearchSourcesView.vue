@@ -391,8 +391,10 @@ class MySearchPlugin(BaseSearchPlugin):
       <el-empty v-if="!test.loading && !test.results.length" description="暂无搜索结果" />
       <div v-else class="test-results">
         <div v-for="(item, index) in test.results" :key="`${item.shareurl}-${index}`" class="test-result">
-          <strong>{{ item.taskname }}</strong>
-          <span>{{ item.source || '' }}</span>
+          <div class="test-result__head">
+            <strong>{{ item.taskname }}</strong>
+            <span v-if="item.source" class="test-result__source">{{ item.source }}</span>
+          </div>
           <div class="test-result__link">{{ item.shareurl }}</div>
         </div>
       </div>
@@ -455,6 +457,8 @@ class MySearchPlugin(BaseSearchPlugin):
 .test-message { color: var(--el-text-color-secondary); }
 .test-results { max-height: 48vh; overflow-y: auto; display: grid; gap: 10px; }
 .test-result { padding: 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 10px; }
+.test-result__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.test-result__source { padding: 1px 8px; border-radius: 999px; background: var(--el-fill-color-light); color: var(--el-text-color-secondary); font-size: 11px; line-height: 18px; }
 .test-result__link { margin-top: 6px; overflow-wrap: anywhere; color: var(--el-color-primary); }
 @media (max-width: 700px) {
   .page-heading, .tab-heading, .source-card__main { align-items: flex-start; }

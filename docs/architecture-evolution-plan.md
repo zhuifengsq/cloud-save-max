@@ -1476,6 +1476,29 @@ row = db.scalar(lookup)
 
 **用户侧动作**：修复只在工作区，正在运行的后端进程仍加载旧代码，**需要重启后端**（本地 `uvicorn` 或容器）才生效。
 
+### §10.23 WPS 搜索源：链接粘连与重复结果修复（2026-11-09）
+
+**现象**（用户在「搜索源管理 → WPS 文档搜索 → 测试搜索」输入「嫁金钗」）：结果里出现一条 `https://pan.quark.cn/s/f74735be7943夸克和谐太快建议使用百度云` —— 中文提示被当成链接的一部分，且与同一部剧的正常夸克链接重复；标题后的来源名也直接粘在标题文字上。
+
+**根因两处**
+
+1. 后端 `app/application/wps_document_search.py` 的 `_share_link()` 只校验 `path.startswith('/s/')`，任何跟在共享码后面的中文都会被保留；文档里同一段文字既提供了 `mark.href`（干净）又提供了正则抽取的 URL（粘连），于是同一分享产出两条记录。
+2. 前端 `frontend/src/views/extensions/SearchSourcesView.vue` 的测试结果把 `item.source`（插件名）与标题放在同一个行内块里，没有间距与分隔——看起来像标题被追加了「WPS 文档搜索」。
+
+**修复**
+
+- `_share_link()` 改为**按共享码重建地址**：`SHARE_PATH = re.compile(r'^/s/([A-Za-z0-9_-]+)')` 取 id，只保留 `PASSCODE_QUERY = {'pwd','password','passcode'}` 且值匹配 `[A-Za-z0-9]{1,16}` 的查询参数（`parse_qsl` + `urlencode` + `urlunsplit`），丢弃粘连文字、其它参数与 fragment。归一化后重复链接自然落到 `seen` 去重。
+- 前端结果头部改为 `div.test-result__head`（flex + gap），来源名渲染为 `.test-result__source` 药丸标签。
+
+**证据（真实文档，非构造数据）**
+
+- 修复前对线上文档（4608 个 block）实测：`parse_document` 得到 1901 行，含那条粘连链接。
+- 修复后：1900 行；用旧实现做基线逐条比对——**旧实现独有 1 条，正是粘连那条；新实现没有新增任何 URL，也没有丢失任何非 pwd 参数**（说明归一化没有误伤 1900 条里的其它分享）。
+
+**护栏**：新增 `backend/regression_tests/test_wps_link_normalize.py`（4 项）——粘连中文剥离、`pwd` 保留而其它参数丢弃、尾随标点/非分享路径拒绝、同段文字的两种 URL 变体折叠为一行。
+
+**验证**：`python -m pytest tests regression_tests -q` → **509 passed, 2 skipped**；`check_layering.py --fail-on 0` → `violations=0 cycles=0`；前端用 `@vue/compiler-sfc` 编译该 SFC（template + scoped style）通过——本机只有 Node 18，`vite build`（vite 8 需 Node 20+ 的全局 `CustomEvent`）无法在此环境跑通，需在 Node 20+ 环境或 `pnpm dev` 下确认。
+
 ---
 ## 附录 A：现状 → 目标目录映射（可直接当搬迁清单）
 

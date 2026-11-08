@@ -8,7 +8,7 @@ import time
 import unicodedata
 import uuid
 from datetime import datetime
-from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 from cachetools import LRUCache
@@ -103,16 +103,28 @@ def _document_blocks(node: dict):
             yield from _document_blocks(child)
 
 
+SHARE_PATH = re.compile(r'^/s/([A-Za-z0-9_-]+)')
+PASSCODE_QUERY = {'pwd', 'password', 'passcode'}
+
+
 def _share_link(raw_url: str):
-    url = raw_url.rstrip('。，,;；)）')
+    url = raw_url.strip().rstrip('。，,;；)）]】}>')
     try:
         parsed = urlsplit(url)
     except ValueError:
         return None
     drive = DRIVES.get(parsed.netloc)
-    if parsed.scheme in {'http', 'https'} and drive and parsed.path.startswith('/s/'):
-        return {'drive': drive, 'url': url}
-    return None
+    if parsed.scheme not in {'http', 'https'} or not drive:
+        return None
+    match = SHARE_PATH.match(parsed.path)
+    if not match:
+        return None
+    # 文档里的写法常见「链接后紧跟一句提示」（如 https://pan.quark.cn/s/xxx夸克和谐太快…），
+    # 直接取整段会把中文说明当成链接，也会让同一分享产生多条重复结果；
+    # 因此按共享码重建地址，只保留分享码与提取码参数。
+    query = [(key, value) for key, value in parse_qsl(parsed.query)
+             if key in PASSCODE_QUERY and re.fullmatch(r'[A-Za-z0-9]{1,16}', value)]
+    return {'drive': drive, 'url': urlunsplit((parsed.scheme, parsed.netloc, '/s/' + match.group(1), urlencode(query), ''))}
 
 
 def _with_passcode(url: str, passcode: str) -> str:
