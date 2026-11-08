@@ -193,6 +193,4 @@ CI 门禁：分层方向（`scripts/check_layering.py`）、schema 漂移（`scr
 
 如果你觉得这个项目对你有用，可以考虑请我喝杯咖啡或者给我一个⭐️。谢谢你的支持！
 
-| 微信 | 支付宝 |
-| ---- | ------ |
-| ![微信收款码](assets/images/微信收款码.png) | ![支付宝收款码](assets/images/支付宝收款码.jpg) |
+
