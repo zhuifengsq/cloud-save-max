@@ -3,9 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import NOTIFY_READ, NOTIFY_WRITE
-from app.db.session import get_db, transaction
+from app.application.container import get_db, transaction
 from app.schemas.notification import NotificationConfigOut, NotificationConfigUpdateIn, NotificationTestIn, NotificationTestOut
 from app.application import audit
 from app.application.notifications import legacy_notify

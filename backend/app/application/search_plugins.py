@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.application.container import resource_search_sources_repo
 from app.core.errors import bad_request, not_found
-from app.infrastructure.search.base import BaseSearchPlugin
+from app.application.container import search_plugin_base as _acc_BaseSearchPlugin; BaseSearchPlugin = _acc_BaseSearchPlugin()
 
 
 logger = logging.getLogger(__name__)

@@ -4,7 +4,7 @@
 后台线程里，出问题无法判断「谁该为这条写入负责」。S3 把 **请求级** 提交全部上移之后，
 剩下的提交点不是"没来得及改"，而是四类有意为之的边界：
 
-1. `infra`：`app/db/session.py` 里 commit 原语自身的实现（commit_with_locked_retry /
+1. `infra`：`app/infrastructure/persistence/session.py`（S5 前为 `app/db/session.py`）里 commit 原语自身的实现（commit_with_locked_retry /
    end_read_tx），是"提供提交能力的人"，不算调用方。
 2. `app-lifecycle`：`app/main.py` 的 lifespan 初始化（权限种子、执行记录清理）、
    `app/scripts/*` 的运维脚本：进程级一次性写入，没有请求上下文可依附。
@@ -28,7 +28,7 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 # file(相对 app/) -> (预算, 归属类别, 为什么必须由它提交)
 COMMIT_BUDGET: dict[str, tuple[int, str, str]] = {
-    "db/session.py": (1, "infra", "commit_with_locked_retry 的实现本体"),
+    "infrastructure/persistence/session.py": (1, "infra", "commit_with_locked_retry 的实现本体"),
     "core/runtime/tx.py": (1, "infra", "end_read_tx 的实现本体（platform 层，零 ORM 依赖）"),
     "main.py": (2, "app-lifecycle", "lifespan: 权限种子初始化、启动时执行记录清理"),
     "scripts/ensure_admin.py": (1, "app-lifecycle", "运维脚本：创建管理员后落盘"),
@@ -47,16 +47,15 @@ TOTAL_BUDGET = 95
 # 允许直接实例化 SessionLocal 的文件（旁路会话必须登记理由；路由层只允许 SSE 流）。
 SESSION_LOCAL_ALLOWED: dict[str, str] = {
     "application/container.py": "容器 db_session() 的唯一出口",
-    "db/session.py": "SessionLocal 定义处",
+    "infrastructure/persistence/session.py": "SessionLocal 定义处",
     "main.py": "lifespan 启动期写入",
     "scripts/ensure_admin.py": "运维脚本",
     "scripts/init_db.py": "运维脚本",
     "infrastructure/scheduling/task_scheduler.py": "后台调度任务，无请求会话可依附",
     "infrastructure/notifications/telegram_bot_manager.py": "轮询线程，无请求会话可依附",
     "application/share_preview_batch.py": "_short_tx 短事务，刻意与调用方读事务隔离",
-    "application/resource_search.py": "搜索插件后台线程",
     "api/routes/tasks_stream.py": "SSE 生成器跨越请求生命周期，需独立会话",
-    "core/deps.py": "get_current_user_scoped 的独立会话",
+    "api/deps.py": "get_current_user_scoped 的独立会话（S5 从 core/deps.py 迁入）",
 }
 
 
@@ -105,7 +104,7 @@ def test_routes_have_no_raw_commit() -> None:
         if rel.startswith("api/routes/")
     }
     assert offenders == {}, (
-        "路由层出现裸 db.commit()，请改用 app.db.session 的 commit()/transaction()："
+        "路由层出现裸 db.commit()，请改用 app.infrastructure.persistence.session 的 commit()/transaction()："
         f"{offenders}"
     )
 

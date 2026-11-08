@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.tmdb_setting import TMDBSetting
+from app.infrastructure.persistence.models.tmdb_setting import TMDBSetting
 
 DEFAULT_TMDB_SETTING_ID = 1
 

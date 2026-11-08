@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
-from app.core.deps import load_user_roles_permissions
+from app.api.deps import load_user_roles_permissions
 from app.core.errors import ApiError
 from app.core.settings import settings
-from app.db.session import commit, get_db
+from app.application.container import commit, get_db
 from app.schemas.auth import LoginOut, MeOut
 from app.schemas.setup import SetupAdminIn, SetupStatusOut
 from app.application import audit

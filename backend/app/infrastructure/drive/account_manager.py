@@ -11,7 +11,7 @@ from app.core.runtime.ttl_cache import TtlCache
 from app.core.settings import settings
 from app.infrastructure.drive.factory import AccountManager
 from app.infrastructure.drive.adapter_registry import AdapterRegistry
-from app.models.drive_account import DriveAccount
+from app.infrastructure.persistence.models.drive_account import DriveAccount
 
 # 账号快照：低频写、高频读的配置类数据。缓存的是「已经解析成适配器入参」的纯数据，
 # 不缓存 ORM 实例（会话一关就失效，缓存 ORM 会跨会话误用）。

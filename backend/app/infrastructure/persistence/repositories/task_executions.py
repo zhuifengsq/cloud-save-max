@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models.task_execution import TaskExecution
+from app.infrastructure.persistence.models.task_execution import TaskExecution
 
 
 def list_stale_execution_ids(db: Session, *, task_id: int, limit: int) -> list[Any]:
@@ -69,3 +69,18 @@ def list_desc(db: Session, task_id: int, *, limit: int):
         .scalars()
         .all()
     )
+
+def delete_failed_drama_executions(db: Session, *, days: int = 0) -> int:
+    """删除追剧任务的失败执行记录；days>0 时只删该天数之前的。"""
+    from datetime import datetime, timedelta
+
+    from app.infrastructure.persistence.models.task import Task
+
+    task_ids = select(Task.id).where(Task.task_type == "drama")
+    stmt = delete(TaskExecution).where(
+        TaskExecution.status == "failed",
+        TaskExecution.task_id.in_(task_ids),
+    )
+    if int(days) > 0:
+        stmt = stmt.where(TaskExecution.started_at < datetime.utcnow() - timedelta(days=int(days)))
+    return int(db.execute(stmt).rowcount or 0)

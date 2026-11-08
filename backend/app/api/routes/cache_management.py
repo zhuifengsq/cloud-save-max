@@ -6,10 +6,10 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.deps import require_permissions
+from app.api.deps import require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
 from app.core.settings import settings
-from app.db.session import get_db, transaction, transaction
+from app.application.container import get_db, transaction
 from app.schemas.cache_management import (
     CacheClearOut,
     CacheDeleteOut,

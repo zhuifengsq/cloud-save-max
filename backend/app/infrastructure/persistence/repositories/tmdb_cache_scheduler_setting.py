@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.tmdb_cache_scheduler_setting import TMDBCacheSchedulerSetting
+from app.infrastructure.persistence.models.tmdb_cache_scheduler_setting import TMDBCacheSchedulerSetting
 
 DEFAULT_TMDB_CACHE_SCHEDULER_SETTING_ID = 1
 

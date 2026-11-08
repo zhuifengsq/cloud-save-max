@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
 from app.application.container import db_session
-from app.infrastructure.scheduling.task_admission import task_admission
+from app.application.container import task_admission_service as _acc_task_admission; task_admission = _acc_task_admission()
 from app.application.telegram_bot.actions import TelegramBotActions
 from app.application.telegram_bot.callbacks import parse_callback
 from app.application.telegram_bot.client import TelegramBotClient

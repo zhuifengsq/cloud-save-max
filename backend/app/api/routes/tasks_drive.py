@@ -7,13 +7,13 @@ import re
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import commit, get_db
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
-from app.infrastructure.drive.account_manager import DatabaseAccountManager
-from app.schemas.task_browse import (
+from app.application.container import commit, get_db
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
+from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
+from app.application.dto.task_browse import (
     DriveBrowseIn,
     DriveDeleteIn,
     DriveDeleteOut,

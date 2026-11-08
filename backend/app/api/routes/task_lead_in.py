@@ -8,9 +8,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db
+from app.application.container import get_db
 from app.schemas.drama_lead_in import (
     DramaLeadInConfirmIn,
     DramaLeadInConfirmOut,

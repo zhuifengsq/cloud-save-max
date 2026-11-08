@@ -6,7 +6,7 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.models.resource_search_source import ResourceSearchSource
+from app.infrastructure.persistence.models.resource_search_source import ResourceSearchSource
 from app.application.api_search_sources import (
     create_api_source,
     delete_api_source,

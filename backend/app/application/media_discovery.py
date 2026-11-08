@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.application.tmdb_cache import get_tmdb_credits_cached, get_tmdb_detail_cached
 from app.application.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
-from app.infrastructure.http.douban_client import DoubanClient
-from app.infrastructure.http.tmdb_client import TMDBClient
+from app.application.container import douban_client_cls as _acc_DoubanClient; DoubanClient = _acc_DoubanClient()
+from app.application.container import tmdb_client_cls as _acc_TMDBClient; TMDBClient = _acc_TMDBClient()
 
 
 _douban_client = DoubanClient()

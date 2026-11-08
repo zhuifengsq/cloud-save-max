@@ -10,7 +10,7 @@ from cachetools import TTLCache
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
 from app.application.container import drive_accounts_repo
 from app.application.invalid_share_links import list_invalid_shareurls
 
@@ -24,12 +24,12 @@ _search_cache_lock = threading.Lock()
 
 def _get_search_cache_ttl() -> int:
     try:
-        from app.models.system_setting import SystemSetting
-        from app.db.session import SessionLocal
-        with SessionLocal() as db:
-            row = db.query(SystemSetting).filter(SystemSetting.key == "search_cache_ttl_seconds").first()
-            if row and row.value:
-                return max(1, min(3600, int(row.value)))
+        from app.application.container import db_session, system_settings_repo
+
+        with db_session() as db:
+            value = system_settings_repo().get_value(db, "search_cache_ttl_seconds", "")
+            if value:
+                return max(1, min(3600, int(value)))
     except Exception:
         pass
     return 3
@@ -95,8 +95,9 @@ def get_quark_share_author(shareurl: str) -> str | None:
             return None
         
         # 获取夸克账号
-        from app.db.session import get_db_session
-        with get_db_session() as db:
+        from app.application.container import db_session
+
+        with db_session() as db:
             accounts = drive_accounts_repo().list_active_by_type(db, drive_type="quark")
             
             if not accounts:
@@ -183,18 +184,14 @@ def get_quark_share_author(shareurl: str) -> str | None:
 
 def enrich_suggestions_with_authors(suggestions: list[dict[str, Any]], db: Session = None) -> list[dict[str, Any]]:
     """为搜索结果添加分享者信息（仅夸克网盘）"""
-    from app.models.system_setting import SystemSetting
-    
+    from app.application.container import system_settings_repo
+
     # 获取优选分享者列表
     preferred_sharers = []
     if db:
-        preferred_setting = db.query(SystemSetting).filter(SystemSetting.key == "preferred_sharers").first()
-        if preferred_setting and preferred_setting.value.strip():
-            preferred_sharers = [
-                name.strip() 
-                for name in preferred_setting.value.split("|") 
-                if name.strip()
-            ]
+        preferred_value = system_settings_repo().get_value(db, "preferred_sharers", "")
+        if preferred_value.strip():
+            preferred_sharers = [name.strip() for name in preferred_value.split("|") if name.strip()]
     
     for item in suggestions:
         shareurl = str(item.get("shareurl") or "").strip()
@@ -219,18 +216,14 @@ def enrich_suggestions_with_authors(suggestions: list[dict[str, Any]], db: Sessi
 
 def filter_blocked_sharers(db: Session, suggestions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """过滤屏蔽分享者的结果"""
-    from app.models.system_setting import SystemSetting
-    
+    from app.application.container import system_settings_repo
+
     # 获取屏蔽分享者列表
-    blocked_setting = db.query(SystemSetting).filter(SystemSetting.key == "blocked_sharers").first()
-    if not blocked_setting or not blocked_setting.value.strip():
+    blocked_value = system_settings_repo().get_value(db, "blocked_sharers", "")
+    if not blocked_value.strip():
         return suggestions
-    
-    blocked_sharers = [
-        name.strip() 
-        for name in blocked_setting.value.split("|") 
-        if name.strip()
-    ]
+
+    blocked_sharers = [name.strip() for name in blocked_value.split("|") if name.strip()]
     
     if not blocked_sharers:
         return suggestions

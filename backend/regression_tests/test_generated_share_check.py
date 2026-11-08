@@ -6,13 +6,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from treelib import Tree
 
-from app.db.base import Base
+from app.infrastructure.persistence.base import Base
 from app.infrastructure.drive.adapters.baidu_adapter import BaiduAdapter
 from app.infrastructure.drive.adapters.quark_adapter import QuarkAdapter
 from app.infrastructure.execution import task_executor
-from app.models.task import Task
-from app.models.task_execution import TaskExecution
-from app.models.task_scheduler_setting import TaskSchedulerSetting
+from app.infrastructure.persistence.models.task import Task
+from app.infrastructure.persistence.models.task_execution import TaskExecution
+from app.infrastructure.persistence.models.task_scheduler_setting import TaskSchedulerSetting
 from app.application.dashboard_drama import build_drama_overview
 from app.application.generated_share_check import check_generated_share, read_share_check
 from app.application.notifications.task_notify import build_task_section

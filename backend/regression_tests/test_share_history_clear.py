@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes import dashboard
-from app.db.base import Base
-from app.models.task import Task
-from app.models.task_execution import TaskExecution
+from app.infrastructure.persistence.base import Base
+from app.infrastructure.persistence.models.task import Task
+from app.infrastructure.persistence.models.task_execution import TaskExecution
 
 
 class ClearShareHistoryTests(unittest.TestCase):

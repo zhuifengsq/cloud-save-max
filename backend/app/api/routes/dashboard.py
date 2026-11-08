@@ -3,11 +3,10 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_WRITE
-from app.db.session import get_db, transaction, transaction
-from app.models.task import Task
-from app.models.task_execution import TaskExecution
+from app.application.container import get_db, transaction
+from app.application.container import task_executions_repo
 from app.schemas.dashboard import CapacityOverviewOut, DramaOverviewOut
 from app.application import audit
 from app.application.dashboard_drama import build_drama_overview
@@ -39,14 +38,7 @@ def clear_drama_failures(
 ):
     """删除追剧任务的失败执行记录；days>0 时只删该天数之前的。"""
     with transaction(db):
-        task_ids = db.query(Task.id).filter(Task.task_type == 'drama')
-        query = db.query(TaskExecution).filter(
-            TaskExecution.status == 'failed',
-            TaskExecution.task_id.in_(task_ids),
-        )
-        if days > 0:
-            query = query.filter(TaskExecution.started_at < datetime.utcnow() - timedelta(days=days))
-        deleted = int(query.delete(synchronize_session=False) or 0)
+        deleted = task_executions_repo().delete_failed_drama_executions(db, days=days)
         audit.write_audit_log(
             db,
             actor_user_id=current.user.id,

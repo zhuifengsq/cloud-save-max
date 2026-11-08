@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.user import User
+from app.infrastructure.persistence.models.user import User
 
 
 def list_users(db: Session, *, page: int, page_size: int, q: str | None) -> tuple[list[Any], int]:
@@ -51,3 +51,37 @@ def list_users_by_ids(db: Session, *, user_ids: list[int], with_roles: bool = Fa
     if with_roles:
         stmt = stmt.options(selectinload(User.roles))
     return db.execute(stmt).scalars().all()
+
+def get_active_user_basic(db: Session, user_id: int) -> Any:
+    """认证用：只取用户本体，不加载 roles/permissions 关系链（避免 3 条额外查询）。"""
+    from sqlalchemy import select
+    from sqlalchemy.orm import noload
+
+    from app.infrastructure.persistence.models.user import User
+
+    return (
+        db.execute(select(User).options(noload(User.roles)).where(User.id == int(user_id)))
+        .scalars()
+        .first()
+    )
+
+
+def load_roles_permissions(db: Session, user_id: int) -> tuple[list[str], set[str]]:
+    """用户角色名 + 权限码（两条 DISTINCT 查询，权限缓存回填用）。"""
+    from sqlalchemy import select
+
+    from app.infrastructure.persistence.models.permission import Permission
+    from app.infrastructure.persistence.models.role import Role
+    from app.infrastructure.persistence.models.user import User
+
+    role_stmt = select(Role.name).join_from(User, User.roles).where(User.id == int(user_id)).distinct()
+    roles = [row[0] for row in db.execute(role_stmt).all()]
+    perm_stmt = (
+        select(Permission.code)
+        .join_from(User, User.roles)
+        .join(Role.permissions)
+        .where(User.id == int(user_id))
+        .distinct()
+    )
+    permissions = {row[0] for row in db.execute(perm_stmt).all()}
+    return roles, permissions

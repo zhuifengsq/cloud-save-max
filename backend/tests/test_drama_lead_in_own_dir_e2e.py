@@ -23,12 +23,12 @@ from starlette.requests import Request
 from app.api.routes import system_settings_drama_lead_in as settings_route
 from app.core.errors import ApiError
 from app.core.permissions import TASK_WRITE
-from app.db.base import Base
+from app.infrastructure.persistence.base import Base
 from app.infrastructure.drive.factory import AdapterFactory
-from app.models.audit_log import AuditLog
-from app.models.drive_account import DriveAccount
-from app.models.task import Task
-from app.models.task_lead_in import TaskLeadInRecord
+from app.infrastructure.persistence.models.audit_log import AuditLog
+from app.infrastructure.persistence.models.drive_account import DriveAccount
+from app.infrastructure.persistence.models.task import Task
+from app.infrastructure.persistence.models.task_lead_in import TaskLeadInRecord
 from app.schemas import drama_lead_in as lead_in_schemas
 from app.schemas.drama_lead_in import (
     DramaLeadInMaterialIn,

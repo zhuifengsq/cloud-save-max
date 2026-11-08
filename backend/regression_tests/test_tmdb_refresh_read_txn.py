@@ -14,9 +14,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.base import Base
-from app.models.tmdb_media_cache import TMDBMediaCache
-from app.models.tmdb_setting import TMDBSetting
+from app.infrastructure.persistence.base import Base
+from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
+from app.infrastructure.persistence.models.tmdb_setting import TMDBSetting
 from app.application import tmdb_cache
 
 

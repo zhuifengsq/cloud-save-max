@@ -7,8 +7,8 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.application.container import drive_gateway, task_executions_repo
-from app.infrastructure.drive.factory import AdapterFactory
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
+from app.application.container import adapter_factory as _acc_AdapterFactory; AdapterFactory = _acc_AdapterFactory()
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
 from app.application.task_executions import history_limit
 from app.application.task_share_links import get_task_share_link
 

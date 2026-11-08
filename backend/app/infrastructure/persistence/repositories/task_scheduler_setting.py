@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.task_scheduler_setting import TaskSchedulerSetting
+from app.infrastructure.persistence.models.task_scheduler_setting import TaskSchedulerSetting
 
 DEFAULT_TASK_SCHEDULER_SETTING_ID = 1
 

@@ -3,10 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
-from app.core.deps import require_permissions
+from app.api.deps import require_permissions
 from app.core.permissions import TASK_READ
 from app.core.settings import settings
-from app.db.session import commit, get_db
+from app.application.container import commit, get_db
 from app.schemas.media_discovery import (
     DoubanCategoryListOut,
     MediaDiscoverListOut,
@@ -25,7 +25,7 @@ from app.application.proxy_image_cache import (
     validate_image_url,
 )
 from app.application.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
-from app.infrastructure.http.douban_client import DoubanClient
+from app.application.container import douban_client_cls as _acc_DoubanClient; DoubanClient = _acc_DoubanClient()
 
 
 router = APIRouter()

@@ -4,7 +4,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.permission import Permission
+from app.infrastructure.persistence.models.permission import Permission
 
 
 def list_permissions(db: Session) -> list[Permission]:

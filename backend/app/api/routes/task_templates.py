@@ -5,11 +5,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db, transaction
-from app.models.task_template import TaskTemplate
+from app.application.container import get_db, task_templates_repo, transaction
 
 router = APIRouter()
 
@@ -32,7 +30,7 @@ class TemplateOut(BaseModel):
     updated_at: str | None = None
 
 
-def _to_out(row: TaskTemplate) -> TemplateOut:
+def _to_out(row) -> TemplateOut:
     config = {}
     try:
         config = json.loads(row.config_json) if row.config_json else {}
@@ -49,25 +47,24 @@ def _to_out(row: TaskTemplate) -> TemplateOut:
 
 @router.get("", response_model=list[TemplateOut])
 def list_templates(db: Session = Depends(get_db)):
-    rows = db.execute(select(TaskTemplate).order_by(TaskTemplate.id.desc())).scalars().all()
-    return [_to_out(r) for r in rows]
+    return [_to_out(r) for r in task_templates_repo().list_rows(db)]
 
 
 @router.post("", response_model=TemplateOut)
 def create_template(payload: TemplateIn, db: Session = Depends(get_db)):
-    row = TaskTemplate(
-        name=payload.name,
-        config_json=json.dumps(payload.config, ensure_ascii=False),
-    )
     with transaction(db):
-        db.add(row)
+        row = task_templates_repo().create_row(
+            db,
+            name=payload.name,
+            config_json=json.dumps(payload.config, ensure_ascii=False),
+        )
     db.refresh(row)
     return _to_out(row)
 
 
 @router.patch("/{template_id:int}", response_model=TemplateOut)
 def update_template(template_id: int, payload: TemplateUpdateIn, db: Session = Depends(get_db)):
-    row = db.execute(select(TaskTemplate).where(TaskTemplate.id == template_id)).scalars().first()
+    row = task_templates_repo().get_row(db, template_id)
     if row is None:
         raise HTTPException(status_code=404, detail="模板不存在")
     with transaction(db):
@@ -81,9 +78,9 @@ def update_template(template_id: int, payload: TemplateUpdateIn, db: Session = D
 
 @router.delete("/{template_id:int}")
 def delete_template(template_id: int, db: Session = Depends(get_db)):
-    row = db.execute(select(TaskTemplate).where(TaskTemplate.id == template_id)).scalars().first()
+    row = task_templates_repo().get_row(db, template_id)
     if row is None:
         raise HTTPException(status_code=404, detail="模板不存在")
     with transaction(db):
-        db.delete(row)
+        task_templates_repo().delete_row(db, row)
     return {"success": True}

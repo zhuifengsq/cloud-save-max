@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from sqlalchemy.orm import Session
 
 from app.application.container import drive_accounts_repo
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
 from app.application.episode_number import extract_episode, guess_episode, parse_size
 from app.application.resource_search import fetch_task_suggestions
 from app.application.tmdb_cache import get_tmdb_detail_cached
@@ -186,7 +186,7 @@ def _prepare_candidates(db: Session, *, suggestions: list[dict], addition: dict)
         candidates = [item for item in candidates if str(item.get("shareurl") or "").strip() in valid_urls]
         stats["skip_invalid"] = before - len(candidates)
 
-    from app.api.routes.system_settings import _get_setting
+    from app.application.system_settings import get_setting as _get_setting
 
     preferred_str = str(_get_setting(db, "preferred_sharers") or "").strip()
     preferred_set = {s.strip() for s in preferred_str.split("|") if s.strip()} if preferred_str else set()

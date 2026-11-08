@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.resource_search_source import ResourceSearchSource
+from app.infrastructure.persistence.models.resource_search_source import ResourceSearchSource
 
 
 def list_api_sources(db: Session, *, key_prefix: str) -> list[Any]:

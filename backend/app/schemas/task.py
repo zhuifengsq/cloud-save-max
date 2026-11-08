@@ -72,16 +72,7 @@ class TaskExecutionOut(BaseModel):
     adapter_snapshot: dict[str, Any] = {}
 
 
-class DramaUpdateProgressOut(BaseModel):
-    available: bool = False
-    tmdb_season: int | None = None
-    tmdb_episode: int | None = None
-    saved_season: int | None = None
-    saved_episode: int | None = None
-    behind_episodes: int | None = None
-    is_latest: bool | None = None
-    snapshot_captured_at: datetime | None = None
-    reason: str | None = None
+from app.application.dto.task import DramaUpdateProgressOut  # noqa: F401  (S5: 定义已迁到 dto)
 
 
 class TaskOut(BaseModel):

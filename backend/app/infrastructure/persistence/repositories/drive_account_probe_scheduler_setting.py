@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.drive_account_probe_scheduler_setting import DriveAccountProbeSchedulerSetting
+from app.infrastructure.persistence.models.drive_account_probe_scheduler_setting import DriveAccountProbeSchedulerSetting
 
 DEFAULT_ID = 1
 

@@ -6,7 +6,7 @@ import time
 
 from sqlalchemy.exc import OperationalError
 
-from app.db.session import SessionLocal, is_sqlite_locked_error
+from app.infrastructure.persistence.session import SessionLocal, is_sqlite_locked_error
 from app.application.telegram_bot.client import TelegramBotClient
 from app.application.telegram_bot.config import TelegramBotConfig, load_telegram_bot_config
 from app.application.telegram_bot.handlers import TelegramBotHandler

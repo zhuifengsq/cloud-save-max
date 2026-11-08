@@ -6,8 +6,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.core.settings import settings
-from app.db.base import Base
-import app.models as _models
+from app.infrastructure.persistence.base import Base
+import app.infrastructure.persistence.models as _models
 
 
 config = context.config

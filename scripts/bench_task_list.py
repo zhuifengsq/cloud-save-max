@@ -23,11 +23,11 @@ async def benchmark() -> None:
         os.environ["DATABASE_URL"] = "sqlite:///" + (Path(temp) / "bench.db").as_posix()
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
         from app.api.routes.tasks import get_tasks, router
-        from app.db.base import Base
-        from app.db.session import SessionLocal, engine
+        from app.infrastructure.persistence.base import Base
+        from app.infrastructure.persistence.session import SessionLocal, engine
         from app.middlewares.gzip import GZipMiddleware
-        from app.models.task import Task
-        from app.models.task_execution import TaskExecution
+        from app.infrastructure.persistence.models.task import Task
+        from app.infrastructure.persistence.models.task_execution import TaskExecution
         from app.schemas.task import TaskOut
 
         try:

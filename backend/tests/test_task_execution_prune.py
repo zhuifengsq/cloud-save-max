@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.db.base import Base
-from app.models.task import Task
-from app.models.task_execution import TaskExecution
+from app.infrastructure.persistence.base import Base
+from app.infrastructure.persistence.models.task import Task
+from app.infrastructure.persistence.models.task_execution import TaskExecution
 from app.application.task_executions import DEFAULT_HISTORY_LIMIT, history_limit, prune_all_task_executions, prune_task_executions
 
 

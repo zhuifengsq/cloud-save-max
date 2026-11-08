@@ -16,8 +16,8 @@ from app.core.errors import bad_request
 from app.infrastructure.drive.account_manager import DatabaseAccountManager
 from app.infrastructure.execution.drama_executor import DramaTaskExecutor, SkipTask
 from app.infrastructure.execution.execution_log import ExecutionLog
-from app.models.task import Task
-from app.models.task_execution import TaskExecution
+from app.infrastructure.persistence.models.task import Task
+from app.infrastructure.persistence.models.task_execution import TaskExecution
 from app.application.drama_share_autoupdate import is_auto_update_task, resolve_drama_shareurl_update
 from app.application.generated_share_check import SNAPSHOT_KEY, check_generated_share
 from app.application.shareurl_update_logs import append_shareurl_update_log

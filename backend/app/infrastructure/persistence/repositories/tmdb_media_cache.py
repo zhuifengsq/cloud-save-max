@@ -4,7 +4,7 @@ from __future__ import annotations
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.tmdb_media_cache import TMDBMediaCache
+from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
 
 
 def load_status_rows(db: Session, *, language: str, poster_language: str, tv_ids: list[int], movie_ids: list[int]):
@@ -56,5 +56,20 @@ def get_latest_status(db: Session, *, media_type: str, tmdb_id: int, language: s
             .order_by(TMDBMediaCache.updated_at.desc())
             .limit(1)
         )
+        .first()
+    )
+
+def get_row(db: Session, *, media_type: str, tmdb_id: int, language: str, poster_language: str):
+    """按唯一键取整行（详情/状态/刷新前探测用）。"""
+    return (
+        db.execute(
+            select(TMDBMediaCache).where(
+                TMDBMediaCache.media_type == media_type,
+                TMDBMediaCache.tmdb_id == tmdb_id,
+                TMDBMediaCache.language == language,
+                TMDBMediaCache.poster_language == poster_language,
+            )
+        )
+        .scalars()
         .first()
     )

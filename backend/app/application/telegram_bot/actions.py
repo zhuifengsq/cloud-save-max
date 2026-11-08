@@ -9,14 +9,14 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.orm import Session
 
-from app.api.routes.tasks_share import post_share_preview
+from app.application.share_preview import preview_share as post_share_preview
 from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
 from app.core.errors import ApiError, bad_request, not_found
-from app.infrastructure.drive.factory import AdapterFactory
-from app.infrastructure.drive.adapters.aliyun_adapter import AliyunAdapter
-from app.infrastructure.drive.adapters.drive_auth import DriveAuthRequired
-from app.infrastructure.drive.account_manager import DatabaseAccountManager
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
+from app.application.container import adapter_factory as _acc_AdapterFactory; AdapterFactory = _acc_AdapterFactory()
+from app.application.container import aliyun_adapter_cls as _acc_AliyunAdapter; AliyunAdapter = _acc_AliyunAdapter()
+from app.application.container import drive_auth_required as _acc_DriveAuthRequired; DriveAuthRequired = _acc_DriveAuthRequired()
+from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
 from app.application.container import drive_accounts_repo, task_executions_repo, tasks_repo
 from app.application.drive_account_auth_sessions import create_auth_session, delete_auth_session, get_auth_session
 from app.application.dashboard_drama import build_drama_overview
@@ -53,7 +53,7 @@ from app.application.notifications.settings import (
 )
 from app.application.share_preview_batch import preview_share_batch
 from app.application.resource_search import fetch_task_suggestions
-from app.schemas.task_browse import SharePreviewBatchIn, SharePreviewIn
+from app.application.dto.task_browse import SharePreviewBatchIn, SharePreviewIn
 from app.application.task_scheduler import get_or_create_task_scheduler_setting, update_task_scheduler_setting
 from app.application.tasks import (
     create_task,

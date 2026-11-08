@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.refresh_token import RefreshToken
+from app.infrastructure.persistence.models.refresh_token import RefreshToken
 
 
 def add_refresh_token(

@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import ROLE_READ, ROLE_WRITE
-from app.db.session import get_db, transaction
+from app.application.container import get_db, transaction
 from app.schemas.role import PermissionOut, RoleCreateIn, RoleOut, RoleSetPermissionsIn, RoleUpdateIn
 from app.application import audit
 from app.application.roles import create_role, delete_role, list_roles, set_role_permissions, update_role

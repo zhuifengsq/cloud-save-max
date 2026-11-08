@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.drive_account import DriveAccount
+from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.core.runtime.cache_version import invalidate_drive_accounts
 
 
@@ -153,6 +153,18 @@ def list_enabled_names(db: Session):
             select(DriveAccount.name)
             .where(DriveAccount.enabled.is_(True))
             .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+
+def list_enabled_by_type(db: Session, *, drive_type: str):
+    """指定网盘类型的全部启用账号（id 升序；调用方自行做默认/在线优先级排序）。"""
+    return list(
+        db.execute(
+            select(DriveAccount)
+            .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type)
+            .order_by(DriveAccount.id.asc())
         )
         .scalars()
         .all()

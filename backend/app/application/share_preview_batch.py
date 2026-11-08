@@ -15,11 +15,10 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import not_found
 from app.core.settings import settings
-from app.db.session import SessionLocal
-from app.infrastructure.drive.account_manager import DatabaseAccountManager
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
-from app.models.drive_account import DriveAccount
-from app.schemas.task_browse import SharePreviewBatchIn, SharePreviewBatchItemOut, SharePreviewBatchOut
+from app.application.container import SessionLocal, drive_accounts_repo, system_settings_repo
+from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
+from app.application.dto.task_browse import SharePreviewBatchIn, SharePreviewBatchItemOut, SharePreviewBatchOut
 from app.application.invalid_share_links import upsert_invalid_share_link
 from app.application.share_preview_batch_cache import (
     get_cached_preview_batch_item,
@@ -42,11 +41,10 @@ _validate_cache_lock = threading.Lock()
 
 def _get_validate_cache_ttl() -> int:
     try:
-        from app.models.system_setting import SystemSetting
         with SessionLocal() as db:
-            row = db.query(SystemSetting).filter(SystemSetting.key == "preview_cache_ttl_seconds").first()
-            if row and row.value:
-                return max(30, min(3600, int(row.value)))
+            value = system_settings_repo().get_value(db, "preview_cache_ttl_seconds", "")
+            if value:
+                return max(30, min(3600, int(value)))
     except Exception:
         pass
     return 300
@@ -248,18 +246,14 @@ def fetch_share_file_list(
     folder_exclude_mode: str = "",
 ) -> tuple[list[dict[str, Any]], bool]:
     """获取分享链接的完整文件列表（只遍历前几层目录）"""
-    from app.infrastructure.drive.account_manager import DatabaseAccountManager
+    from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
 
     drive_type = AdapterRegistry.detect_drive_type(shareurl)
     if drive_type is None:
         return [], False
 
     if not account_name:
-        rows = (
-            db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type).order_by(DriveAccount.id.asc()))
-            .scalars()
-            .all()
-        )
+        rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
         rows.sort(
             key=lambda x: (
                 0 if bool(getattr(x, "is_default", False)) else 1,
@@ -364,18 +358,14 @@ def fetch_share_file_list_grouped(
 ) -> list[tuple[list[dict[str, Any]], str, Any, str]]:
     """按子目录分组返回文件列表和目录标识。
     链接有 fid 时返回一组，无 fid 时每个子目录一组。"""
-    from app.infrastructure.drive.account_manager import DatabaseAccountManager
+    from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
 
     drive_type = AdapterRegistry.detect_drive_type(shareurl)
     if drive_type is None:
         return []
 
     if not account_name:
-        rows = (
-            db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type).order_by(DriveAccount.id.asc()))
-            .scalars()
-            .all()
-        )
+        rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
         rows.sort(
             key=lambda x: (
                 0 if bool(getattr(x, "is_default", False)) else 1,
@@ -615,11 +605,7 @@ def preview_share_batch(db: Session, payload: SharePreviewBatchIn) -> tuple[Shar
         return text
 
     def _candidate_accounts_for_drive(drive_type: str) -> list[DriveAccount]:
-        rows = (
-            db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type).order_by(DriveAccount.id.asc()))
-            .scalars()
-            .all()
-        )
+        rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
         rows.sort(
             key=lambda x: (
                 0 if bool(getattr(x, "is_default", False)) else 1,
@@ -801,8 +787,8 @@ def preview_share_batch(db: Session, payload: SharePreviewBatchIn) -> tuple[Shar
 def validate_share_links_streaming(db: Session, shareurls: list[str]):
     """生成器版本：验证完一个链接立即返回结果，不等全部完成。"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from app.schemas.task_browse import ShareValidateItemOut
-    from app.api.routes.system_settings import _get_setting
+    from app.application.dto.task_browse import ShareValidateItemOut
+    from app.application.system_settings import get_setting as _get_setting
 
     urls = [str(x or "").strip() for x in shareurls]
     urls = [x for x in urls if x]
@@ -852,11 +838,7 @@ def validate_share_links_streaming(db: Session, shareurls: list[str]):
     accounts_by_drive: dict[str, list[DriveAccount]] = {}
     for drive_type in per_drive:
         try:
-            rows = (
-                db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type).order_by(DriveAccount.id.asc()))
-                .scalars()
-                .all()
-            )
+            rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
             rows.sort(
                 key=lambda x: (
                     0 if bool(getattr(x, "is_default", False)) else 1,
@@ -973,28 +955,20 @@ def validate_share_links_streaming(db: Session, shareurls: list[str]):
 
 def validate_share_links(db: Session, shareurls: list[str]) -> ShareValidateOut:
     """轻量级验证：只检查链接有效性 + 提取分享者信息，不做视频解析。"""
-    from app.schemas.task_browse import ShareValidateOut
+    from app.application.dto.task_browse import ShareValidateOut
     items = list(validate_share_links_streaming(db, shareurls))
     return ShareValidateOut(items=items)
 
 def fetch_share_root_dirs(db: Session, shareurl: str, account_name: str | None = None) -> list[tuple[str, str]]:
     """返回分享根目录下的第一层子目录 [(fid, name)]，用于文件夹对比模式定位层级。"""
-    from app.infrastructure.drive.account_manager import DatabaseAccountManager
+    from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
 
     drive_type = AdapterRegistry.detect_drive_type(shareurl)
     if drive_type is None:
         return []
 
     if not account_name:
-        rows = (
-            db.execute(
-                select(DriveAccount)
-                .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type)
-                .order_by(DriveAccount.id.asc())
-            )
-            .scalars()
-            .all()
-        )
+        rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
         rows.sort(
             key=lambda x: (
                 0 if bool(getattr(x, "is_default", False)) else 1,

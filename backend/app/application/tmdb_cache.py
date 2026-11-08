@@ -16,13 +16,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from app.core.runtime.tx import end_read_tx
-from app.db.session import end_read_tx
-from app.models.task import Task
-from app.models.tmdb_media_cache import TMDBMediaCache
-from app.models.tmdb_setting import TMDBSetting
+from app.infrastructure.persistence.session import end_read_tx
+from app.infrastructure.persistence.models.task import Task
+from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
+from app.infrastructure.persistence.models.tmdb_setting import TMDBSetting
 from app.application.tmdb_settings import DEFAULT_TMDB_SETTING_ID, get_tmdb_runtime_config
-from app.infrastructure.http.tmdb_client import BASE_LANGUAGE as TMDB_BASE_LANGUAGE
-from app.infrastructure.http.tmdb_client import TMDBClient
+from app.application.container import tmdb_base_language as _acc_base_language; TMDB_BASE_LANGUAGE = _acc_base_language()
+from app.application.container import tmdb_client_cls as _acc_TMDBClient; TMDBClient = _acc_TMDBClient()
 
 
 MediaType = Literal["movie", "tv"]

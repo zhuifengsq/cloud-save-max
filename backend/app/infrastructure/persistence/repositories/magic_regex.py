@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.magic_regex_rule import MagicRegexRule
+from app.infrastructure.persistence.models.magic_regex_rule import MagicRegexRule
 
 
 def get_rule(db: Session, key: str) -> Any:

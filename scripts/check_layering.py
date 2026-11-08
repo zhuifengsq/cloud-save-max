@@ -35,7 +35,9 @@ LAYER_OF_PREFIX = {
     "app.application": "application",
     "app.application": "application",
     "app.domain": "domain",
-    "app.models": "persistence",
+    # 整个持久化子树（base/session/backup/repositories/models）都算 persistence；
+    # 只映射 models 会让「模型 import Base」变成 persistence→infrastructure 假违规。
+    "app.infrastructure.persistence": "persistence",
     "app.db": "persistence",
     "app.extensions": "infrastructure",
     "app.infrastructure": "infrastructure",
@@ -55,10 +57,25 @@ ALLOWED = {
     "persistence": {"persistence", "domain", "platform"},
     "infrastructure": {"infrastructure", "domain", "application", "persistence", "platform"},
     "platform": {"platform"},
-    "tooling": {"presentation", "application", "domain", "persistence", "infrastructure", "platform", "tooling"},
+        "tooling": {"presentation", "application", "domain", "persistence", "infrastructure", "platform", "tooling"},
 }
 
+# 显式登记的架构例外（有据可查、单独打印、不计入 violations）：
+# (src 前缀, dst 前缀, 理由)。tmdb_cache 是读写混合服务 + 专用 writer engine，
+# 拆分到 infrastructure 仓储属「tmdb 专项」后续 ADR，见 docs/architecture-evolution-plan.md §10.3 决策 5。
+DOCUMENTED_EXCEPTIONS = [
+    ("app.application.tmdb_cache", "app.infrastructure.persistence",
+     "tmdb_cache 读写混合 + 专用 writer engine，属既定显式例外（§10.3 决策 5）"),
+]
 
+
+def is_documented_exception(src: str, dst: str) -> bool:
+    for src_prefix, dst_prefix, _reason in DOCUMENTED_EXCEPTIONS:
+        src_ok = src == src_prefix or src.startswith(src_prefix + ".")
+        dst_ok = dst == dst_prefix or dst.startswith(dst_prefix + ".")
+        if src_ok and dst_ok:
+            return True
+    return False
 def layer_of(module: str) -> str:
     best = ""
     for prefix, layer in LAYER_OF_PREFIX.items():
@@ -222,12 +239,18 @@ def main() -> int:
         if dst_layer == "composition-root":
             continue
         if dst_layer not in allowed:
+            if is_documented_exception(src, dst):
+                continue
             violations.append({
                 "src": src, "dst": dst, "line": lineno,
                 "src_layer": src_layer, "dst_layer": dst_layer, "deferred": deferred,
             })
 
-    module_edges = {(s, d) for s, d, _l, _df in edges}
+    module_edges = {
+        (s, d)
+        for s, d, _l, _df in edges
+        if layer_of(s) != "composition-root" and layer_of(d) != "composition-root"
+    }
     cycles = sccs(modules, sorted(module_edges))
     deferred_edges = [e for e in edges if e[3]]
 
@@ -249,6 +272,15 @@ def main() -> int:
     print(f"modules={report['modules']}  internal_imports={report['internal_edges']}  "
           f"deferred_imports={report['deferred_imports']}  violations={report['violations']}")
     print(f"import_cycles={report['cycles']['count']}  largest_cycle={report['cycles']['largest']}")
+    _exceptions = [
+        (src, dst, lineno, deferred)
+        for src, dst, lineno, deferred in edges
+        if is_documented_exception(src, dst)
+    ]
+    if _exceptions:
+        print("\ndocumented exceptions (excluded from violations):")
+        for src, dst, lineno, deferred in _exceptions:
+            print(f"      {src} -> {dst}  line {lineno}{' (deferred)' if deferred else ''}")
     if report["violations_by_layer_pair"]:
         print("\nviolations by layer pair (target rules):")
         for pair, count in report["violations_by_layer_pair"].items():

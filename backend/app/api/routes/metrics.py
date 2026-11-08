@@ -6,12 +6,12 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user
+from app.api.deps import get_current_user
 from app.core.errors import forbidden, unauthorized
 from app.core.metrics import metrics_store
 from app.core.permissions import AUDIT_READ
 from app.core.settings import settings
-from app.db.session import get_db
+from app.application.container import get_db
 
 
 router = APIRouter()

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.application.container import magic_regex_repo
 from app.core.errors import bad_request, not_found
-from app.infrastructure.execution.magic_rename import MagicRename
+from app.application.container import magic_rename_cls as _acc_MagicRename; MagicRename = _acc_MagicRename()
 
 
 def builtin_magic_regex() -> dict[str, dict[str, str]]:

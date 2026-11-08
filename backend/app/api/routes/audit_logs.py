@@ -4,11 +4,10 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.deps import require_permissions
+from app.api.deps import require_permissions
 from app.core.permissions import AUDIT_READ, AUDIT_WRITE
-from app.db.session import get_db, transaction
-from app.models.audit_log import AuditLog
-from app.models.audit_log_scheduler_setting import AuditLogSchedulerSetting
+from app.application.container import get_db, transaction
+from app.application.container import audit_repo
 from app.schemas.audit_log import AuditLogItemOut, AuditLogListOut
 from app.application.audit_logs import list_audit_logs
 
@@ -30,13 +29,11 @@ class AuditLogSchedulerOut(BaseModel):
     retention_days: int
 
 
-def _get_or_create_scheduler(db: Session) -> AuditLogSchedulerSetting:
-    setting = db.query(AuditLogSchedulerSetting).first()
-    if not setting:
-        with transaction(db):
-            setting = AuditLogSchedulerSetting()
-            db.add(setting)
-        db.refresh(setting)
+def _get_or_create_scheduler(db: Session):
+    """取审计调度设置；不存在时在事务内建默认行（与 S3 前的行为一致）。"""
+    with transaction(db):
+        setting = audit_repo().get_or_create_scheduler_setting(db)
+    db.refresh(setting)
     return setting
 
 
@@ -72,7 +69,7 @@ def get_audit_logs(
 @router.delete("", dependencies=[Depends(require_permissions(AUDIT_WRITE))])
 def delete_all_audit_logs(db: Session = Depends(get_db)):
     with transaction(db):
-        db.query(AuditLog).delete()
+        audit_repo().delete_all(db)
     return {"ok": True}
 
 

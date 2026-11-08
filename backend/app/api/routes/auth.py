@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.core.deps import CurrentUser, get_current_user, load_user_roles_permissions
+from app.api.deps import CurrentUser, get_current_user, load_user_roles_permissions
 from app.core.settings import settings
-from app.db.session import commit, get_db
+from app.application.container import commit, get_db
 from app.schemas.auth import LoginOut, MeOut, TokenOut
 from app.application import audit
 from app.application.auth import authenticate_user, clear_refresh_cookie, refresh_access_token, revoke_refresh_token, issue_tokens

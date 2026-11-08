@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError, bad_request, not_found
 from app.core.runtime.cache_version import invalidate_drive_accounts
-from app.infrastructure.drive.factory import AdapterFactory
-from app.infrastructure.drive.adapters.drive_auth import DriveAuthRequired
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
+from app.application.container import adapter_factory as _acc_AdapterFactory; AdapterFactory = _acc_AdapterFactory()
+from app.application.container import drive_auth_required as _acc_DriveAuthRequired; DriveAuthRequired = _acc_DriveAuthRequired()
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
 from app.application.container import drive_accounts_repo
 from app.application.drive_account_auth_sessions import create_auth_session
 

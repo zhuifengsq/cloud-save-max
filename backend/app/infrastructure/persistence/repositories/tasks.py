@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, noload
 
-from app.models.task import Task
+from app.infrastructure.persistence.models.task import Task
 
 
 def iter_drama_tasks_without_executions(db: Session):
@@ -25,7 +25,7 @@ def list_drama_tasks(db: Session):
 
 def list_drama_execution_rows(db: Session, *, since):
     """仪表盘用：只取概览需要的列（避免加载 run_log/tree_summary 等大字段）。"""
-    from app.models.task_execution import TaskExecution
+    from app.infrastructure.persistence.models.task_execution import TaskExecution
 
     return db.execute(
         select(
@@ -53,7 +53,7 @@ def list_tasks_recent_executions(db: Session, *, limit: int = 3):
     """列表页：任务 + 每任务最近 N 条执行记录（显式装配，绝不触发全量懒加载）。"""
     from sqlalchemy import func
 
-    from app.models.task_execution import TaskExecution
+    from app.infrastructure.persistence.models.task_execution import TaskExecution
 
     tasks = list_tasks(db)
     if not tasks:
@@ -107,7 +107,7 @@ def get_task_row(db: Session, task_id: int):
 
 
 def list_recent_executions(db: Session, task_id: int, *, limit: int = 3):
-    from app.models.task_execution import TaskExecution
+    from app.infrastructure.persistence.models.task_execution import TaskExecution
 
     if limit <= 0:
         return []
@@ -184,3 +184,56 @@ def get_first_by_shareurls(db: Session, urls: list[str]):
     if not candidates:
         return None
     return db.execute(select(Task).where(Task.shareurl.in_(candidates)).order_by(Task.id.asc())).scalars().first()
+
+def build_task_row(**kwargs):
+    """构造一个未持久化的 Task（预览试跑用；调用方设置 id=0 表示不落库）。"""
+    return Task(**kwargs)
+
+
+def stop_completed_drama_tasks(db: Session, *, language: str, poster_language: str) -> dict:
+    """停用 TMDB 状态为已完结/已取消的追剧任务，返回 checked/matched_ids/stopped。"""
+    from sqlalchemy import and_, func, update as sa_update
+
+    from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
+
+    checked = int(
+        db.execute(
+            select(func.count(Task.id)).where(
+                Task.task_type == "drama",
+                Task.enabled.is_(True),
+                Task.tmdb_id.is_not(None),
+                Task.tmdb_media_type == "tv",
+            )
+        ).scalar_one()
+        or 0
+    )
+    ended_statuses = ["Ended", "Canceled"]
+    matched_ids = list(
+        db.execute(
+            select(Task.id)
+            .join(
+                TMDBMediaCache,
+                and_(
+                    TMDBMediaCache.media_type == Task.tmdb_media_type,
+                    TMDBMediaCache.tmdb_id == Task.tmdb_id,
+                    TMDBMediaCache.language == language,
+                    TMDBMediaCache.poster_language == poster_language,
+                ),
+            )
+            .where(
+                Task.task_type == "drama",
+                Task.enabled.is_(True),
+                Task.tmdb_id.is_not(None),
+                Task.tmdb_media_type == "tv",
+                TMDBMediaCache.status.in_(ended_statuses),
+            )
+            .order_by(Task.id.desc())
+        )
+        .scalars()
+        .all()
+    )
+    stopped = 0
+    if matched_ids:
+        db.execute(sa_update(Task).where(Task.id.in_(matched_ids)).values(enabled=False))
+        stopped = len(matched_ids)
+    return {"checked": checked, "matched_ids": matched_ids, "stopped": stopped}

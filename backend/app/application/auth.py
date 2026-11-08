@@ -15,7 +15,7 @@ from app.core.security import (
     verify_password,
 )
 from app.core.settings import settings
-from app.core.deps import load_user_roles_permissions
+from app.application.auth_context import load_user_roles_permissions
 
 
 def _utcnow() -> datetime:

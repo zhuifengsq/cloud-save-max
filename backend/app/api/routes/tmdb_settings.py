@@ -3,9 +3,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db, transaction
+from app.application.container import get_db, transaction
 from app.schemas.tmdb_settings import TMDBConfigOut, TMDBConfigUpdateIn
 from app.application import audit
 from app.application.tmdb_settings import get_or_create_tmdb_setting, load_tmdb_config, update_tmdb_setting

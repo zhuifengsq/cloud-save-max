@@ -4,10 +4,10 @@ from fastapi import APIRouter, Depends, File, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import forbidden
 from app.core.permissions import PLUGIN_READ, PLUGIN_WRITE
-from app.db.session import get_db, transaction, transaction
+from app.application.container import get_db, transaction
 from app.application import audit
 from app.application.resource_search import cache_clear
 from app.application.search_plugins import (

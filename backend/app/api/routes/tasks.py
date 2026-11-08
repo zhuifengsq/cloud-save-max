@@ -8,23 +8,20 @@ drive_payload / drive_accounts）。本模块通过 include_router 组合子路�
 import logging
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import and_, func, select, update as sa_update
 from sqlalchemy.orm import Session
 
 from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ, TASK_RUN, TASK_WRITE
-from app.db.session import commit, get_db, transaction
-from app.infrastructure.drive.factory import AdapterFactory
-from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
-from app.infrastructure.drive.account_manager import DatabaseAccountManager
-from app.models.task import Task
-from app.models.tmdb_media_cache import TMDBMediaCache
-from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
-from app.infrastructure.scheduling.task_admission import task_admission
-from app.infrastructure.execution.task_executor import TaskExecutor
+from app.application.container import commit, get_db, system_settings_repo, tasks_repo, transaction
+from app.application.container import adapter_factory as _acc_AdapterFactory; AdapterFactory = _acc_AdapterFactory()
+from app.application.container import base_adapter_cls as _acc_BaseCloudDriveAdapter; BaseCloudDriveAdapter = _acc_BaseCloudDriveAdapter()
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
+from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
+from app.application.container import task_scheduler as _acc_task_scheduler_manager; task_scheduler_manager = _acc_task_scheduler_manager()
+from app.application.container import task_admission_service as _acc_task_admission; task_admission = _acc_task_admission()
+from app.application.container import task_executor_cls as _acc_TaskExecutor; TaskExecutor = _acc_TaskExecutor()
 from app.schemas.task_magic_regex import MagicRegexOut, MagicRegexRuleOut
 from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn
 from app.schemas.task import (
@@ -77,9 +74,8 @@ def get_task_suggestions(q: str = "", d: int = 0, drive_type: str = "", sf: str 
             commit(db)
         # 标记屏蔽分享者（不过滤，只标记）
         if items:
-            from app.models.system_setting import SystemSetting
-            blocked_setting = db.query(SystemSetting).filter(SystemSetting.key == "blocked_sharers").first()
-            blocked_set = {name.strip() for name in (blocked_setting.value or "").split("|") if name.strip()} if blocked_setting else set()
+            blocked_value = system_settings_repo().get_value(db, "blocked_sharers", "")
+            blocked_set = {name.strip() for name in blocked_value.split("|") if name.strip()}
             if blocked_set:
                 for item in items:
                     author = str(item.get("share_author_name") or "").strip()
@@ -120,47 +116,12 @@ def get_tasks(db: Session = Depends(get_db)):
 def post_stop_completed_drama_tasks(request: Request, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     language, poster_language = get_tmdb_lang_pair(db)
 
-    checked = (
-        db.execute(
-            select(func.count(Task.id)).where(
-                Task.task_type == "drama",
-                Task.enabled.is_(True),
-                Task.tmdb_id.is_not(None),
-                Task.tmdb_media_type == "tv",
-            )
-        )
-        .scalar_one()
+    result = tasks_repo().stop_completed_drama_tasks(
+        db, language=language, poster_language=poster_language
     )
-    ended_statuses = ["Ended", "Canceled"]
-    matched_ids = (
-        db.execute(
-            select(Task.id)
-            .join(
-                TMDBMediaCache,
-                and_(
-                    TMDBMediaCache.media_type == Task.tmdb_media_type,
-                    TMDBMediaCache.tmdb_id == Task.tmdb_id,
-                    TMDBMediaCache.language == language,
-                    TMDBMediaCache.poster_language == poster_language,
-                ),
-            )
-            .where(
-                Task.task_type == "drama",
-                Task.enabled.is_(True),
-                Task.tmdb_id.is_not(None),
-                Task.tmdb_media_type == "tv",
-                TMDBMediaCache.status.in_(ended_statuses),
-            )
-            .order_by(Task.id.desc())
-        )
-        .scalars()
-        .all()
-    )
-
-    stopped = 0
-    if matched_ids:
-        db.execute(sa_update(Task).where(Task.id.in_(matched_ids)).values(enabled=False))
-        stopped = len(matched_ids)
+    checked = result["checked"]
+    matched_ids = result["matched_ids"]
+    stopped = result["stopped"]
 
     audit.write_audit_log(
         db,

@@ -5,12 +5,12 @@ import unittest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
-from app.core.deps import _load_permissions, invalidate_permission_cache
+from app.application.auth_context import _load_permissions, invalidate_permission_cache
 from app.core.settings import settings
-from app.db.base import Base
-from app.models.permission import Permission
-from app.models.role import Role
-from app.models.user import User
+from app.infrastructure.persistence.base import Base
+from app.infrastructure.persistence.models.permission import Permission
+from app.infrastructure.persistence.models.role import Role
+from app.infrastructure.persistence.models.user import User
 from app.application.roles import set_role_permissions
 
 

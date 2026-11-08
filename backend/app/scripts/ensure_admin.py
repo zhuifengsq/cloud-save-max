@@ -9,10 +9,10 @@ from sqlalchemy import select
 from app.core.logging import setup_logging
 from app.core.permission_seed import PERMISSIONS_SEED
 from app.core.security import hash_password
-from app.db.session import SessionLocal
-from app.models.permission import Permission
-from app.models.role import Role
-from app.models.user import User
+from app.infrastructure.persistence.session import SessionLocal
+from app.infrastructure.persistence.models.permission import Permission
+from app.infrastructure.persistence.models.role import Role
+from app.infrastructure.persistence.models.user import User
 from app.application.auth import ensure_password_policy
 
 

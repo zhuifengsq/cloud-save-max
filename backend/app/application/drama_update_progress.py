@@ -4,7 +4,7 @@ import logging
 from datetime import date, datetime
 from typing import Any
 
-from app.schemas.task import DramaUpdateProgressOut
+from app.application.dto.task import DramaUpdateProgressOut
 
 logger = logging.getLogger(__name__)
 

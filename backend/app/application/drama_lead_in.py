@@ -20,19 +20,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError, bad_request
 from app.core.runtime.keyed_locks import LRUKeyedLocks
 from app.core.settings import settings
 from app.core.runtime.tx import end_read_tx
-from app.infrastructure.drive.factory import AdapterFactory
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
-from app.models.drive_account import DriveAccount
-from app.models.system_setting import SystemSetting
-from app.models.task import Task
-from app.models.task_lead_in import TaskLeadInRecord
+from app.application.container import adapter_factory as _acc_AdapterFactory; AdapterFactory = _acc_AdapterFactory()
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
+from app.application.container import system_settings_repo, task_lead_in_repo
 from app.application.audit import write_audit_log
 from app.application.drive_accounts import (
     BEIJING_TZ,
@@ -71,20 +67,11 @@ _LEAD_IN_KEYED_LOCKS = LRUKeyedLocks(maxsize=1024)
 
 
 def _get_setting(db: Session, key: str, default: str = "") -> str:
-    row = db.execute(select(SystemSetting).where(SystemSetting.key == key)).scalars().first()
-    if row is None or row.value is None:
-        return default
-    return row.value
+    return system_settings_repo().get_value(db, key, default)
 
 
 def _set_setting(db: Session, key: str, value: str, description: str = "") -> None:
-    row = db.execute(select(SystemSetting).where(SystemSetting.key == key)).scalars().first()
-    if row is not None:
-        row.value = value
-        if description:
-            row.description = description
-        return
-    db.add(SystemSetting(key=key, value=value, description=description or None))
+    system_settings_repo().set_value(db, key, value, description)
 
 
 def get_drama_lead_in_enabled(db: Session) -> bool:
@@ -470,14 +457,14 @@ def list_drama_lead_in_own_dir(
 # ---------------------------------------------------------------------------
 
 
-def _default_account(db: Session, drive_type: str) -> DriveAccount | None:
+def _default_account(db: Session, drive_type: str) -> Any:
     account_name = pick_default_account_name(db, drive_type)
     if not account_name:
         return None
     return get_active_account(db, account_name)
 
 
-def _build_adapter(account: DriveAccount):
+def _build_adapter(account: Any):
     if account is None:
         return None
     try:
@@ -708,7 +695,7 @@ def normalize_savepath(value: str | None) -> str:
     return path.rstrip("/") or "/"
 
 
-def _resolve_task_drive(db: Session, task: Task) -> tuple[str, DriveAccount | None]:
+def _resolve_task_drive(db: Session, task: Any) -> tuple[str, Any]:
     account_name = str(getattr(task, "account_name", "") or "").strip()
     if account_name:
         account = get_active_account(db, account_name)
@@ -764,7 +751,7 @@ def parse_preview_token(token: str, *, now: float | None = None) -> dict[str, An
     return payload
 
 
-def build_task_lead_in_preview(db: Session, task: Task) -> dict[str, Any]:
+def build_task_lead_in_preview(db: Session, task: Any) -> dict[str, Any]:
     """按契约第 3.2 节的顺序生成预览；任何一步不可用都返回 available=False + 中文原因。"""
     task_id = int(task.id)
     task_savepath = str(getattr(task, "savepath", "") or "")
@@ -1215,7 +1202,7 @@ def _store_result(
     user_agent: str | None,
 ) -> dict[str, Any]:
     status = status if status in _ACTIVE_STATUSES else "failed"
-    record: TaskLeadInRecord | None = None
+    record: Any | None = None
     try:
         record = _upsert_record(
             db,
@@ -1280,29 +1267,19 @@ def _upsert_record(
     status: str,
     message: str,
     config_version: int,
-) -> TaskLeadInRecord:
-    record = (
-        db.execute(
-            select(TaskLeadInRecord).where(
-                TaskLeadInRecord.task_id == task_id,
-                TaskLeadInRecord.drive_type == drive_type,
-            )
-        )
-        .scalars()
-        .first()
+) -> Any:
+    return task_lead_in_repo().upsert_record(
+        db,
+        task_id=task_id,
+        drive_type=drive_type,
+        account_name=account_name,
+        dir_path=dir_path,
+        material_name=material_name,
+        material_fid=material_fid,
+        status=status,
+        message=message,
+        config_version=config_version,
     )
-    if record is None:
-        record = TaskLeadInRecord(task_id=task_id, drive_type=drive_type)
-        db.add(record)
-    record.account_name = (account_name or "")[:128]
-    record.dir_path = (dir_path or "")[:512]
-    record.material_name = (material_name or "")[:512]
-    record.material_fid = (material_fid or "")[:256]
-    record.status = status
-    record.message = (message or "")[:512]
-    record.config_version = int(config_version or 0)
-    db.flush()
-    return record
 
 
 # ---------------------------------------------------------------------------
@@ -1310,22 +1287,17 @@ def _upsert_record(
 # ---------------------------------------------------------------------------
 
 
-def get_lead_in_record(db: Session, task_id: int, drive_type: str | None = None) -> TaskLeadInRecord | None:
+def get_lead_in_record(db: Session, task_id: int, drive_type: str | None = None) -> Any:
     try:
         normalized_task_id = int(task_id or 0)
     except (TypeError, ValueError):
         return None
     if normalized_task_id <= 0:
         return None
-    statement = select(TaskLeadInRecord).where(TaskLeadInRecord.task_id == normalized_task_id)
-    if drive_type:
-        statement = statement.where(TaskLeadInRecord.drive_type == str(drive_type))
-    return db.execute(
-        statement.order_by(TaskLeadInRecord.updated_at.desc(), TaskLeadInRecord.id.desc())
-    ).scalars().first()
+    return task_lead_in_repo().get_record(db, normalized_task_id, drive_type)
 
 
-def get_task_lead_in_state(db: Session, task: Task) -> dict[str, Any]:
+def get_task_lead_in_state(db: Session, task: Any) -> dict[str, Any]:
     """任务详情里的引流记录摘要，无记录时 state="none"。"""
     try:
         task_id = int(getattr(task, "id", 0) or 0)
@@ -1348,7 +1320,7 @@ def get_task_lead_in_state(db: Session, task: Task) -> dict[str, Any]:
     }
 
 
-def _record_sort_key(record: TaskLeadInRecord) -> tuple[datetime, int]:
+def _record_sort_key(record: Any) -> tuple[datetime, int]:
     updated = record.updated_at
     if updated is None:
         updated = datetime.min
@@ -1372,12 +1344,8 @@ def load_lead_in_summary_map(db: Session, task_ids: list[int]) -> dict[int, dict
     }
     if not normalized:
         return summary
-    records = (
-        db.execute(select(TaskLeadInRecord).where(TaskLeadInRecord.task_id.in_(normalized)))
-        .scalars()
-        .all()
-    )
-    latest: dict[int, TaskLeadInRecord] = {}
+    records = task_lead_in_repo().list_by_task_ids(db, normalized)
+    latest: dict[int, Any] = {}
     for record in records:
         task_id = int(record.task_id)
         previous = latest.get(task_id)

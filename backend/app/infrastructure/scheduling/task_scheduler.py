@@ -12,8 +12,8 @@ from sqlalchemy.exc import OperationalError
 
 from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
 from app.core.settings import settings
-from app.db.session import SessionLocal
-from app.models.task import Task
+from app.infrastructure.persistence.session import SessionLocal
+from app.infrastructure.persistence.models.task import Task
 from app.application.notifications.sender import send_runtime
 from app.application.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
 from app.application.task_scheduler import get_or_create_task_scheduler_setting
@@ -22,7 +22,7 @@ from app.application.tmdb_cache_scheduler import get_or_create_tmdb_cache_schedu
 from app.application.drive_account_probe_scheduler import get_or_create_drive_account_probe_scheduler_setting
 from app.application.drive_accounts import probe_drive_account, sign_in_drive_account
 from app.application.audit_log_scheduler import get_or_create_audit_log_scheduler_setting, purge_old_audit_logs
-from app.models.drive_account import DriveAccount
+from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.infrastructure.drive.account_manager import DatabaseAccountManager
 from app.infrastructure.scheduling.task_admission import task_admission
 from app.infrastructure.execution.task_executor import TaskExecutor

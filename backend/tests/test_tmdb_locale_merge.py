@@ -8,9 +8,9 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 import app.application.tmdb_cache as tmdb_cache
-from app.db.base import Base
-from app.models.tmdb_media_cache import TMDBMediaCache
-from app.models.tmdb_setting import TMDBSetting
+from app.infrastructure.persistence.base import Base
+from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
+from app.infrastructure.persistence.models.tmdb_setting import TMDBSetting
 from app.application.tmdb_cache import _fetch_tmdb_detail, _season_needs_base, get_tmdb_detail_cached, purge_cold_cache
 from app.infrastructure.http.tmdb_client import BASE_LANGUAGE, TMDBClient
 

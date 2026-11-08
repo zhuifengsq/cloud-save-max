@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.notification_setting import NotificationSetting
+from app.infrastructure.persistence.models.notification_setting import NotificationSetting
 
 DEFAULT_NOTIFICATION_SETTING_ID = 1
 

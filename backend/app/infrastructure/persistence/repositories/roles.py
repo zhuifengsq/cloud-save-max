@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.role import Role
+from app.infrastructure.persistence.models.role import Role
 
 
 def list_roles(db: Session) -> list[Any]:

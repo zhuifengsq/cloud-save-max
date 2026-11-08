@@ -29,23 +29,23 @@ from sqlalchemy.orm import Session
 from treelib import Tree
 
 from app.api.routes.tasks import post_create_task_share, post_run_task
-from app.core.deps import CurrentUser
+from app.api.deps import CurrentUser
 from app.core.permissions import TASK_RUN, TASK_WRITE
-from app.db.base import Base
+from app.infrastructure.persistence.base import Base
 from app.infrastructure.drive.factory import AdapterFactory
 from app.infrastructure.execution.drama_executor import DramaTaskExecutor
 from app.infrastructure.execution.execution_log import ExecutionLog
 from app.infrastructure.execution.task_executor import TaskExecutor
-from app.models.audit_log import AuditLog
-from app.models.drive_account import DriveAccount
-from app.models.task import Task
-from app.models.task_execution import TaskExecution
-from app.models.task_lead_in import TaskLeadInRecord
+from app.infrastructure.persistence.models.audit_log import AuditLog
+from app.infrastructure.persistence.models.drive_account import DriveAccount
+from app.infrastructure.persistence.models.task import Task
+from app.infrastructure.persistence.models.task_execution import TaskExecution
+from app.infrastructure.persistence.models.task_lead_in import TaskLeadInRecord
 from app.application import drama_lead_in as svc
 from app.application.task_share_links import get_task_share_link
 
 # 触发所有模型注册到 Base.metadata（sqlite 建表用）。
-import app.models  # noqa: F401,E402
+import app.infrastructure.persistence.models  # noqa: F401,E402
 
 SHARE_URL = "https://pan.example.com/s/source"
 MATERIAL_SHARE_URL = "https://pan.example.com/s/abcdef"

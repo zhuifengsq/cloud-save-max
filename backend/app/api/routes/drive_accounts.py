@@ -4,17 +4,16 @@ from sqlalchemy.orm import Session
 import json
 
 from app.core.errors import ApiError, bad_request, not_found
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import DRIVE_ACCOUNT_READ, DRIVE_ACCOUNT_WRITE
-from app.db.session import get_db, transaction
+from app.application.container import get_db, transaction
 from app.schemas.drive_account import DriveAccountCreateIn, DriveAccountOut, DriveAccountStatusIn, DriveAccountUpdateIn, DriveTypeOut
 from app.schemas.drive_account_auth import DriveAccountCaptchaSubmitIn, DriveAccountSmsSubmitIn
 from app.schemas.drive_account_probe_scheduler import DriveAccountProbeSchedulerSettingOut, DriveAccountProbeSchedulerSettingUpdateIn
-from app.infrastructure.drive.adapters.drive_auth import DriveAuthRequired
-from app.infrastructure.drive.adapters.aliyun_adapter import AliyunAdapter
-from app.infrastructure.drive.adapter_registry import AdapterRegistry
-from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
-from app.models.drive_account import DriveAccount
+from app.application.container import drive_auth_required as _acc_DriveAuthRequired; DriveAuthRequired = _acc_DriveAuthRequired()
+from app.application.container import aliyun_adapter_cls as _acc_AliyunAdapter; AliyunAdapter = _acc_AliyunAdapter()
+from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
+from app.application.container import task_scheduler as _acc_task_scheduler_manager; task_scheduler_manager = _acc_task_scheduler_manager()
 from app.application.drive_account_probe_scheduler import get_or_create_drive_account_probe_scheduler_setting, load_drive_account_probe_scheduler_setting, update_drive_account_probe_scheduler_setting
 from app.application.drive_account_auth_sessions import create_auth_session, delete_auth_session, get_auth_session
 from app.application import audit
@@ -197,7 +196,7 @@ def post_account_auth_start(request: Request, account_id: int, current: CurrentU
 
 @router.post('/{account_id}/auth/qrcode/start', dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account_auth_qrcode_start(request: Request, account_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    account = db.get(DriveAccount, account_id)
+    account = drive_accounts_repo().get_account(db, account_id)
     if account is None:
         raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "驱动账号不存在")
     if account.drive_type != "aliyun":
@@ -234,7 +233,7 @@ def post_account_auth_qrcode_poll(request: Request, session_id: str, current: Cu
     data = resp.get("data") or {}
     if str(data.get("status") or "") == "CONFIRMED" and str(data.get("refresh_token") or ""):
         delete_auth_session(session_id)
-        account = db.get(DriveAccount, session.account_id)
+        account = drive_accounts_repo().get_account(db, session.account_id)
         if account is None:
             raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "驱动账号不存在")
         config = AdapterRegistry.parse_config_json(account.drive_type, account.config_json, account.cookie)

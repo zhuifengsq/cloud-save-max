@@ -15,6 +15,18 @@ from typing import Any
 
 _SYSTEM_CLOCK: Any = None
 
+# ---------------------------------------------------------------------------
+# 请求作用域数据库依赖的装配出口（composition root re-export）
+# presentation 层（app/api/**）只从这里取 get_db / transaction / commit / SessionLocal，
+# 不再直接 import persistence 实现；装配点的边不计入分层预算（check_layering 跳过
+# composition-root）。S5 之前这些符号由路由直接从 app.infrastructure.persistence.session 导入。
+from app.infrastructure.persistence.session import (  # noqa: E402
+    SessionLocal,
+    commit,
+    get_db,
+    transaction,
+)
+
 
 def audit_repo() -> ModuleType:
     """审计日志仓储（audit_logs / audit_log_scheduler / write_audit_log）。"""
@@ -42,6 +54,27 @@ def notification_settings_repo() -> ModuleType:
     from app.infrastructure.persistence.repositories import notification_settings
 
     return notification_settings
+
+
+def system_settings_repo() -> ModuleType:
+    """系统设置键值仓储（system_settings 表）。"""
+    from app.infrastructure.persistence.repositories import system_settings
+
+    return system_settings
+
+
+def task_templates_repo() -> ModuleType:
+    """任务模板仓储（task_templates 表）。"""
+    from app.infrastructure.persistence.repositories import task_templates
+
+    return task_templates
+
+
+def task_lead_in_repo() -> ModuleType:
+    """追剧引流记录仓储（task_lead_in 表）。"""
+    from app.infrastructure.persistence.repositories import task_lead_in
+
+    return task_lead_in
 
 
 def task_executions_repo() -> ModuleType:
@@ -159,7 +192,7 @@ def clock():
 @contextmanager
 def db_session():
     """显式开启一个会话（供确需自管会话的服务/扩展边界使用，单进程无 DI）。"""
-    from app.db.session import SessionLocal
+    from app.infrastructure.persistence.session import SessionLocal
 
     session = SessionLocal()
     try:
@@ -194,3 +227,96 @@ def drive_gateway(adapter: Any, *, drive_type: str | None = None):
     from app.infrastructure.drive.gateway import gateway_for_adapter
 
     return gateway_for_adapter(adapter, drive_type=drive_type)
+
+# ---------------------------------------------------------------------------
+# infrastructure 实现的装配出口（S5：presentation/application 不再顶层 import 实现）
+# 调用方约定：在需要的地方写成 `from app.application.container import adapter_factory as _f;
+# AdapterFactory = _f()`，保持原有名字与调用写法不变。返回的都是无状态类或单例，单进程内安全。
+def adapter_factory():
+    from app.infrastructure.drive.factory import AdapterFactory
+
+    return AdapterFactory
+
+
+def base_adapter_cls():
+    from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
+
+    return BaseCloudDriveAdapter
+
+
+def aliyun_adapter_cls():
+    from app.infrastructure.drive.adapters.aliyun_adapter import AliyunAdapter
+
+    return AliyunAdapter
+
+
+def drive_auth_required():
+    from app.infrastructure.drive.adapters.drive_auth import DriveAuthRequired
+
+    return DriveAuthRequired
+
+
+def account_manager_cls():
+    from app.infrastructure.drive.account_manager import DatabaseAccountManager
+
+    return DatabaseAccountManager
+
+
+def task_scheduler():
+    from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
+
+    return task_scheduler_manager
+
+
+def task_admission_service():
+    from app.infrastructure.scheduling.task_admission import task_admission
+
+    return task_admission
+
+
+def task_executor_cls():
+    from app.infrastructure.execution.task_executor import TaskExecutor
+
+    return TaskExecutor
+
+
+def execution_log_cls():
+    from app.infrastructure.execution.execution_log import ExecutionLog
+
+    return ExecutionLog
+
+
+def magic_rename_cls():
+    from app.infrastructure.execution.magic_rename import MagicRename
+
+    return MagicRename
+
+
+def douban_client_cls():
+    from app.infrastructure.http.douban_client import DoubanClient
+
+    return DoubanClient
+
+
+def tmdb_client_cls():
+    from app.infrastructure.http.tmdb_client import TMDBClient
+
+    return TMDBClient
+
+
+def tmdb_base_language():
+    from app.infrastructure.http.tmdb_client import BASE_LANGUAGE
+
+    return BASE_LANGUAGE
+
+
+def search_plugin_base():
+    from app.infrastructure.search.base import BaseSearchPlugin
+
+    return BaseSearchPlugin
+
+
+def drama_parse_size():
+    from app.infrastructure.execution.drama_executor import _parse_size
+
+    return _parse_size

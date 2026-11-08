@@ -59,7 +59,7 @@ def test_unit_of_work_wrapper_commits():
 
 def test_locked_commit_retries_then_succeeds(monkeypatch):
     """事务仍存活（ACTIVE）时，commit 的锁冲突允许退避重试。"""
-    import app.db.session as session_module
+    import app.infrastructure.persistence.session as session_module
 
     monkeypatch.setattr(session_module.time, "sleep", lambda _seconds: None)
     engine, db = _session()
@@ -83,7 +83,7 @@ def test_locked_commit_retries_then_succeeds(monkeypatch):
 
 
 def test_non_lock_error_is_not_retried(monkeypatch):
-    import app.db.session as session_module
+    import app.infrastructure.persistence.session as session_module
 
     monkeypatch.setattr(session_module.time, "sleep", lambda _seconds: None)
     engine, db = _session()
@@ -113,8 +113,8 @@ def test_lock_conflict_is_not_masked(tmp_path):
     旧实现（retry_on_locked + on_retry=db.rollback）会在第一次失败后回滚，
     再 commit 空事务并返回成功——接口 200、数据静默丢失。此用例锁死该行为。
     """
-    from app.db.base import Base
-    from app.models.task_template import TaskTemplate
+    from app.infrastructure.persistence.base import Base
+    from app.infrastructure.persistence.models.task_template import TaskTemplate
 
     db_path = tmp_path / "lock_conflict.db"
     engine = create_engine(

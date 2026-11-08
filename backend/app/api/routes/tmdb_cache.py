@@ -7,10 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo
 
-from app.core.deps import CurrentUser, get_current_user, require_permissions
+from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db, transaction, transaction
-from app.models.tmdb_media_cache import TMDBMediaCache
+from app.application.container import get_db, tmdb_media_cache_repo, transaction
 from app.schemas.tmdb_cache import (
     TMDBCacheDeleteOut,
     TMDBCacheItemOut,
@@ -40,7 +39,7 @@ from app.application.tmdb_cache import (
 )
 from app.application.tmdb_cache_scheduler import get_or_create_tmdb_cache_scheduler_setting, load_tmdb_cache_scheduler_setting, update_tmdb_cache_scheduler_setting
 from app.application.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
-from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
+from app.application.container import task_scheduler as _acc_task_scheduler_manager; task_scheduler_manager = _acc_task_scheduler_manager()
 
 
 router = APIRouter()
@@ -141,17 +140,8 @@ def get_tmdb_cache_status(
 
     language = str(cfg.get("language") or "zh-CN").strip() or "zh-CN"
     poster_language = str(cfg.get("poster_language") or "zh-CN").strip() or "zh-CN"
-    row = (
-        db.execute(
-            select(TMDBMediaCache).where(
-                TMDBMediaCache.media_type == mt,
-                TMDBMediaCache.tmdb_id == tmdb_id,
-                TMDBMediaCache.language == language,
-                TMDBMediaCache.poster_language == poster_language,
-            )
-        )
-        .scalars()
-        .first()
+    row = tmdb_media_cache_repo().get_row(
+        db, media_type=mt, tmdb_id=tmdb_id, language=language, poster_language=poster_language
     )
     return _status_out(configured=configured, mt=mt, tid=tmdb_id, row=row)
 
@@ -174,17 +164,8 @@ def get_tmdb_cache_item(
 
     language = str(cfg.get("language") or "zh-CN").strip() or "zh-CN"
     poster_language = str(cfg.get("poster_language") or "zh-CN").strip() or "zh-CN"
-    row = (
-        db.execute(
-            select(TMDBMediaCache).where(
-                TMDBMediaCache.media_type == mt,
-                TMDBMediaCache.tmdb_id == tmdb_id,
-                TMDBMediaCache.language == language,
-                TMDBMediaCache.poster_language == poster_language,
-            )
-        )
-        .scalars()
-        .first()
+    row = tmdb_media_cache_repo().get_row(
+        db, media_type=mt, tmdb_id=tmdb_id, language=language, poster_language=poster_language
     )
 
     if row is None:
@@ -259,13 +240,13 @@ def post_tmdb_cache_refresh(
     language = str(cfg.get("language") or "zh-CN").strip() or "zh-CN"
     poster_language = str(cfg.get("poster_language") or "zh-CN").strip() or "zh-CN"
 
-    lookup = select(TMDBMediaCache).where(
-        TMDBMediaCache.media_type == mt,
-        TMDBMediaCache.tmdb_id == payload.tmdb_id,
-        TMDBMediaCache.language == language,
-        TMDBMediaCache.poster_language == poster_language,
+    row = tmdb_media_cache_repo().get_row(
+        db,
+        media_type=mt,
+        tmdb_id=payload.tmdb_id,
+        language=language,
+        poster_language=poster_language,
     )
-    row = db.scalar(lookup)
 
     queued = False
     if payload.async_refresh and row is not None:

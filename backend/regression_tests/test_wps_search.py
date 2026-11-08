@@ -6,7 +6,7 @@ from starlette.requests import Request
 from importlib import util
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-from app.models.resource_search_source import ResourceSearchSource
+from app.infrastructure.persistence.models.resource_search_source import ResourceSearchSource
 from app.application import search_plugins
 
 

@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.application.container import permissions_repo, roles_repo
-from app.core.deps import invalidate_permission_cache
+from app.application.auth_context import invalidate_permission_cache
 from app.core.errors import bad_request, not_found
 
 

@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models.invalid_share_link import InvalidShareLink
+from app.infrastructure.persistence.models.invalid_share_link import InvalidShareLink
 
 
 def get_invalid_share_link(db: Session, shareurl: str) -> Any:

@@ -17,8 +17,8 @@ from app.core.errors import ApiError
 from app.core.logging import setup_logging
 from app.core.settings import settings
 from app.middlewares.gzip import GZipMiddleware
-from app.db.backup import backup_before_migrate
-from app.db.session import SessionLocal
+from app.infrastructure.persistence.backup import backup_before_migrate
+from app.infrastructure.persistence.session import SessionLocal
 from app.infrastructure.notifications.telegram_bot_manager import telegram_bot_manager
 from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
 from app.middlewares.timing import TimingMiddleware

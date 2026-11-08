@@ -15,7 +15,7 @@ def end_read_tx(db: Any) -> None:
 
     语义上这是「提交一个没有写入的事务」，与「提交业务数据」不是一回事：
     - 只用于读路径 / 长 IO 之前，避免持有读写锁、卡住 WAL checkpoint；
-    - 业务写入的提交必须由事务边界拥有者调用 app.db.session.commit()/transaction()，
+    - 业务写入的提交必须由事务边界拥有者调用 app.infrastructure.persistence.session.commit()/transaction()，
       不得用它代替；
     - 没有进行中的事务时是 no-op（显式判断省一次空的 round-trip）。
     """

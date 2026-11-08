@@ -1,11 +1,11 @@
 """事务边界（Unit of Work）：目标架构中应用层唯一可以提交事务的地方。
 
-实现位于 `app.db.session.transaction`（与 retry_on_locked 同处，属于持久化层），
+实现位于 `app.infrastructure.persistence.session.transaction`（与 retry_on_locked 同处，属于持久化层），
 本模块只做 re-export，保持 `from app.infrastructure.persistence.unit_of_work import
 transaction` 这个稳定入口。
 
 分层注意：表现层（api/routes）不要 import 本模块——那会产生新的
-presentation->infrastructure 违规；路由请直接用 `app.db.session.transaction`。
+presentation->infrastructure 违规；路由请直接用 `app.infrastructure.persistence.session.transaction`。
 用例/服务层可以继续从这里取，未来接仓储时再扩展 UnitOfWork。
 
 用法：
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.db.session import transaction
+from app.infrastructure.persistence.session import transaction
 
 __all__ = ["UnitOfWork", "transaction"]
 

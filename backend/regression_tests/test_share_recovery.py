@@ -8,10 +8,10 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from treelib import Tree
 
-from app.db.base import Base
-from app.models.task import Task
-from app.models.task_execution import TaskExecution
-from app.models.drive_account import DriveAccount
+from app.infrastructure.persistence.base import Base
+from app.infrastructure.persistence.models.task import Task
+from app.infrastructure.persistence.models.task_execution import TaskExecution
+from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.infrastructure.execution.task_executor import TaskExecutor
 from app.application.tasks import update_task
 from app.application.task_share_links import save_task_share_link, get_task_share_link

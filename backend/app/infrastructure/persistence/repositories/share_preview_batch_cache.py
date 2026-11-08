@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models.share_preview_batch_cache import SharePreviewBatchCache
+from app.infrastructure.persistence.models.share_preview_batch_cache import SharePreviewBatchCache
 
 
 def _utcnow() -> datetime:

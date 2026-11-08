@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
-from app.models.resource_search_source import ResourceSearchSource
+from app.infrastructure.persistence.models.resource_search_source import ResourceSearchSource
 from app.application.search_plugins import (
     discover_search_plugins,
     list_search_plugins,

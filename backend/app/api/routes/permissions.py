@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.core.deps import require_permissions
+from app.api.deps import require_permissions
 from app.core.permissions import PERMISSION_READ
-from app.db.session import get_db
+from app.application.container import get_db
 from app.schemas.role import PermissionOut
 from app.application.permissions import list_permissions
 

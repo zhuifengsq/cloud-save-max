@@ -20,13 +20,12 @@ from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
-from app.core.deps import CurrentUser, get_current_user_scoped, require_permissions_scoped
+from app.api.deps import CurrentUser, get_current_user_scoped, require_permissions_scoped
 from app.core.permissions import TASK_RUN
-from app.db.session import SessionLocal, commit, commit
-from app.infrastructure.execution.execution_log import ExecutionLog
-from app.infrastructure.scheduling.task_admission import task_admission
-from app.infrastructure.execution.task_executor import TaskExecutor
-from app.models.task import Task
+from app.application.container import SessionLocal, commit, tasks_repo
+from app.application.container import execution_log_cls as _acc_ExecutionLog; ExecutionLog = _acc_ExecutionLog()
+from app.application.container import task_admission_service as _acc_task_admission; task_admission = _acc_task_admission()
+from app.application.container import task_executor_cls as _acc_TaskExecutor; TaskExecutor = _acc_TaskExecutor()
 from app.schemas.task import TaskCreateIn
 from app.application import audit
 from app.application.notifications.sender import send_runtime
@@ -273,7 +272,7 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
             log = ExecutionLog(emit_line=emit_line, emit_stage=emit_stage)
             try:
                 task_uid = (str(payload.task_uid or "").strip() or f"preview-{uuid.uuid4().hex}")
-                wtask = Task(
+                wtask = tasks_repo().build_task_row(
                     task_uid=task_uid,
                     task_type=str(payload.task_type or "generic"),
                     taskname=str(payload.taskname or ""),

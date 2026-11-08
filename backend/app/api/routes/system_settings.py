@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user, require_permissions
+from app.api.deps import get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db, transaction
-from app.models.system_setting import SystemSetting
+from app.application.container import get_db, transaction
+from app.application.system_settings import get_setting as _get_setting_service
+from app.application.system_settings import set_setting as _set_setting_service
 from app.schemas.system_settings import SystemSettingOut, SystemSettingUpdateIn
 
 router = APIRouter()
@@ -24,16 +25,11 @@ _SETTINGS_DEFAULTS = {
 
 
 def _get_setting(db: Session, key: str) -> str:
-    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-    return row.value if row else _SETTINGS_DEFAULTS.get(key, "")
+    return _get_setting_service(db, key, _SETTINGS_DEFAULTS.get(key, ""))
 
 
 def _set_setting(db: Session, key: str, value: str, description: str = "") -> None:
-    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
-    if row:
-        row.value = value
-    else:
-        db.add(SystemSetting(key=key, value=value, description=description))
+    _set_setting_service(db, key, value, description)
 
 
 @router.get("/sharer-filter", response_model=SystemSettingOut, dependencies=[Depends(require_permissions(TASK_READ))])

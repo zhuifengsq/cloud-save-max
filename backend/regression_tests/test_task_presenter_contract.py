@@ -31,7 +31,7 @@ def _execution(pid: int, started_at: datetime, *, adapter_snapshot: str | None =
 
 
 def _task():
-    from app.models.task import Task
+    from app.infrastructure.persistence.models.task import Task
 
     item = Task(
         task_uid="uid-abc",

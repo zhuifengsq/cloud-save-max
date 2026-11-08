@@ -47,8 +47,8 @@ def model_tables() -> list[str]:
     # 延迟把 backend 加入 sys.path：脚本从仓库根目录运行，app 包不在默认路径上。
     if str(BACKEND_ROOT) not in sys.path:
         sys.path.insert(0, str(BACKEND_ROOT))
-    from app.db.base import Base  # noqa: E402
-    import app.models  # noqa: E402,F401  显式导入以注册全部模型（db.base 为破环已不代为导入）
+    from app.infrastructure.persistence.base import Base  # noqa: E402
+    import app.infrastructure.persistence.models  # noqa: E402,F401  显式导入以注册全部模型（db.base 为破环已不代为导入）
 
     return sorted(Base.metadata.tables)
 

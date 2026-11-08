@@ -5,8 +5,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.telegram_bot_session import TelegramBotSession
-from app.models.telegram_bot_state import TelegramBotState
+from app.infrastructure.persistence.models.telegram_bot_session import TelegramBotSession
+from app.infrastructure.persistence.models.telegram_bot_state import TelegramBotState
 
 DEFAULT_TELEGRAM_BOT_STATE_ID = 1
 

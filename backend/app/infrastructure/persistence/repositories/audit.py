@@ -7,9 +7,9 @@ from typing import Any
 from sqlalchemy import Select, delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.audit_log import AuditLog
-from app.models.audit_log_scheduler_setting import AuditLogSchedulerSetting
-from app.models.user import User
+from app.infrastructure.persistence.models.audit_log import AuditLog
+from app.infrastructure.persistence.models.audit_log_scheduler_setting import AuditLogSchedulerSetting
+from app.infrastructure.persistence.models.user import User
 
 
 def add_audit_log(
@@ -94,3 +94,7 @@ def get_or_create_scheduler_setting(db: Session) -> AuditLogSchedulerSetting:
 def purge_old_audit_logs(db: Session, *, cutoff: datetime) -> int:
     result = db.execute(delete(AuditLog).where(AuditLog.created_at < cutoff))
     return result.rowcount
+
+def delete_all(db: Session) -> int:
+    """清空审计日志（保留调度设置），返回删除行数。"""
+    return int(db.execute(delete(AuditLog)).rowcount or 0)

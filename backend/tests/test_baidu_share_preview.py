@@ -52,8 +52,8 @@ class BaiduSharePreviewTests(unittest.TestCase):
         self.assertEqual(result["data"]["list"], [])
 
     def test_preview_route_propagates_detail_failure(self):
-        from app.api.routes.tasks_share import post_share_preview
-        from app.schemas.task_browse import SharePreviewIn
+        from app.application.share_preview import preview_share
+        from app.application.dto.task_browse import SharePreviewIn
         from app.core.errors import ApiError
         adapter = Mock()
         adapter.extract_url.return_value = ("1test", "1111", "0", [])
@@ -61,8 +61,8 @@ class BaiduSharePreviewTests(unittest.TestCase):
         adapter.get_detail.return_value = {"code": 1, "message": "读取分享目录失败", "data": {"list": []}}
         manager = Mock()
         manager.get_adapter_for_task.return_value = adapter
-        with patch("app.api.routes.tasks_share.DatabaseAccountManager", return_value=manager), \
-             patch("app.api.routes.tasks_share.pick_default_account_name", return_value="test"):
+        with patch("app.application.share_preview.DatabaseAccountManager", return_value=manager), \
+             patch("app.application.share_preview.pick_default_account_name", return_value="test"):
             with self.assertRaises(ApiError) as caught:
-                post_share_preview(SharePreviewIn(shareurl="https://pan.baidu.com/s/1test"), Mock())
+                preview_share(SharePreviewIn(shareurl="https://pan.baidu.com/s/1test"), Mock())
         self.assertEqual(caught.exception.code, "TASK_SHARE_DETAIL_FAILED")
