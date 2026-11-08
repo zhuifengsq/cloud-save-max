@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo
 
 from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.application.container import get_db, tmdb_media_cache_repo, transaction
+from app.application.container import commit, get_db, tmdb_media_cache_repo, transaction
 from app.schemas.tmdb_cache import (
     TMDBCacheDeleteOut,
     TMDBCacheItemOut,
@@ -61,7 +61,7 @@ def _as_display_tz(dt: datetime | None) -> datetime | None:
     return dt.astimezone(_DISPLAY_TZ)
 
 
-def _status_out(*, configured: bool, mt: str, tid: int, row: TMDBMediaCache | None) -> TMDBCacheStatusOut:
+def _status_out(*, configured: bool, mt: str, tid: int, row: Any) -> TMDBCacheStatusOut:
     if row is None:
         return TMDBCacheStatusOut(configured=configured, media_type=mt, tmdb_id=tid, exists=False)
     return TMDBCacheStatusOut(
@@ -270,7 +270,13 @@ def post_tmdb_cache_refresh(
     )
     commit(db)
 
-    row = db.scalar(lookup)
+    row = tmdb_media_cache_repo().get_row(
+        db,
+        media_type=mt,
+        tmdb_id=payload.tmdb_id,
+        language=language,
+        poster_language=poster_language,
+    )
     return TMDBCacheRefreshOut(queued=queued, status=_status_out(configured=configured, mt=mt, tid=payload.tmdb_id, row=row))
 
 

@@ -4,6 +4,7 @@
 基于 requests 直接调用阿里云盘 API 实现
 参考 aligo 项目的实现方式
 """
+import random
 import re
 import json
 import time

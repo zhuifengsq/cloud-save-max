@@ -173,6 +173,17 @@ services:
 感谢 [Cp0204](https://github.com/Cp0204) 的开源贡献。
 感谢 [OzoO0](https://github.com/OzoO0) 的开源贡献。
 ---
+## 开发文档
+
+| 文档 | 用途 |
+| --- | --- |
+| [开发规范](docs/development-guide.md) | **改代码前先看**：新增功能 7 步动线、分层与事务规则、并发/缓存组件选型、新网盘接入、契约维护、测试要求、DoD 清单 |
+| [架构分层一页纸](docs/architecture/README.md) | 四层边界、谁可以 import 谁、分层门禁怎么跑 |
+| [架构演进方案](docs/architecture-evolution-plan.md) | 为什么这么分层、S0–S5 重构路线图、指标与风险清单 |
+| [架构决策记录（ADR）](docs/architecture/adr/) | 三个「有意为之的例外」及其重新评估条件：TMDB 写路径隔离、准入保留在调用点、单进程假设 |
+
+CI 门禁：分层方向（`scripts/check_layering.py`）、schema 漂移（`scripts/check_schema_drift.py`）、回归测试（`pytest regression_tests`）。
+
 ## ❤️ 支持项目
 
 如果觉得这个项目对你有帮助，你可以通过以下方式支持我：

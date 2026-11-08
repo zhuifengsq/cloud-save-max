@@ -1252,8 +1252,8 @@ python -c "import app.main; print('import ok')"
 - 基线已刷新：`backend/.layering-baseline.json` = `{"violations":0,"deferred_imports":84,"cycles":0}`。
 
 **S5-3 遗留：全部完成（2026-11-09）。** ~~application/queries 显式拆分~~ **§10.18**、
-~~前端契约 golden 快照~~ **§10.19**、~~3 篇 ADR~~ **§10.20**（`docs/architecture/adr/0001-0003`）。
-方案侧到此收口，后续动代码只需守住 §6.1 指标与 §7 风险清单。
+~~前端契约 golden 快照~~ **§10.19**、~~3 篇 ADR~~ **§10.20**（`docs/architecture/adr/0001-0003`）、~~开发规范文档~~ **§10.21**（`docs/development-guide.md`）。
+方案侧到此收口，后续动代码只需守住 §6.1 指标、§7 风险清单与开发规范 §12 的 DoD。
 
 **说明：** 本轮改动与用户工作区未提交文件交错，仍**未做任何 git commit**（沿用历史约定）；
 `git add/commit` 仍需用户确认后再执行。
@@ -1380,6 +1380,101 @@ CI 覆盖：`docker-publish` 的 backend job 在仓库根 checkout 后以 `worki
 CI 与门禁只校验结构（`scripts/check_layering.py` 的 documented exceptions），决策理由靠 ADR 传承。
 
 本项为纯文档改动，无代码变更；验证沿用 §10.19 的同一基线（501 passed / 2 skipped、violations 0、cycles 0、250 模块、`import app.main` ok）。
+
+### 10.21 开发规范文档（2026-11-09）
+
+本项不是重构动作，而是把前 20 节沉淀下来的规则**翻译成可照着干活的操作手册**，回答「明天要加一个功能/改一个模块，按什么顺序动、放哪个目录、写哪些测试」。
+
+**交付物：`docs/development-guide.md`（547 行 / 约 30.9 KB）。**
+
+| 章节 | 回答什么问题 |
+| --- | --- |
+| §0 三分钟速查 | 四条命令（测试 / 分层门禁 / schema 门禁 / 契约更新）+ 十条铁律 |
+| §1 分层规则 | 七条允许 import 关系、组合根例外、documented exception、当前完成态目录树、三条硬规则 |
+| §2 新增功能 7 步动线 | 模型 → 迁移 → 仓储 → container 访问器 → queries/use case → presenter + 路由 → 测试（含写端点与读端点样板） |
+| §3 数据库与迁移 | 迁移必须可 downgrade、禁止 `create_all`、备份与迁移预检、JSON 列上限、索引约定、SQLite PRAGMA 现状 |
+| §4 事务与提交 | 三原语（`transaction` / `commit` / `end_read_tx`）只从 container 取；五条规则；六行反模式表 |
+| §5 并发与异步 | 单进程假设、场景 → 组件对照表、六条禁止事项、压测脚本 |
+| §6 接入第 11 家网盘 | 一文件 + 两行注册 + 测试；11 个抽象方法；限速/令牌/close/失败分类/文案逐字保留 |
+| §7 读模型与响应契约 | queries 是 frozen dataclass 且禁 N+1；presenter 纯函数；改响应 = 改契约三件套 |
+| §8 配置密钥灰度 | `use_xxx` 开关三处登记、`secrets.json` 不入库、`DATABASE_URL` 仅 `XXM_TESTING=1` 可覆盖 |
+| §9 可观测性 | 审计同事务、禁 `except: pass`、慢请求阈值、`run_log` 上限 |
+| §10 测试要求 | `tests/` 本地 vs `regression_tests/` 进 CI；四类测试；两个真实踩坑；测不到的三个领域要手工 e2e |
+| §11–12 提交与 DoD | 提交粒度、评审要点、8 条 DoD 勾选清单 |
+| 附录 A/B | 五段可复制代码骨架（仓储 / 访问器 / 按 key 串行+单飞 / 后台工作单元 / 适配器骨架）；六个常见问题 |
+
+**三份文档的分工（避免读者不知道该看哪份）：**
+
+| 文档 | 回答的问题 | 读者 |
+| --- | --- | --- |
+| [架构演进方案](architecture-evolution-plan.md)（本文） | 为什么改、分几期改、指标怎么定、风险在哪 | 决策者 / 架构评审 |
+| [架构分层一页纸](architecture/README.md) | 现在每层在哪、允许谁 import 谁、门禁怎么跑 | 第一次改 `backend/app/` 的人 |
+| [开发规范](development-guide.md) | 具体某个需求按什么顺序落地、模板长什么样、什么算做完 | 每天写业务代码的人 |
+
+**规范里被固化成「可检查」而非「靠自觉」的部分**（都有对应护栏，不是纸面要求）：路由零裸 `db.commit()`（`test_route_transactions.py`）、提交点预算（`test_commit_ownership.py`）、`SessionLocal` 白名单（同文件）、响应契约字段与 SSE 字节（`test_frontend_contract_golden.py`）、分层方向（`scripts/check_layering.py` + CI）、schema 漂移（`scripts/check_schema_drift.py` + CI）。
+
+**写作过程本身的两条教训**（已写进 §10 与附录 B）：
+1. 用 `String.raw` 生成含反引号的 Markdown 时，反引号的转义不会被处理，会落下「反斜杠+反引号」（本次实测 600 处、围栏计数为 0）；写文档用 heredoc 或普通字符串。
+2. 文档里的路径/行号/CLI 参数必须**逐个回代码核对**——本次按代码核实修正了 5 处（已删的 `app/thirdparty`、备份实现搬到 `infrastructure/persistence/backup.py`、通知队列入队点、`DRIVE_TYPE` 生成实例属性、后台工作单元片段的 import）。
+
+**验证**：纯文档改动，无代码变更，测试与门禁基线不变（501 passed / 2 skipped、violations 0、cycles 0）；结构自检：代码围栏 28 条成对、8 个表格块列数一致、7 个相对链接全部可达。
+
+
+
+### 10.22 事故修复：TMDB 缓存刷新 500 与「未定义全局名」静态护栏（2026-11-09）
+
+**现象**：用户在「TMDB 缓存」页面点刷新，前端弹「服务器内部错误」（HTTP 500）。
+
+**根因**：`backend/app/api/routes/tmdb_cache.py` 的 `post_tmdb_cache_refresh` 末尾仍是 `row = db.scalar(lookup)`，而 `lookup` 在 S3 仓储下沉时已被删除。git 证据：提交 `e902106`（仓储下沉，2026-11-09 03:40）把
+
+```python
+lookup = select(TMDBMediaCache).where(...)
+row = db.scalar(lookup)
+```
+
+的第一处换成了 `row = tmdb_media_cache_repo().get_row(...)`，**函数末尾第二处 `db.scalar(lookup)` 忘了一起换** → 执行到该行抛 `NameError: name 'lookup' is not defined` → 500。刷新走同步分支还是异步分支都会走到这一行，所以「怎么点都报错」。
+
+**同一批自动改写还留下 5 处同类缺陷**（用标准库 `symtable` 全量扫描 `app/**/*.py` 找出来的）：
+
+| 位置 | 未定义名 | 触发场景 | 修法 |
+| --- | --- | --- | --- |
+| `backend/app/api/routes/tmdb_cache.py:271`、`:358` | `commit` | 刷新缓存 / 刷新关联任务（**就是这次报 500 的第一处**，500 在到这里之前就已抛） | 从 `app.application.container` 导入 `commit` |
+| `backend/app/api/routes/tmdb_cache.py:273` | `lookup` | 同上 | 改为 `tmdb_media_cache_repo().get_row(...)` 重新查一次（提交后取最新状态） |
+| `backend/app/api/routes/drive_accounts.py:199`、`:236` | `drive_accounts_repo` | 账号启停 / 探测 / 扫码登录后取账号 | 从 container 导入访问器 |
+| `backend/app/api/routes/drive_accounts.py:342` | `DriveAccount` | 光鸭短信登录二次 probe 失败的回退分支 | 改为 `drive_accounts_repo().get_account(...)`（顺带消掉一条 presentation→persistence 违规） |
+| `backend/app/application/telegram_bot/handlers.py:442`、`:447` | `datetime` | `_display_datetime()`（任务/账号列表显示时间） | 补 `from datetime import datetime` |
+| `backend/app/application/telegram_bot/handlers.py:929` | `_to_sort_ts` | 分享链接有多个目录、需要按更新时间选一个时 | 从 `...telegram_bot.actions` 导入（保持单一实现，不复制逻辑） |
+| `backend/app/infrastructure/drive/adapters/aliyun_adapter.py:345`、`:351`、`:362` | `random` | 阿里云盘重试退避（`time.sleep(random.uniform(...))`） | 补 `import random` |
+
+**为什么 501 项测试全绿却没抓到**：这些分支都没有用例；`NameError` 只有**真的执行到那一行**才会报。全量测试、`import app.main`、分层门禁、schema 门禁全部通过，用户点一下就 500。
+
+**护栏：`backend/regression_tests/test_no_undefined_globals.py`（2 项）**
+
+- 用标准库 `symtable` 对 `app/**/*.py` 逐个建符号表：函数作用域里「既不在本作用域赋值 / 不是本作用域 import / 不在模块顶层定义 / 不是内建名」的全局符号 = 未定义全局名，判失败。
+- `ALLOWED` 例外必须写理由；`test_allowlist_entries_still_needed` 反向校验——登记了但实际已不需要的条目必须删掉，避免允许名单腐化。
+- 负向自测已实测：临时放一个 `app/_probe_undefined.py` 调用未定义函数 → 测试变红并指出 `app/_probe_undefined.py: undefined name 'undefined_probe_name'`；删除后恢复绿。
+- 成本：250+ 模块 0.8s，进 `regression_tests` 即随 CI 跑。
+
+**护栏二：`backend/regression_tests/test_tmdb_cache_refresh_route.py`（2 项，锁「点刷新」这条路径本身）**
+
+- 直接调用路由函数 `post_tmdb_cache_refresh(request, payload, current_user, db)`，绕过 HTTP 与鉴权，避开启动整套应用的重量级夹具。
+- 真实临时 SQLite（只 `create_all` `TMDBSetting` / `TMDBMediaCache` / `AuditLog` 三张表）+ `monkeypatch` 掉 `app.application.tmdb_cache._fetch_tmdb_detail`，不碰网络。
+- 第一项断言：库里没有该条时返回 `queued=False`、`status.configured=True`、`media_type/tmdb_id` 正确、假网络层确实被调用 —— 只要 `commit` 或 `lookup` 缺一个，这里立刻 `NameError`。
+- 第二项断言：第二次调用 `status.exists=True`（覆盖「提交后重查」那一行）且审计表里正好 2 条 `tmdb.cache.refresh`。
+
+**验证（2026-11-09，cwd=backend，`PYTHONPATH=.`，`XXM_TESTING=1`，TMPDIR 用 cygpath 转 Windows 路径）**
+
+- `python -m pytest tests regression_tests -q` → **505 passed, 2 skipped**（501 + 4 项新护栏）。
+- `python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json` → `modules=250 internal_imports=719 deferred_imports=84 violations=0 import_cycles=0`，exit 0。
+- `python -c "import app.main"` → ok；`symtable` 全量扫描 → `TOTAL 0`。
+
+**三条教训**
+
+1. **自动改写必须配静态检查**：这类缺陷是「改了一半」的产物，测试抓不到、review 也容易漏（diff 里 `lookup` 只出现一次）。凡是批量替换 import/函数调用，结束后必须跑一次「未定义名」扫描。
+2. **「import 了才叫搬完」**：搬模块/换访问器时，删除的 import 与新增的 import 必须成对核对；本次 `drive_accounts.py` 既少了访问器 import，又留着已经不该用的 ORM 模型（`DriveAccount`）。
+3. **未定义名与分层违规同源**：`db.get(DriveAccount, ...)` 本身就是 presentation→persistence 的越界写法，靠「补一个 import」也能让它跑起来，但正确修法是走仓储访问器。修 bug 时优先选「既修好又更合规」的那条路。
+
+**用户侧动作**：修复只在工作区，正在运行的后端进程仍加载旧代码，**需要重启后端**（本地 `uvicorn` 或容器）才生效。
 
 ---
 ## 附录 A：现状 → 目标目录映射（可直接当搬迁清单）

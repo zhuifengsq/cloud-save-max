@@ -6,7 +6,7 @@ import json
 from app.core.errors import ApiError, bad_request, not_found
 from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import DRIVE_ACCOUNT_READ, DRIVE_ACCOUNT_WRITE
-from app.application.container import get_db, transaction
+from app.application.container import drive_accounts_repo, get_db, transaction
 from app.schemas.drive_account import DriveAccountCreateIn, DriveAccountOut, DriveAccountStatusIn, DriveAccountUpdateIn, DriveTypeOut
 from app.schemas.drive_account_auth import DriveAccountCaptchaSubmitIn, DriveAccountSmsSubmitIn
 from app.schemas.drive_account_probe_scheduler import DriveAccountProbeSchedulerSettingOut, DriveAccountProbeSchedulerSettingUpdateIn
@@ -339,7 +339,7 @@ def post_account_auth_sms_submit(request: Request, session_id: str, payload: Dri
         # 光鸭当前账号信息接口不稳定，短信登录成功后可能在二次 probe 时误判为仍需短信认证。
         if exc.code != "DRIVE_ACCOUNT_AUTH_REQUIRED" or str(session.drive_type or "") != "guangya":
             raise
-        account = db.get(DriveAccount, session.account_id)
+        account = drive_accounts_repo().get_account(db, session.account_id)
         if account is None:
             raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "驱动账号不存在")
         nickname = str(getattr(adapter, "nickname", "") or config_snapshot.get("phone_number") or account.name or "").strip()
