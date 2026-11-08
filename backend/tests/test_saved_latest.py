@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.extensions.runtime.drama_executor import DramaTaskExecutor
+from app.infrastructure.execution.drama_executor import DramaTaskExecutor
 
 
 def _executor(extra: dict | None = None, name: str = "测试任务") -> DramaTaskExecutor:

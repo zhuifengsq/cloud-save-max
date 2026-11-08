@@ -1,41 +1,11 @@
-from __future__ import annotations
+"""兼容垫片（S4-6 物理搬目录后保留一个版本）。
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from app.extensions.adapters.adapter_factory import AccountManager
-from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.models.drive_account import DriveAccount
-
-
-class DatabaseAccountManager:
-    def __init__(self, db: Session, *, no_login: bool = False):
-        self.db = db
-        self.manager = AccountManager()
-        self.accounts = db.execute(select(DriveAccount).order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())).scalars().all()
-        payload = {
-            'accounts': [
-                {
-                    'name': item.name,
-                    'drive_type': item.drive_type,
-                    'config': AdapterRegistry.parse_config_json(item.drive_type, item.config_json, item.cookie),
-                    'cookie': AdapterRegistry.serialize_config(
-                        item.drive_type,
-                        AdapterRegistry.parse_config_json(item.drive_type, item.config_json, item.cookie),
-                    ),
-                    'enabled': item.enabled,
-                    'default': item.is_default,
-                }
-                for item in self.accounts
-            ]
-        }
-        self.manager.load_accounts(payload, no_login=no_login)
-
-    def get_adapter_for_task(self, task: dict, *, allow_inactive: bool = False):
-        return self.manager.get_adapter_for_task(task, allow_inactive=allow_inactive)
-
-    def get_default_adapter(self):
-        return self.manager.get_default_adapter()
-
-    def init_for_tasks(self, tasks: list[dict]) -> None:
-        self.manager.init_adapters_for_tasks(tasks)
+新路径：app.infrastructure.drive.account_manager
+本文件不再放实现，只做 re-export；新代码请直接 import 新路径。
+删除时机：S4-6 完成后一个版本（届时全仓库已无旧路径引用）。
+"""
+from app.infrastructure.drive.account_manager import (  # noqa: F401
+    load_accounts_payload,
+    clear_account_snapshot_cache,
+    DatabaseAccountManager,
+)

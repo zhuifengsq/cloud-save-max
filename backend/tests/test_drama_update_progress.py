@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.drama_update_progress import build_drama_update_progress
+from app.application.drama_update_progress import build_drama_update_progress
 
 
 def _details(*, last_season=1, last_episode=10, status="Returning Series"):

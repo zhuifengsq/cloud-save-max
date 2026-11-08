@@ -20,7 +20,7 @@ from app.api.routes import task_lead_in as task_lead_in_route
 from app.core.errors import ApiError
 from app.core.permissions import TASK_READ, TASK_WRITE
 from app.db.base import Base
-from app.extensions.adapters.adapter_factory import AdapterFactory
+from app.infrastructure.drive.factory import AdapterFactory
 from app.models.audit_log import AuditLog
 from app.models.drive_account import DriveAccount
 from app.models.task import Task
@@ -30,8 +30,8 @@ from app.schemas.drama_lead_in import (
     DramaLeadInRecordOut,
     TaskLeadInSummaryOut,
 )
-from app.services import drama_lead_in as svc
-from app.services.task_serialization import task_out
+from app.application import drama_lead_in as svc
+from app.api.presenters.task import task_out
 
 QUARK_DIR = "/追剧/夸克测试剧"
 BAIDU_DIR = "/追剧/百度测试剧"

@@ -32,17 +32,17 @@ from app.api.routes.tasks import post_create_task_share, post_run_task
 from app.core.deps import CurrentUser
 from app.core.permissions import TASK_RUN, TASK_WRITE
 from app.db.base import Base
-from app.extensions.adapters.adapter_factory import AdapterFactory
-from app.extensions.runtime.drama_executor import DramaTaskExecutor
-from app.extensions.runtime.execution_log import ExecutionLog
-from app.extensions.runtime.task_executor import TaskExecutor
+from app.infrastructure.drive.factory import AdapterFactory
+from app.infrastructure.execution.drama_executor import DramaTaskExecutor
+from app.infrastructure.execution.execution_log import ExecutionLog
+from app.infrastructure.execution.task_executor import TaskExecutor
 from app.models.audit_log import AuditLog
 from app.models.drive_account import DriveAccount
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
 from app.models.task_lead_in import TaskLeadInRecord
-from app.services import drama_lead_in as svc
-from app.services.task_share_links import get_task_share_link
+from app.application import drama_lead_in as svc
+from app.application.task_share_links import get_task_share_link
 
 # 触发所有模型注册到 Base.metadata（sqlite 建表用）。
 import app.models  # noqa: F401,E402
@@ -231,13 +231,13 @@ class DramaLeadInTriggerRegressionTests(unittest.TestCase):
         )
         with ExitStack() as stack:
             stack.enter_context(
-                patch("app.extensions.runtime.task_executor.DramaTaskExecutor", FakeDramaExecutor)
+                patch("app.infrastructure.execution.task_executor.DramaTaskExecutor", FakeDramaExecutor)
             )
             stack.enter_context(
-                patch("app.extensions.runtime.task_executor.check_generated_share", return_value=None)
+                patch("app.infrastructure.execution.task_executor.check_generated_share", return_value=None)
             )
             stack.enter_context(
-                patch("app.services.magic_regex.get_enabled_magic_regex_map", return_value={})
+                patch("app.application.magic_regex.get_enabled_magic_regex_map", return_value={})
             )
             stack.enter_context(patch("time.sleep"))
             execution = TaskExecutor(self.db).run_task(task, account_manager=manager)

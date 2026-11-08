@@ -8,9 +8,9 @@ from app.core.settings import settings
 from app.db.session import commit, get_db
 from app.schemas.auth import LoginOut, MeOut
 from app.schemas.setup import SetupAdminIn, SetupStatusOut
-from app.services import audit
-from app.services.auth import issue_tokens
-from app.services.setup import create_initial_admin, is_initialized
+from app.application import audit
+from app.application.auth import issue_tokens
+from app.application.setup import create_initial_admin, is_initialized
 
 router = APIRouter()
 

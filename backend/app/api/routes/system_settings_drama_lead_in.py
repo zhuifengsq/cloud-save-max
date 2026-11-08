@@ -26,8 +26,8 @@ from app.schemas.drama_lead_in import (
     DramaLeadInSettingsOut,
     DramaLeadInSettingsUpdateIn,
 )
-from app.services import audit
-from app.services.drama_lead_in import (
+from app.application import audit
+from app.application.drama_lead_in import (
     build_settings_payload,
     list_drama_lead_in_own_dir,
     resolve_drama_lead_in_own_file,

@@ -138,7 +138,7 @@ def test_unified_path_derives_arguments_from_policy(fake_deps, monkeypatch):
 
 def test_default_executor_is_task_executor():
     """生产路径不传 executor_cls 时使用真实 TaskExecutor（调用点仍可注入假实现）。"""
-    from app.extensions.runtime.task_executor import TaskExecutor
+    from app.infrastructure.execution.task_executor import TaskExecutor
 
     use_case = RunTaskUseCase(db=object())
     assert use_case.executor_cls is TaskExecutor

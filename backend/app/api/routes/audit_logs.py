@@ -10,7 +10,7 @@ from app.db.session import get_db, transaction
 from app.models.audit_log import AuditLog
 from app.models.audit_log_scheduler_setting import AuditLogSchedulerSetting
 from app.schemas.audit_log import AuditLogItemOut, AuditLogListOut
-from app.services.audit_logs import list_audit_logs
+from app.application.audit_logs import list_audit_logs
 
 
 router = APIRouter()

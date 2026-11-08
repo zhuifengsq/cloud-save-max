@@ -1,9 +1,4 @@
-from app.extensions.search_plugins.wps_plugin import WpsSearchPlugin
-
-
-class WpsMovieSearchPlugin(WpsSearchPlugin):
-    key = 'wps_movie'
-    name = 'wps电影'
-
-    def configure(self, config):
-        super().configure({'document_url': 'https://kdocs.cn/l/ctcFh0Mafjjq', **config})
+"""Legacy shim: new path app.infrastructure.search.wps_movie_plugin (S4-6, 2026-11-09). Remove one release later."""
+from app.infrastructure.search.wps_movie_plugin import (  # noqa: F401
+    WpsMovieSearchPlugin,
+)

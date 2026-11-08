@@ -24,7 +24,7 @@ from app.api.routes import system_settings_drama_lead_in as settings_route
 from app.core.errors import ApiError
 from app.core.permissions import TASK_WRITE
 from app.db.base import Base
-from app.extensions.adapters.adapter_factory import AdapterFactory
+from app.infrastructure.drive.factory import AdapterFactory
 from app.models.audit_log import AuditLog
 from app.models.drive_account import DriveAccount
 from app.models.task import Task
@@ -34,7 +34,7 @@ from app.schemas.drama_lead_in import (
     DramaLeadInMaterialIn,
     DramaLeadInSettingsUpdateIn,
 )
-from app.services import drama_lead_in as svc
+from app.application import drama_lead_in as svc
 
 DRIVE_TYPE = "mockbrowse"
 NO_BROWSE_DRIVE_TYPE = "mocknobrowse"

@@ -12,12 +12,12 @@ from app.db.base import Base
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
 from app.models.drive_account import DriveAccount
-from app.extensions.runtime.task_executor import TaskExecutor
-from app.services.tasks import update_task
-from app.services.task_share_links import save_task_share_link, get_task_share_link
-from app.services.shareurl_update_logs import append_shareurl_update_log
-from app.services.resource_search import fetch_task_suggestions, cache_clear
-from app.services.drama_share_autoupdate import _search_candidates
+from app.infrastructure.execution.task_executor import TaskExecutor
+from app.application.tasks import update_task
+from app.application.task_share_links import save_task_share_link, get_task_share_link
+from app.application.shareurl_update_logs import append_shareurl_update_log
+from app.application.resource_search import fetch_task_suggestions, cache_clear
+from app.application.drama_share_autoupdate import _search_candidates
 
 
 class ShareRecoveryTests(unittest.TestCase):
@@ -65,13 +65,13 @@ class ShareRecoveryTests(unittest.TestCase):
                 return tree
 
         with ExitStack() as stack:
-            stack.enter_context(patch('app.extensions.runtime.task_executor.DramaTaskExecutor', FakeDrama))
-            stack.enter_context(patch('app.services.magic_regex.get_enabled_magic_regex_map', return_value={}))
-            stack.enter_context(patch('app.services.tmdb_settings.get_or_create_tmdb_setting', return_value=None))
-            stack.enter_context(patch('app.services.tmdb_settings.get_tmdb_runtime_config', return_value={}))
-            stack.enter_context(patch('app.services.drama_share_autoupdate._search_candidates', side_effect=search))
-            stack.enter_context(patch('app.services.drama_share_autoupdate._prepare_candidates', side_effect=lambda db, suggestions, addition: (suggestions, {})))
-            stack.enter_context(patch('app.services.share_preview_batch.fetch_share_file_list_grouped',
+            stack.enter_context(patch('app.infrastructure.execution.task_executor.DramaTaskExecutor', FakeDrama))
+            stack.enter_context(patch('app.application.magic_regex.get_enabled_magic_regex_map', return_value={}))
+            stack.enter_context(patch('app.application.tmdb_settings.get_or_create_tmdb_setting', return_value=None))
+            stack.enter_context(patch('app.application.tmdb_settings.get_tmdb_runtime_config', return_value={}))
+            stack.enter_context(patch('app.application.drama_share_autoupdate._search_candidates', side_effect=search))
+            stack.enter_context(patch('app.application.drama_share_autoupdate._prepare_candidates', side_effect=lambda db, suggestions, addition: (suggestions, {})))
+            stack.enter_context(patch('app.application.share_preview_batch.fetch_share_file_list_grouped',
                                       side_effect=preview_results,
                                       return_value=[([{'file_name': '01.mp4'}], 'folder', 0, '测试剧')]))
             stack.enter_context(patch('time.sleep'))
@@ -182,10 +182,10 @@ class ShareRecoveryTests(unittest.TestCase):
         self.db.flush()
         cache_clear()
         with (
-            patch('app.services.resource_search._update_search_cache_ttl'),
-            patch('app.services.resource_search.list_invalid_shareurls', return_value=[]),
-            patch('app.services.search_plugins.search_enabled_plugins', return_value=[]),
-            patch('app.services.api_search_sources.search_enabled_api_sources', side_effect=[[], [{'shareurl': 'https://pan.quark.cn/s/fresh'}]]),
+            patch('app.application.resource_search._update_search_cache_ttl'),
+            patch('app.application.resource_search.list_invalid_shareurls', return_value=[]),
+            patch('app.application.search_plugins.search_enabled_plugins', return_value=[]),
+            patch('app.application.api_search_sources.search_enabled_api_sources', side_effect=[[], [{'shareurl': 'https://pan.quark.cn/s/fresh'}]]),
         ):
             self.assertEqual(fetch_task_suggestions(self.db, '测试剧', 1, drive_type='quark')[0], [])
             results, _, _ = _search_candidates(self.db, names=['测试剧'], drive_type='quark')

@@ -1,9 +1,5 @@
-from __future__ import annotations
-
-
-def cb(*parts: object) -> str:
-    return ":".join([str(x) for x in parts if x is not None and str(x) != ""])
-
-
-def parse_callback(data: str) -> list[str]:
-    return [str(x) for x in str(data or "").split(":") if str(x) != ""]
+"""Legacy shim: new path app.application.telegram_bot.callbacks (S4-6, 2026-11-09). Remove one release later."""
+from app.application.telegram_bot.callbacks import (  # noqa: F401
+    cb,
+    parse_callback,
+)

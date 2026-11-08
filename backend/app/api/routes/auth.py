@@ -6,8 +6,8 @@ from app.core.deps import CurrentUser, get_current_user, load_user_roles_permiss
 from app.core.settings import settings
 from app.db.session import commit, get_db
 from app.schemas.auth import LoginOut, MeOut, TokenOut
-from app.services import audit
-from app.services.auth import authenticate_user, clear_refresh_cookie, refresh_access_token, revoke_refresh_token, issue_tokens
+from app.application import audit
+from app.application.auth import authenticate_user, clear_refresh_cookie, refresh_access_token, revoke_refresh_token, issue_tokens
 
 
 router = APIRouter()

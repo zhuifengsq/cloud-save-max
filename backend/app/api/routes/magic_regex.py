@@ -5,10 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db, transaction
+from app.db.session import get_db, transaction, transaction
 from app.schemas.magic_regex_rule import MagicRegexRuleListOut, MagicRegexRuleUpsertIn
-from app.services import audit
-from app.services.magic_regex import BUILTIN_VARIABLE_LABELS, delete_rule, list_rules, upsert_rule
+from app.application import audit
+from app.application.magic_regex import BUILTIN_VARIABLE_LABELS, delete_rule, list_rules, upsert_rule
 
 
 router = APIRouter()

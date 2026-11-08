@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.drive_account import DriveAccount
+from app.core.runtime.cache_version import invalidate_drive_accounts
 
 
 def get_drive_type_by_name(db: Session, *, name: str) -> Any:
@@ -51,11 +52,13 @@ def new_account(
     account.config_json = config_json
     db.add(account)
     db.flush()
+    invalidate_drive_accounts()
     return account
 
 
 def delete_account(db: Session, account) -> None:
     db.delete(account)
+    invalidate_drive_accounts()
 
 
 def find_active_by_name(db: Session, *, name: str):

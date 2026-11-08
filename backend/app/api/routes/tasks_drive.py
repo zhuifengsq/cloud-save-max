@@ -11,8 +11,8 @@ from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ, TASK_WRITE
 from app.db.session import commit, get_db
-from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.extensions.runtime.account_manager import DatabaseAccountManager
+from app.infrastructure.drive.adapter_registry import AdapterRegistry
+from app.infrastructure.drive.account_manager import DatabaseAccountManager
 from app.schemas.task_browse import (
     DriveBrowseIn,
     DriveDeleteIn,
@@ -23,9 +23,9 @@ from app.schemas.task_browse import (
     DriveMkdirIn,
     DriveMkdirOut,
 )
-from app.services import audit
-from app.services.drive_accounts import get_active_account, pick_any_default_account, pick_default_account_name
-from app.services.drive_payload import bool_is_dir, pick_children_count, pick_fid, pick_name, pick_size, pick_updated_at
+from app.application import audit
+from app.application.drive_accounts import get_active_account, pick_any_default_account, pick_default_account_name
+from app.application.drive_payload import bool_is_dir, pick_children_count, pick_fid, pick_name, pick_size, pick_updated_at
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

@@ -14,8 +14,8 @@ from app.schemas.user import (
     UserSetRolesIn,
     UserStatusUpdateIn,
 )
-from app.services import audit
-from app.services.users import batch_set_roles, batch_set_status, create_user, list_users, set_user_roles, set_user_status
+from app.application import audit
+from app.application.users import batch_set_roles, batch_set_status, create_user, list_users, set_user_roles, set_user_status
 
 
 router = APIRouter()

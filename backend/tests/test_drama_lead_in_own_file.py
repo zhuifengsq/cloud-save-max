@@ -20,13 +20,13 @@ from app.api.routes import task_lead_in as task_lead_in_route
 from app.core.errors import ApiError
 from app.core.permissions import TASK_WRITE
 from app.db.base import Base
-from app.extensions.adapters.adapter_factory import AdapterFactory
+from app.infrastructure.drive.factory import AdapterFactory
 from app.models.audit_log import AuditLog
 from app.models.drive_account import DriveAccount
 from app.models.task import Task
 from app.models.task_lead_in import TaskLeadInRecord
 from app.schemas.drama_lead_in import DramaLeadInConfirmIn
-from app.services import drama_lead_in as svc
+from app.application import drama_lead_in as svc
 
 DIR_PATH = "/追剧/测试剧"
 MATERIAL_NAME = "第01集.mp4"

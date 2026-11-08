@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.schemas.task import TaskExecutionOut, TaskOut
 from app.schemas.task_scheduler import TaskSchedulerSettingOut
-from app.services.drama_update_progress import build_drama_update_progress
-from app.services.tmdb_view import get_tmdb_status, tmdb_cache_key
+from app.application.drama_update_progress import build_drama_update_progress
+from app.application.tmdb_view import get_tmdb_status, tmdb_cache_key
 
 
 def execution_out(item) -> TaskExecutionOut:

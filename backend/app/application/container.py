@@ -10,6 +10,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 from types import ModuleType
+from typing import Any
+
+
+_SYSTEM_CLOCK: Any = None
 
 
 def audit_repo() -> ModuleType:
@@ -138,6 +142,20 @@ def share_preview_batch_cache_repo() -> ModuleType:
     return share_preview_batch_cache
 
 
+def clock():
+    """系统时钟（满足 app.domain.ports.clock.ClockPort）。
+
+    platform 实现延迟 import：application 层只依赖端口形状，不依赖实现模块；
+    单进程无状态，模块级缓存一个实例即可。测试可 monkeypatch 本函数注入假时钟。
+    """
+    global _SYSTEM_CLOCK
+    from app.core.runtime.clock import SystemClock
+
+    if _SYSTEM_CLOCK is None:
+        _SYSTEM_CLOCK = SystemClock()
+    return _SYSTEM_CLOCK
+
+
 @contextmanager
 def db_session():
     """显式开启一个会话（供确需自管会话的服务/扩展边界使用，单进程无 DI）。"""
@@ -155,3 +173,24 @@ def tmdb_media_cache_repo() -> ModuleType:
     from app.infrastructure.persistence.repositories import tmdb_media_cache
 
     return tmdb_media_cache
+
+
+def adapter_registry():
+    """适配器注册表（网盘类型探测 + 适配器类注册），实现位于 infrastructure。
+
+    业务层只经过本函数拿注册表，避免application顶层import infrastructure（§10.3 决策 4）。
+    """
+    from app.infrastructure.drive.adapter_registry import AdapterRegistry
+
+    return AdapterRegistry
+
+def drive_gateway(adapter: Any, *, drive_type: str | None = None):
+    """把适配器包装成 `app.domain.ports.drive.DriveGatewayPort`（网盘网关端口）。
+
+    application 层只认端口形状；实现放在 infrastructure，靠本函数的延迟 import
+    保持 services 顶层依赖方向不变（§10.3 决策 4）。单进程无状态，调用方拿到的是
+    与适配器一一对应的薄包装，用完调 close() 只关适配器连接，不影响实例缓存。
+    """
+    from app.infrastructure.drive.gateway import gateway_for_adapter
+
+    return gateway_for_adapter(adapter, drive_type=drive_type)

@@ -1,0 +1,20 @@
+# schema 漂移豁免清单（每行一个表名，# 后为注释）
+#
+# 用途：scripts/check_schema_drift.py --ignore-file 在 CI 与本地使用。
+# 背景：实库有 10 张无 ORM 模型的遗留表（见 docs/architecture/audit-data-observability.md §2.1）。
+# 这些表要么是历史插件系统的残留（plugin_*），要么是早期同步功能（sync_*），
+# 当前代码 0 引用、数据行数为 0（plugin_* 除外，各有 13 行历史配置）。
+#
+# 维护规则：
+# - 只允许"新增表到白名单"作为临时豁免，且必须在 issue/PR 说明清理计划；
+# - 任何 model_only 方向（模型有、库没有）都不允许豁免——那是漏迁移。
+plugin_configs
+plugin_definitions
+sync_execution_files
+sync_executions
+sync_file_snapshots
+sync_plugin_configs
+sync_plugin_definitions
+sync_task_drama_links
+sync_task_locks
+sync_tasks

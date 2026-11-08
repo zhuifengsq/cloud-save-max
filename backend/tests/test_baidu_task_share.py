@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import Mock
 
-from app.extensions.adapters.baidu_adapter import BaiduAdapter
+from app.infrastructure.drive.adapters.baidu_adapter import BaiduAdapter
 
 
 class BaiduTaskShareTests(unittest.TestCase):

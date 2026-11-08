@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.episode_number import episode_from_folder_name, extract_episode, guess_episode, parse_size
+from app.application.episode_number import episode_from_folder_name, extract_episode, guess_episode, parse_size
 
 
 class _IdentityRename:

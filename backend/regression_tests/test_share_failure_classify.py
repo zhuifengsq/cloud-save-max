@@ -2,10 +2,10 @@
 
 import pytest
 
-from app.extensions.adapters.baidu_adapter import BaiduAdapter
-from app.extensions.adapters.base_adapter import BaseCloudDriveAdapter
-from app.extensions.adapters.quark_adapter import QuarkAdapter
-from app.services import generated_share_check
+from app.infrastructure.drive.adapters.baidu_adapter import BaiduAdapter
+from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
+from app.infrastructure.drive.adapters.quark_adapter import QuarkAdapter
+from app.application import generated_share_check
 
 
 def _quark() -> QuarkAdapter:

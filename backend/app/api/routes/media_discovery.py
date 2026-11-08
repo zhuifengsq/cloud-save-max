@@ -15,8 +15,8 @@ from app.schemas.media_discovery import (
     TMDBDetailOut,
     TMDBSearchListOut,
 )
-from app.services.media_discovery import fetch_douban_list, list_douban_categories, tmdb_credits, tmdb_detail, tmdb_search
-from app.services.proxy_image_cache import (
+from app.application.media_discovery import fetch_douban_list, list_douban_categories, tmdb_credits, tmdb_detail, tmdb_search
+from app.application.proxy_image_cache import (
     ProxyImageCacheConfig,
     ProxyImageError,
     fetch_store_and_build_response,
@@ -24,8 +24,8 @@ from app.services.proxy_image_cache import (
     try_build_cached_response,
     validate_image_url,
 )
-from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
-from app.thirdparty.douban_client import DoubanClient
+from app.application.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
+from app.infrastructure.http.douban_client import DoubanClient
 
 
 router = APIRouter()

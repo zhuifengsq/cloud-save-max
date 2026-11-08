@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db, transaction
+from app.db.session import get_db, transaction, transaction
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.schemas.tmdb_cache import (
     TMDBCacheDeleteOut,
@@ -28,8 +28,8 @@ from app.schemas.tmdb_cache import (
     TMDBCacheSchedulerSettingUpdateIn,
     TMDBCacheStatusOut,
 )
-from app.services import audit
-from app.services.tmdb_cache import (
+from app.application import audit
+from app.application.tmdb_cache import (
     delete_cache_item,
     get_tmdb_detail_cached,
     list_cache,
@@ -38,9 +38,9 @@ from app.services.tmdb_cache import (
     set_ttl_seconds,
     trigger_refresh_async,
 )
-from app.services.tmdb_cache_scheduler import get_or_create_tmdb_cache_scheduler_setting, load_tmdb_cache_scheduler_setting, update_tmdb_cache_scheduler_setting
-from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
-from app.extensions.runtime.task_scheduler import task_scheduler_manager
+from app.application.tmdb_cache_scheduler import get_or_create_tmdb_cache_scheduler_setting, load_tmdb_cache_scheduler_setting, update_tmdb_cache_scheduler_setting
+from app.application.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
+from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
 
 
 router = APIRouter()

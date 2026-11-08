@@ -7,11 +7,11 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-import app.services.tmdb_cache as tmdb_cache
+import app.application.tmdb_cache as tmdb_cache
 from app.db.base import Base
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.models.tmdb_setting import TMDBSetting
-from app.services.tmdb_cache import delete_cache_item, get_tmdb_credits_cached
+from app.application.tmdb_cache import delete_cache_item, get_tmdb_credits_cached
 
 
 class FakeTMDBClient:

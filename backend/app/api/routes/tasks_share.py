@@ -12,10 +12,10 @@ from app.core.deps import require_permissions
 from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ
 from app.db.session import commit, get_db
-from app.extensions.adapters.adapter_factory import AdapterFactory
-from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.extensions.runtime.account_manager import DatabaseAccountManager
-from app.extensions.runtime.magic_rename import MagicRename
+from app.infrastructure.drive.factory import AdapterFactory
+from app.infrastructure.drive.adapter_registry import AdapterRegistry
+from app.infrastructure.drive.account_manager import DatabaseAccountManager
+from app.infrastructure.execution.magic_rename import MagicRename
 from app.schemas.task_browse import (
     SharePreviewBatchIn,
     SharePreviewBatchOut,
@@ -25,10 +25,10 @@ from app.schemas.task_browse import (
     ShareValidateIn,
     ShareValidateOut,
 )
-from app.services.share_preview_batch import preview_share_batch, validate_share_links
-from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
-from app.services.drive_accounts import get_active_account, pick_default_account_name
-from app.services.drive_payload import (
+from app.application.share_preview_batch import preview_share_batch, validate_share_links
+from app.application.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
+from app.application.drive_accounts import get_active_account, pick_default_account_name
+from app.application.drive_payload import (
     bool_is_dir,
     pick_children_count,
     pick_fid,
@@ -90,7 +90,7 @@ def post_share_preview(payload: SharePreviewIn, db: Session = Depends(get_db)):
     savepath = str(payload.savepath or "").strip().rstrip("/")
     ignore_ext = bool(payload.ignore_extension)
 
-    from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
+    from app.application.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
 
     tmdb_cfg = get_tmdb_runtime_config(get_or_create_tmdb_setting(db))
     tmdb_series_title = None
@@ -150,7 +150,7 @@ def post_share_preview(payload: SharePreviewIn, db: Session = Depends(get_db)):
                 if name:
                     dir_filename_list.append(name)
 
-    from app.services.magic_regex import get_enabled_magic_regex_map
+    from app.application.magic_regex import get_enabled_magic_regex_map
 
     mr = MagicRename(magic_regex=get_enabled_magic_regex_map(db))
     mr.set_taskname(taskname)
@@ -287,7 +287,7 @@ def post_share_preview(payload: SharePreviewIn, db: Session = Depends(get_db)):
     # 最小文件大小过滤标记
     min_size_str = str(payload.min_size or "").strip()
     if min_size_str:
-        from app.extensions.runtime.drama_executor import _parse_size
+        from app.infrastructure.execution.drama_executor import _parse_size
         min_bytes = _parse_size(min_size_str)
         if min_bytes is not None and min_bytes > 0:
             for f in preview_list:
@@ -436,7 +436,7 @@ def post_share_validate(payload: ShareValidateIn, db: Session = Depends(get_db))
 def post_share_validate_stream(payload: ShareValidateIn, db: Session = Depends(get_db)):
     """流式验证：验证完一个链接立即返回结果"""
     from fastapi.responses import StreamingResponse
-    from app.services.share_preview_batch import validate_share_links_streaming
+    from app.application.share_preview_batch import validate_share_links_streaming
     import json
 
     def event_generator():

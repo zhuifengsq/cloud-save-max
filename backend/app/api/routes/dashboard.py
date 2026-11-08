@@ -5,14 +5,14 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_WRITE
-from app.db.session import get_db, transaction
+from app.db.session import get_db, transaction, transaction
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
 from app.schemas.dashboard import CapacityOverviewOut, DramaOverviewOut
-from app.services import audit
-from app.services.dashboard_drama import build_drama_overview
-from app.services.drive_accounts import build_capacity_overview
-from app.services.shareurl_update_logs import clear_drama_shareurl_update_logs
+from app.application import audit
+from app.application.dashboard_drama import build_drama_overview
+from app.application.drive_accounts import build_capacity_overview
+from app.application.shareurl_update_logs import clear_drama_shareurl_update_logs
 
 router = APIRouter()
 

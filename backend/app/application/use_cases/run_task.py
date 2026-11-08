@@ -13,20 +13,20 @@ APScheduler 追剧轮询、Telegram bot、分享预览、以及 services/tasks.p
 SSE 端点的 409/429 同步响应是既有 API 契约，不能因为收敛入口而改变；准入的统一
 抽到用例层属于后续 S2+（需先定义准入的端口），本次不涉及。
 
-分层说明：application -> extensions 是计划内的过渡债（TaskExecutor 目前仍在
-extensions.runtime）。不在本次调整目录，等运行层抽出 domain/ports 后再收口。
+分层说明：实现类通过 app.application.factories.task_executor_class() 取得（composition root）。
+因此本模块顶层不 import infrastructure / persistence，不新增跨层违规边。
+
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.application.factories import task_executor_class
 from app.core.settings import settings
-from app.extensions.runtime.execution_log import ExecutionLog
-from app.extensions.runtime.task_executor import TaskExecutor
-from app.models.task import Task
 
 
 @dataclass(frozen=True)
@@ -79,13 +79,13 @@ class RunTaskUseCase:
         self.db = db
         # 测试注入缝：既有回归测试通过 monkeypatch 调用点模块的 TaskExecutor 注入假执行器，
         # 调用点因此把 TaskExecutor 作为类对象传入；生产路径不传，默认用真实实现。
-        self.executor_cls = executor_cls or TaskExecutor
+        self.executor_cls = executor_cls or task_executor_class()
 
     def run(
         self,
-        task: Task,
+        task: Any,
         policy: RunPolicy,
-        log: ExecutionLog | None = None,
+        log: Any | None = None,
         *,
         account_manager=None,
         init_account_for_task: bool = True,

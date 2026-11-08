@@ -9,6 +9,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.settings import settings
 
+# end_read_tx 的实现放在 platform 层（app.core.runtime.tx），这里重导出以保持
+# `from app.db.session import end_read_tx` 这一习惯用法的兼容性。
+from app.core.runtime.tx import end_read_tx  # noqa: F401  (re-export)
+
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
@@ -182,16 +186,6 @@ def transaction(db, attempts: int = 3) -> Iterator[object]:
         raise
 
 
-def end_read_tx(db) -> None:
-    """结束「只读事务」：在进入外部 IO（网盘/TMDB/Telegram）之前释放 SQLite 的快照。
-
-    语义上这是「提交一个没有写入的事务」，与「提交业务数据」不是一回事：
-    - 只用于读路径 / 长 IO 之前，避免持有读写锁、卡住 WAL checkpoint；
-    - 业务写入的提交必须由事务边界拥有者调用 commit()/transaction()，不得用它代替；
-    - 没有进行中的事务时是 no-op（SQLAlchemy 允许空提交，但显式判断更省一次 round-trip）。
-    """
-    if db.in_transaction():
-        db.commit()
 
 def get_db():
     db = SessionLocal()

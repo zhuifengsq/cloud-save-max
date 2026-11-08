@@ -4,7 +4,7 @@
 """
 from app.domain.ports.cache import CachePort
 from app.domain.ports.clock import ClockPort
-from app.domain.ports.drive import DriveGatewayPort, RemoteEntry
+from app.domain.ports.drive import DriveGatewayPort, RemoteEntry, ShareProbeResult
 from app.domain.ports.locks import KeyedLockPort, SingleFlightPort
 from app.domain.ports.notify import NotifierPort
 from app.domain.ports.task import TaskRunUseCasePort
@@ -16,6 +16,7 @@ __all__ = [
     "KeyedLockPort",
     "NotifierPort",
     "RemoteEntry",
+    "ShareProbeResult",
     "SingleFlightPort",
     "TaskRunUseCasePort",
 ]

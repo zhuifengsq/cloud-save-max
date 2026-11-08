@@ -6,9 +6,9 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.extensions.search_plugins.quark4k_plugin import Quark4KPlugin
+from app.infrastructure.search.quark4k_plugin import Quark4KPlugin
 from app.models.resource_search_source import ResourceSearchSource
-from app.services.search_plugins import discover_search_plugins, list_search_plugins, normalize_search_results, search_enabled_plugins, set_search_plugin_enabled
+from app.application.search_plugins import discover_search_plugins, list_search_plugins, normalize_search_results, search_enabled_plugins, set_search_plugin_enabled
 
 
 class Quark4KPluginTests(unittest.TestCase):
@@ -46,7 +46,7 @@ class Quark4KPluginTests(unittest.TestCase):
             self.assertEqual(kwargs["timeout"], (3, 6))
             return Response(first_page if params["page[offset]"] == 0 else second_page)
 
-        with patch("app.extensions.search_plugins.quark4k_plugin.requests.get", side_effect=fake_get) as mocked:
+        with patch("app.infrastructure.search.quark4k_plugin.requests.get", side_effect=fake_get) as mocked:
             raw = Quark4KPlugin().search(" 三体 ")
 
         self.assertEqual(mocked.call_count, 2)
@@ -81,7 +81,7 @@ class Quark4KPluginTests(unittest.TestCase):
                             "included": [{"type": "posts", "id": "1", "attributes": {"contentHtml": '<a href="https://pan.quark.cn/s/abc">资源</a>'}}],
                         }
 
-                with patch("app.extensions.search_plugins.quark4k_plugin.requests.get", return_value=Response()):
+                with patch("app.infrastructure.search.quark4k_plugin.requests.get", return_value=Response()):
                     results = search_enabled_plugins(db, "三体")
                 self.assertEqual(results[0]["shareurl"], "https://pan.quark.cn/s/abc")
                 self.assertEqual(results[0]["source"], "Quark4K")

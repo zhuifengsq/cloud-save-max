@@ -26,7 +26,7 @@ from app.models.permission import Permission
 from app.models.role import Role
 from app.models.user import User
 from app.core.security import hash_password
-from app.services.auth import ensure_password_policy
+from app.application.auth import ensure_password_policy
 
 
 def _get_env(name: str, default: str) -> str:

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
 from app.models.resource_search_source import ResourceSearchSource
-from app.services.search_plugins import (
+from app.application.search_plugins import (
     discover_search_plugins,
     list_search_plugins,
     search_enabled_plugins,
@@ -18,7 +18,7 @@ from app.services.search_plugins import (
 )
 
 
-SOURCE = b'''from app.extensions.search_plugins.base import BaseSearchPlugin
+SOURCE = b'''from app.infrastructure.search.base import BaseSearchPlugin
 class DemoPlugin(BaseSearchPlugin):
     key = "demo"
     name = "Demo"

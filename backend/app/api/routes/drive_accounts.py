@@ -10,15 +10,15 @@ from app.db.session import get_db, transaction
 from app.schemas.drive_account import DriveAccountCreateIn, DriveAccountOut, DriveAccountStatusIn, DriveAccountUpdateIn, DriveTypeOut
 from app.schemas.drive_account_auth import DriveAccountCaptchaSubmitIn, DriveAccountSmsSubmitIn
 from app.schemas.drive_account_probe_scheduler import DriveAccountProbeSchedulerSettingOut, DriveAccountProbeSchedulerSettingUpdateIn
-from app.extensions.adapters.drive_auth import DriveAuthRequired
-from app.extensions.adapters.aliyun_adapter import AliyunAdapter
-from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.extensions.runtime.task_scheduler import task_scheduler_manager
+from app.infrastructure.drive.adapters.drive_auth import DriveAuthRequired
+from app.infrastructure.drive.adapters.aliyun_adapter import AliyunAdapter
+from app.infrastructure.drive.adapter_registry import AdapterRegistry
+from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
 from app.models.drive_account import DriveAccount
-from app.services.drive_account_probe_scheduler import get_or_create_drive_account_probe_scheduler_setting, load_drive_account_probe_scheduler_setting, update_drive_account_probe_scheduler_setting
-from app.services.drive_account_auth_sessions import create_auth_session, delete_auth_session, get_auth_session
-from app.services import audit
-from app.services.drive_accounts import (
+from app.application.drive_account_probe_scheduler import get_or_create_drive_account_probe_scheduler_setting, load_drive_account_probe_scheduler_setting, update_drive_account_probe_scheduler_setting
+from app.application.drive_account_auth_sessions import create_auth_session, delete_auth_session, get_auth_session
+from app.application import audit
+from app.application.drive_accounts import (
     create_drive_account,
     delete_drive_account,
     list_drive_accounts,

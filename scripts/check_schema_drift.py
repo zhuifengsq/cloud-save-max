@@ -12,7 +12,8 @@ Base.metadata.create_all 建库、从不跑 alembic，所以这个偏差无人�
 
 用法（仓库根目录）：
     backend/.venv/Scripts/python.exe scripts/check_schema_drift.py
-    backend/.venv/Scripts/python.exe scripts/check_schema_drift.py --ignore plugin_configs --ignore plugin_definitions --json
+    backend/.venv/Scripts/python.exe scripts/check_schema_drift.py --ignore-file scripts/schema_drift_allowlist.txt
+    backend/.venv/Scripts/python.exe scripts/check_schema_drift.py --ignore plugin_configs --json
 
 退出码：0 = 无偏差（或全部被 --ignore 显式豁免）；1 = 有偏差；2 = 参数/文件问题。
 """
@@ -46,7 +47,8 @@ def model_tables() -> list[str]:
     # 延迟把 backend 加入 sys.path：脚本从仓库根目录运行，app 包不在默认路径上。
     if str(BACKEND_ROOT) not in sys.path:
         sys.path.insert(0, str(BACKEND_ROOT))
-    from app.db.base import Base  # noqa: E402  导入即注册 app.models 全部模型
+    from app.db.base import Base  # noqa: E402
+    import app.models  # noqa: E402,F401  显式导入以注册全部模型（db.base 为破环已不代为导入）
 
     return sorted(Base.metadata.tables)
 
@@ -55,6 +57,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="ORM 模型与 SQLite 库的 schema 漂移检查")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB, help=f"数据库路径（默认 {DEFAULT_DB}）")
     parser.add_argument("--ignore", action="append", default=[], help="显式豁免的表名（可重复）")
+    parser.add_argument(
+        "--ignore-file",
+        type=Path,
+        help="每行一个豁免表名（# 开头为注释）；与 --ignore 合并，用于 CI 维护遗留表白名单",
+    )
     parser.add_argument("--json", metavar="PATH", help="把报告写成 JSON 文件")
     args = parser.parse_args()
 
@@ -63,6 +70,14 @@ def main() -> int:
         return 2
 
     ignored = set(IGNORED) | set(args.ignore)
+    if args.ignore_file:
+        if not args.ignore_file.is_file():
+            print(f"[error] 豁免清单不存在: {args.ignore_file}", file=sys.stderr)
+            return 2
+        for raw_line in args.ignore_file.read_text(encoding="utf-8").splitlines():
+            name = raw_line.split("#", 1)[0].strip()
+            if name:
+                ignored.add(name)
     try:
         in_db = [t for t in db_tables(args.db) if t not in ignored]
         in_models = [t for t in model_tables() if t not in ignored]

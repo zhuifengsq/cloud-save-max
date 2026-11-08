@@ -5,7 +5,7 @@ from app.core.deps import require_permissions
 from app.core.permissions import PERMISSION_READ
 from app.db.session import get_db
 from app.schemas.role import PermissionOut
-from app.services.permissions import list_permissions
+from app.application.permissions import list_permissions
 
 
 router = APIRouter()

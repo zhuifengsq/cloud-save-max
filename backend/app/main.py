@@ -19,11 +19,11 @@ from app.core.settings import settings
 from app.middlewares.gzip import GZipMiddleware
 from app.db.backup import backup_before_migrate
 from app.db.session import SessionLocal
-from app.extensions.runtime.telegram_bot_manager import telegram_bot_manager
-from app.extensions.runtime.task_scheduler import task_scheduler_manager
+from app.infrastructure.notifications.telegram_bot_manager import telegram_bot_manager
+from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
 from app.middlewares.timing import TimingMiddleware
-from app.services.proxy_image_cache import ensure_dir, resolve_proxy_image_cache_dir
-from app.services.setup import ensure_permissions_and_roles
+from app.application.proxy_image_cache import ensure_dir, resolve_proxy_image_cache_dir
+from app.application.setup import ensure_permissions_and_roles
 
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ def create_app() -> FastAPI:
             logger.warning("权限初始化失败: %s", e, exc_info=True)
         try:
             with SessionLocal() as db:
-                from app.services.task_executions import prune_all_task_executions
+                from app.application.task_executions import prune_all_task_executions
 
                 removed = prune_all_task_executions(db)
                 db.commit()

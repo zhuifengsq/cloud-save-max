@@ -1,12 +1,4 @@
-from app.services.telegram_bot.actions import TelegramBotActions
-from app.services.telegram_bot.client import TelegramBotClient
-from app.services.telegram_bot.config import TelegramBotConfig, load_telegram_bot_config
-from app.services.telegram_bot.handlers import TelegramBotHandler
-
-__all__ = [
-    "TelegramBotActions",
-    "TelegramBotClient",
-    "TelegramBotConfig",
-    "TelegramBotHandler",
-    "load_telegram_bot_config",
-]
+"""Legacy shim: new path app.application.telegram_bot.__init__ (S4-6, 2026-11-09). Remove one release later."""
+from app.application.telegram_bot.__init__ import (  # noqa: F401
+    __all__,
+)

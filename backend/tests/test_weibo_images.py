@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 pytest.skip(
-    "weibo 功能已从代码库删除（app.services.weibo_images / app.models.weibo_worker 不存在），测试待重写；" 
+    "weibo 功能已从代码库删除（app.application.weibo_images / app.models.weibo_worker 不存在），测试待重写；" 
     "见 docs/architecture-evolution-plan.md 的 S0 项",
     allow_module_level=True,
 )
@@ -12,7 +12,7 @@ import os
 import tempfile
 import unittest
 
-from app.services.weibo_images import WeiboImageError, _validate_source_url, image_file_path, resolve_weibo_root
+from app.application.weibo_images import WeiboImageError, _validate_source_url, image_file_path, resolve_weibo_root
 
 
 class WeiboImageSecurityTest(unittest.TestCase):

@@ -10,9 +10,9 @@ from starlette.requests import Request
 from app.api.routes import tasks, tasks_stream
 from app.api.routes.tasks_stream import _SseQueue
 from app.core.errors import ApiError
-from app.extensions.runtime import task_scheduler
-from app.extensions.runtime.task_admission import TaskAdmission
-from app.services.telegram_bot import handlers
+from app.infrastructure.scheduling import task_scheduler
+from app.infrastructure.scheduling.task_admission import TaskAdmission
+from app.application.telegram_bot import handlers
 
 
 def test_slots_reject_duplicates_and_previews_when_full_then_release_after_failure():

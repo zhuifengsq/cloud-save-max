@@ -8,8 +8,8 @@ import copy
 import unittest
 from unittest.mock import Mock
 
-from app.extensions.adapters.quark_adapter import QuarkAdapter
-from app.extensions.adapters.baidu_adapter import BaiduAdapter
+from app.infrastructure.drive.adapters.quark_adapter import QuarkAdapter
+from app.infrastructure.drive.adapters.baidu_adapter import BaiduAdapter
 
 
 class FakeResponse:

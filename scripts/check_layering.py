@@ -32,16 +32,20 @@ LAYER_OF_PREFIX = {
     "app.api": "presentation",
     "app.schemas": "presentation",
     "app.middlewares": "presentation",
-    "app.services": "application",
+    "app.application": "application",
+    "app.application": "application",
     "app.domain": "domain",
     "app.models": "persistence",
     "app.db": "persistence",
     "app.extensions": "infrastructure",
+    "app.infrastructure": "infrastructure",
     "app.thirdparty": "infrastructure",
     "app.core": "platform",
     "app.scripts": "tooling",
 }
-COMPOSITION_ROOTS = {"app.main"}
+# 装配点（composition root）可以被任意层引用：它只做「把实现接到端口上」，
+# 不含业务逻辑。app.application.container 是函数访问器形式的装配入口（§10.3 决策 4）。
+COMPOSITION_ROOTS = {"app.main", "app.application.container", "app.application.factories"}
 
 # allowed: source layer -> layers it may import
 ALLOWED = {
@@ -213,6 +217,9 @@ def main() -> int:
             continue
         allowed = ALLOWED.get(src_layer)
         if allowed is None or dst_layer == "unknown":
+            continue
+        # 装配点是唯一例外：任何层都可以引用它，它自身不产生业务依赖。
+        if dst_layer == "composition-root":
             continue
         if dst_layer not in allowed:
             violations.append({

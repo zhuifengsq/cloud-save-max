@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import forbidden
 from app.core.permissions import PLUGIN_READ, PLUGIN_WRITE, TASK_READ
-from app.db.session import get_db, transaction
-from app.services.api_search_sources import (
+from app.db.session import get_db, transaction, transaction
+from app.application.api_search_sources import (
     create_api_source,
     delete_api_source,
     get_api_source,
@@ -19,7 +19,7 @@ from app.services.api_search_sources import (
     search_api_source,
     update_api_source,
 )
-from app.services.resource_search import cache_clear, get_quark_share_author
+from app.application.resource_search import cache_clear, get_quark_share_author
 
 
 router = APIRouter()

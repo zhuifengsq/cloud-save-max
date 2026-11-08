@@ -7,10 +7,10 @@ from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import NOTIFY_READ, NOTIFY_WRITE
 from app.db.session import get_db, transaction
 from app.schemas.notification import NotificationConfigOut, NotificationConfigUpdateIn, NotificationTestIn, NotificationTestOut
-from app.services import audit
-from app.services.notifications import legacy_notify
-from app.services.notifications.sender import send_test
-from app.services.notifications.settings import get_or_create_notification_setting, load_notification_config, update_notification_setting
+from app.application import audit
+from app.application.notifications import legacy_notify
+from app.application.notifications.sender import send_test
+from app.application.notifications.settings import get_or_create_notification_setting, load_notification_config, update_notification_setting
 
 
 router = APIRouter()

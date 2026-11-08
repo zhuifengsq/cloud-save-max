@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 from treelib import Tree
 
-from app.extensions.runtime.drama_executor import DramaTaskExecutor
+from app.infrastructure.execution.drama_executor import DramaTaskExecutor
 
 
 def _executor(addition: dict) -> DramaTaskExecutor:

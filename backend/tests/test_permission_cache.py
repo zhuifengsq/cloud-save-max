@@ -11,7 +11,7 @@ from app.db.base import Base
 from app.models.permission import Permission
 from app.models.role import Role
 from app.models.user import User
-from app.services.roles import set_role_permissions
+from app.application.roles import set_role_permissions
 
 
 class PermissionCacheTests(unittest.TestCase):

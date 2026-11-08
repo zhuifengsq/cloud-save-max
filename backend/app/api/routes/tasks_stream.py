@@ -22,17 +22,17 @@ from starlette.concurrency import run_in_threadpool
 from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
 from app.core.deps import CurrentUser, get_current_user_scoped, require_permissions_scoped
 from app.core.permissions import TASK_RUN
-from app.db.session import SessionLocal, commit
-from app.extensions.runtime.execution_log import ExecutionLog
-from app.extensions.runtime.task_admission import task_admission
-from app.extensions.runtime.task_executor import TaskExecutor
+from app.db.session import SessionLocal, commit, commit
+from app.infrastructure.execution.execution_log import ExecutionLog
+from app.infrastructure.scheduling.task_admission import task_admission
+from app.infrastructure.execution.task_executor import TaskExecutor
 from app.models.task import Task
 from app.schemas.task import TaskCreateIn
-from app.services import audit
-from app.services.notifications.sender import send_runtime
-from app.services.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
-from app.services.task_serialization import execution_out
-from app.services.tasks import get_task
+from app.application import audit
+from app.application.notifications.sender import send_runtime
+from app.application.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
+from app.api.presenters.task import execution_out
+from app.application.tasks import get_task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

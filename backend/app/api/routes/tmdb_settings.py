@@ -7,8 +7,8 @@ from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
 from app.db.session import get_db, transaction
 from app.schemas.tmdb_settings import TMDBConfigOut, TMDBConfigUpdateIn
-from app.services import audit
-from app.services.tmdb_settings import get_or_create_tmdb_setting, load_tmdb_config, update_tmdb_setting
+from app.application import audit
+from app.application.tmdb_settings import get_or_create_tmdb_setting, load_tmdb_config, update_tmdb_setting
 
 
 router = APIRouter()

@@ -5,8 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from app.services.tasks import update_task
-from app.services.task_share_links import (
+from app.application.tasks import update_task
+from app.application.task_share_links import (
     drop_task_share_link,
     get_task_share_link,
     merge_task_extra,
@@ -68,7 +68,7 @@ class TaskShareLinkStorageTests(unittest.TestCase):
 class TaskUpdateShareLinkTests(unittest.TestCase):
     def _run_update(self, task, **payload):
         db = Mock()
-        with patch("app.services.tasks.get_task", return_value=task):
+        with patch("app.application.tasks.get_task", return_value=task):
             update_task(db, 1, **payload)
         db.flush.assert_called_once()
         return json.loads(task.extra_json)

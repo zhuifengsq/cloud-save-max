@@ -3,9 +3,9 @@
 全链路：系统设置（保存 own_file 配置）→ 预览 → 确认 → 任务列表摘要/记录/审计。
 全部使用 Mock 适配器 + 内存 sqlite，不发起任何真实网络请求。
 
-说明：本文件是补完「本账号文件」模式（实现进行中）的测试骨架，
-引用契约约定的服务函数 / 请求模型 / 路由路径；实现合并后按实际命名微调
-带 TODO(实现核对) 标记的取名字段即可。
+说明：本文件是「本账号文件」模式（docs/追剧任务引流文件-本账号文件模式契约.md §7.3）的端到端验收测试，
+引用的服务函数 / 请求模型 / 路由路径均已与实现逐字核对（2026-11-09），
+若实现侧改名，测试会在收集/断言阶段直接失败，不再保留待核对的占位取名字段。
 """
 
 from __future__ import annotations
@@ -25,20 +25,20 @@ from app.api.routes import task_lead_in as task_lead_in_route
 from app.core.errors import ApiError
 from app.core.permissions import TASK_READ, TASK_WRITE
 from app.db.base import Base
-from app.extensions.adapters.adapter_factory import AdapterFactory
+from app.infrastructure.drive.factory import AdapterFactory
 from app.models.audit_log import AuditLog
 from app.models.drive_account import DriveAccount
 from app.models.task import Task
 from app.models.task_lead_in import TaskLeadInRecord
-from app.schemas import drama_lead_in as lead_in_schemas
 from app.schemas.drama_lead_in import (
     DramaLeadInConfirmIn,
     DramaLeadInMaterialIn,
+    DramaLeadInOwnFileResolveIn,
     DramaLeadInRecordOut,
     DramaLeadInSettingsUpdateIn,
 )
-from app.services import drama_lead_in as svc
-from app.services.task_serialization import task_out
+from app.application import drama_lead_in as svc
+from app.api.presenters.task import task_out
 
 DRIVE_TYPE = "mockown"
 MATERIAL_ACCOUNT = "own-account"
@@ -326,9 +326,7 @@ class DramaLeadInOwnFileE2ETests(unittest.TestCase):
             route,
             "契约 §4.3 要求新增 POST /system-settings/drama-lead-in/own-file/resolve",
         )
-        payload_cls = getattr(lead_in_schemas, "DramaLeadInOwnFileResolveIn", None)  # TODO(实现核对)
-        self.assertIsNotNone(payload_cls, "缺少 own-file resolve 请求模型 DramaLeadInOwnFileResolveIn")
-        payload = payload_cls(**payload_data)
+        payload = DramaLeadInOwnFileResolveIn(**payload_data)
         args = []
         for name in inspect.signature(route.endpoint).parameters:
             if name in ("payload", "body"):

@@ -10,8 +10,8 @@ from __future__ import annotations
 import threading
 
 from app.core.settings import settings
-from app.services.notifications import legacy_notify
-from app.services.notifications.queue import NotifyQueue
+from app.application.notifications import legacy_notify
+from app.application.notifications.queue import NotifyQueue
 
 
 def test_full_queue_drops_instead_of_blocking():

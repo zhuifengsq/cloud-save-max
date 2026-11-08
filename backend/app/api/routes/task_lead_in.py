@@ -17,12 +17,12 @@ from app.schemas.drama_lead_in import (
     DramaLeadInPreviewOut,
     DramaLeadInRecordOut,
 )
-from app.services.drama_lead_in import (
+from app.application.drama_lead_in import (
     build_task_lead_in_preview,
     confirm_task_lead_in,
     get_task_lead_in_state,
 )
-from app.services.tasks import get_task
+from app.application.tasks import get_task
 
 router = APIRouter()
 

@@ -7,17 +7,17 @@ from sqlalchemy.orm import Session
 from treelib import Tree
 
 from app.db.base import Base
-from app.extensions.adapters.baidu_adapter import BaiduAdapter
-from app.extensions.adapters.quark_adapter import QuarkAdapter
-from app.extensions.runtime import task_executor
+from app.infrastructure.drive.adapters.baidu_adapter import BaiduAdapter
+from app.infrastructure.drive.adapters.quark_adapter import QuarkAdapter
+from app.infrastructure.execution import task_executor
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
 from app.models.task_scheduler_setting import TaskSchedulerSetting
-from app.services.dashboard_drama import build_drama_overview
-from app.services.generated_share_check import check_generated_share, read_share_check
-from app.services.notifications.task_notify import build_task_section
-from app.services.task_share_links import save_task_share_link
-from app.services.tasks import create_task
+from app.application.dashboard_drama import build_drama_overview
+from app.application.generated_share_check import check_generated_share, read_share_check
+from app.application.notifications.task_notify import build_task_section
+from app.application.task_share_links import save_task_share_link
+from app.application.tasks import create_task
 
 
 def test_share_expiry_notifies_even_when_transfer_has_no_new_files():
@@ -100,7 +100,7 @@ def test_checks_generated_link_each_run_without_blocking_transfer(monkeypatch):
             return tree
 
     monkeypatch.setattr(task_executor, "DramaTaskExecutor", FakeDrama)
-    monkeypatch.setattr("app.services.magic_regex.get_enabled_magic_regex_map", lambda db: {})
+    monkeypatch.setattr("app.application.magic_regex.get_enabled_magic_regex_map", lambda db: {})
     with Session(engine) as db:
         task = create_task(
             db, task_type="drama", taskname="测试剧",

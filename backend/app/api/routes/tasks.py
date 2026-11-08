@@ -1,7 +1,7 @@
 """任务管理端点：任务 CRUD、执行、调度设置、模板与建议。
 
 拆分说明：SSE 流式端点在 app.api.routes.tasks_stream，分享预览/验证在 tasks_share，
-网盘浏览/建目录/删除在 tasks_drive；公共逻辑在服务层（task_serialization / tmdb_view /
+网盘浏览/建目录/删除在 tasks_drive；响应装配在 api/presenters（tmdb_view /
 drive_payload / drive_accounts）。本模块通过 include_router 组合子路由，URL 与响应契约不变。
 """
 
@@ -16,15 +16,15 @@ from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ, TASK_RUN, TASK_WRITE
 from app.db.session import commit, get_db, transaction
-from app.extensions.adapters.adapter_factory import AdapterFactory
-from app.extensions.adapters.base_adapter import BaseCloudDriveAdapter
-from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.extensions.runtime.account_manager import DatabaseAccountManager
+from app.infrastructure.drive.factory import AdapterFactory
+from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
+from app.infrastructure.drive.adapter_registry import AdapterRegistry
+from app.infrastructure.drive.account_manager import DatabaseAccountManager
 from app.models.task import Task
 from app.models.tmdb_media_cache import TMDBMediaCache
-from app.extensions.runtime.task_scheduler import task_scheduler_manager
-from app.extensions.runtime.task_admission import task_admission
-from app.extensions.runtime.task_executor import TaskExecutor
+from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
+from app.infrastructure.scheduling.task_admission import task_admission
+from app.infrastructure.execution.task_executor import TaskExecutor
 from app.schemas.task_magic_regex import MagicRegexOut, MagicRegexRuleOut
 from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn
 from app.schemas.task import (
@@ -37,20 +37,20 @@ from app.schemas.task import (
     TaskUpdateIn,
 )
 from app.schemas.resource_search import TaskSuggestionListOut
-from app.services import audit
-from app.services.notifications.sender import send_runtime
-from app.services.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
-from app.services.task_scheduler import get_or_create_task_scheduler_setting, load_task_scheduler_setting, update_task_scheduler_setting
-from app.services.resource_search import fetch_task_suggestions
-from app.services.tasks import create_task, delete_task, get_task, list_recent_executions, list_tasks_recent_executions, set_task_enabled, update_task
-from app.services.task_share_links import save_task_share_link
-from app.services.tmdb_settings import get_tmdb_lang_pair
+from app.application import audit
+from app.application.notifications.sender import send_runtime
+from app.application.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
+from app.application.task_scheduler import get_or_create_task_scheduler_setting, load_task_scheduler_setting, update_task_scheduler_setting
+from app.application.resource_search import fetch_task_suggestions
+from app.application.tasks import create_task, delete_task, get_task, list_recent_executions, list_tasks_recent_executions, set_task_enabled, update_task
+from app.application.task_share_links import save_task_share_link
+from app.application.tmdb_settings import get_tmdb_lang_pair
 
 from app.api.routes import tasks_drive, tasks_share, tasks_stream
-from app.services.drama_lead_in import load_lead_in_summary_map
-from app.services.drive_accounts import get_active_account, pick_default_account_name
-from app.services.task_serialization import execution_out, scheduler_out, task_out
-from app.services.tmdb_view import load_tmdb_payload_map, load_tmdb_status_map
+from app.application.drama_lead_in import load_lead_in_summary_map
+from app.application.drive_accounts import get_active_account, pick_default_account_name
+from app.api.presenters.task import execution_out, scheduler_out, task_out
+from app.application.tmdb_view import load_tmdb_payload_map, load_tmdb_status_map
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 @router.get('/magic-regex', response_model=MagicRegexOut, dependencies=[Depends(require_permissions(TASK_READ))])
 def list_magic_regex(db: Session = Depends(get_db)) -> MagicRegexOut:
-    from app.services.magic_regex import list_enabled_effective_rules_for_picker
+    from app.application.magic_regex import list_enabled_effective_rules_for_picker
 
     rules = [
         MagicRegexRuleOut(key=item["key"], label=item.get("label"), pattern=item.get("pattern") or "", replace=item.get("replace") or "")

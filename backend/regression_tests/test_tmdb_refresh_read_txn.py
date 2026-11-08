@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.base import Base
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.models.tmdb_setting import TMDBSetting
-from app.services import tmdb_cache
+from app.application import tmdb_cache
 
 
 def _session(tmp_path):

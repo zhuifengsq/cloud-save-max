@@ -7,10 +7,10 @@ from sqlalchemy.orm import Session
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import forbidden
 from app.core.permissions import PLUGIN_READ, PLUGIN_WRITE
-from app.db.session import get_db, transaction
-from app.services import audit
-from app.services.resource_search import cache_clear
-from app.services.search_plugins import (
+from app.db.session import get_db, transaction, transaction
+from app.application import audit
+from app.application.resource_search import cache_clear
+from app.application.search_plugins import (
     MAX_PLUGIN_BYTES,
     list_search_plugins,
     set_search_plugin_enabled,

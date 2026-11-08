@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.models.tmdb_setting import TMDBSetting
-from app.services import tmdb_cache as cache
+from app.application import tmdb_cache as cache
 
 
 @pytest.fixture

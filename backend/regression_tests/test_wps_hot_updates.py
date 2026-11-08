@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.services import wps_document_search as wps
+from app.application import wps_document_search as wps
 
 
 def paragraph(text, href=None):

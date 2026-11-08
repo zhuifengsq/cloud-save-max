@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from collections import OrderedDict
 from typing import Any, Hashable
@@ -47,6 +48,37 @@ class LRUKeyedLocks:
             self._locks[key] = lock
             self._evict_locked(protect=key)
             return lock
+
+    def acquire(self, key: Hashable, timeout_seconds: float | None = None) -> bool:
+        """尝试获取 key 锁；成功 True，超时 False（不抛异常，满足 KeyedLockPort）。"""
+        lock = self.get(key)
+        if timeout_seconds is None:
+            return lock.acquire()
+        if timeout_seconds <= 0:
+            return lock.acquire(blocking=False)
+        return lock.acquire(timeout=timeout_seconds)
+
+    def release(self, key: Hashable) -> None:
+        """释放 key 锁；未持有（或锁已被淘汰）时静默忽略，避免误释放他人锁。"""
+        with self._guard:
+            lock = self._locks.get(key)
+        if lock is None or not lock.locked():
+            return
+        try:
+            lock.release()
+        except RuntimeError:
+            # 非本线程持有：协议未约束，这里选择忽略而不是让调用方的 finally 抛错。
+            pass
+
+    @contextlib.contextmanager
+    def keyed(self, key: Hashable, timeout_seconds: float | None = None):
+        """with 用法糖：进入即 acquire，退出即 release（异常也释放）。"""
+        if not self.acquire(key, timeout_seconds):
+            raise TimeoutError(f"获取 key 锁超时: {key!r}")
+        try:
+            yield
+        finally:
+            self.release(key)
 
     def _evict_locked(self, *, protect: Hashable | None = None) -> None:
         """持 _guard 时调用：从最旧到最新挑"未被持有"的锁淘汰。"""

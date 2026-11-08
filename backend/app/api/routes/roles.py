@@ -5,8 +5,8 @@ from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import ROLE_READ, ROLE_WRITE
 from app.db.session import get_db, transaction
 from app.schemas.role import PermissionOut, RoleCreateIn, RoleOut, RoleSetPermissionsIn, RoleUpdateIn
-from app.services import audit
-from app.services.roles import create_role, delete_role, list_roles, set_role_permissions, update_role
+from app.application import audit
+from app.application.roles import create_role, delete_role, list_roles, set_role_permissions, update_role
 
 
 router = APIRouter()

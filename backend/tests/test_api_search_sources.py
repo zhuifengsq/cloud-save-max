@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models.resource_search_source import ResourceSearchSource
-from app.services.api_search_sources import (
+from app.application.api_search_sources import (
     create_api_source,
     delete_api_source,
     list_api_sources,
@@ -51,7 +51,7 @@ class ApiSearchSourcesTest(unittest.TestCase):
             "url_path": "link.url",
             "datetime_path": "date",
         }
-        with patch("app.services.api_search_sources.requests.request", return_value=Response()) as request:
+        with patch("app.application.api_search_sources.requests.request", return_value=Response()) as request:
             results = search_api_source(config, "电视剧")
         self.assertEqual(request.call_args.kwargs["params"], {"keyword": "电视剧"})
         self.assertEqual(results[0]["shareurl"], "https://pan.quark.cn/s/abc")
@@ -74,7 +74,7 @@ class ApiSearchSourcesTest(unittest.TestCase):
             "body": {"text": "[[keyword]]"},
             "response_rule": "data[*].[title, link]",
         }
-        with patch("app.services.api_search_sources.requests.request", return_value=Response()) as request:
+        with patch("app.application.api_search_sources.requests.request", return_value=Response()) as request:
             results = search_api_source(config, "测试剧集")
         self.assertIn("kw=%E6%B5%8B%E8%AF%95%E5%89%A7%E9%9B%86", request.call_args.args[1])
         self.assertEqual(request.call_args.kwargs["json"], {"text": "测试剧集"})
@@ -96,7 +96,7 @@ class ApiSearchSourcesTest(unittest.TestCase):
             "url": "https://example.test/search?q=[[keyword]]",
             "response_rule": "rows[*].{title:name,url:share,password:pwd}",
         }
-        with patch("app.services.api_search_sources.requests.request", return_value=Response()):
+        with patch("app.application.api_search_sources.requests.request", return_value=Response()):
             results = search_api_source(config, "剧集")
         self.assertEqual(results[0]["password"], "1234")
         self.assertEqual(results[0]["taskname"], "剧集 A")

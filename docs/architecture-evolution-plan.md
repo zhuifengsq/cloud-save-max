@@ -721,7 +721,7 @@ class RunTaskUseCase:
 
 本节记录**已经落地的代码**，与 §5 路线图逐期对应；未完成项明确标注「仅地基/未接线」，避免把设计当成现状。
 
-### 10.1 已落地（S0 + S1 + S2 + S3 地基）
+### 10.1 已落地（S0 + S1 + S2 + S3，含尾巴与端口/CI 收口）
 
 | 期 | 交付 | 关键文件 | 验证 |
 | --- | --- | --- | --- |
@@ -735,6 +735,7 @@ class RunTaskUseCase:
 | S2 | **准入仍留在调用点**（架构决策，见 §10.3） | 6 处 `task_admission.reserve` 原位保留 | SSE 409/429 与旧行为逐字一致 |
 | S3 地基 | 端口层（Protocol，零实现零 IO） | `backend/app/domain/ports/{cache,locks,drive,task,notify,clock}.py`（8 个 Protocol） | 仅 import `typing`，可单测 |
 | S3 地基 | 事务边界（UnitOfWork） | `backend/app/infrastructure/persistence/unit_of_work.py`（`transaction(db)` / `UnitOfWork`；commit 走 `commit_with_locked_retry`） | 新增 `regression_tests/test_unit_of_work.py`（6 项：提交/回滚/锁重试/非锁不重试/**真实 SQLite 争锁不静默丢数据**） |
+| S3 接线 | **首次 UoW 接线：4 个低风险端点、8 处 `db.commit()` 收口** | `backend/app/db/session.py` 新增 `transaction(db, attempts=3)`（实现放持久化层，避免新增分层违规）；`infrastructure/persistence/unit_of_work.py` 改为纯 re-export；`api/routes/{system_settings,notifications,tmdb_settings,task_templates}.py` | 路由裸 `db.commit()` 89→81（18 文件）；新增 `regression_tests/test_route_transactions.py`（3 项）；功能冒烟验证 4 端点提交持久化 + 事务内抛异常零残留 |
 | S3 接线 | **首次 UoW 接线：4 个低风险端点、8 处 `db.commit()` 收口** | `backend/app/db/session.py` 新增 `transaction(db, attempts=3)`（实现放持久化层，避免新增分层违规）；`infrastructure/persistence/unit_of_work.py` 改为纯 re-export；`api/routes/{system_settings,notifications,tmdb_settings,task_templates}.py` | 路由裸 `db.commit()` 89→81（18 文件）；新增 `regression_tests/test_route_transactions.py`（3 项）；功能冒烟验证 4 端点提交持久化 + 事务内抛异常零残留 |
 | S3 地基 | 运维脚本三件套 | `scripts/backup_db.py`（sqlite3 backup API + 单文件产物 + integrity_check）、`check_schema_drift.py`（ORM metadata vs 实库表，`--ignore` 白名单）、`migration_preflight.py`（current/head/pending/体积/freelist/WAL） | 对 `.tmp` 副本实跑：integrity_check=ok、drift=10（10 张遗留表）、current=head、freelist 19% |
 | S3 地基 | 分层规则落地说明 | `docs/architecture/README.md`（四层 + 横切、目录映射、新代码规则、门禁命令、回退 flag） | — |
@@ -750,23 +751,40 @@ class RunTaskUseCase:
 | S3 仓储下沉 ③ | **账号/权限/任务/缓存 6 个新仓储 + 会话上下文** | 新建 `repositories/{roles,users,refresh_tokens,telegram_bot_session,share_preview_batch_cache,tmdb_media_cache}.py`；`roles` 增 `list_roles_by_ids`、`drive_accounts` 扩到 20 个查询函数；`container` 增 `db_session()` 上下文；改 `services/{roles,users,auth,setup,telegram_bot/session_store,telegram_bot/handlers,tasks,share_preview_batch_cache,tmdb_view,dashboard_drama,drive_accounts,resource_search}.py` | violations 141→122；application→persistence 39→20；`handlers.py` 3 处 `with SessionLocal()` 改 `with db_session()`；438 passed, 2 skipped |
 | S3 仓储下沉 ④ | **收尾：`telegram_bot/actions.py` 与 `resource_search` 模型引用清零（S3 主体完成）** | `actions.py`：3 个账号挑选用例改调 `services/drive_accounts` 的 `pick_*`/`get_active_account`，任务与执行记录查询改 `tasks_repo().count_tasks/count_enabled_tasks/get_first_by_shareurls`、`task_executions_repo().get_latest_for_task/list_desc`、`drive_accounts_repo().list_enabled_names/get_account`；`resource_search` 改 `list_active_by_type/list_active_drive_types` | **violations 122→117；application→persistence 20→15（验收阈值 ≤20）**；438 passed, 2 skipped |
 | S3 尾巴 | **TMDB 批量刷新不再持有长读事务（WAL checkpoint 护栏）** | `backend/app/services/tmdb_cache.py` 新增 `_close_read_transaction()` 与 `close_read_tx` 参数（默认 `False` 保持执行器旧语义）；`refresh_tmdb_detail_sync` / `refresh_linked_tasks` / `refresh_expired_cache` / `get_tmdb_*_cached` 逐层透传；`api/routes/tmdb_cache.py`、`api/routes/media_discovery.py`、`extensions/runtime/task_scheduler.py` 的只读上下文传 `True` | 新增 `regression_tests/test_tmdb_refresh_read_txn.py`（3 项：HTTP 期间调用方无读事务 / 默认保持旧语义 / 整批逐项结束读事务）；438 passed, 2 skipped |
+| S3 尾巴 | **提交归属分类：103 处 → 95 处，路由层 0** | `backend/app/core/runtime/tx.py`（`end_read_tx`：platform 层、零 ORM 依赖，避免 application 顶层 import persistence）、`app/db/session.py`（重导出保持旧 import 习惯）、`services/drama_lead_in.py`（7 处只读边界 `db.commit()`→`end_read_tx`；设置写入 `flush` 后交给路由提交；10→2）、`services/tmdb_cache.py`（`_close_read_transaction` 改用它；1→0） | 441 passed, 2 skipped；violations 117、deferred 58、环 0 |
+| S3 尾巴 | **提交归属预算护栏（防止提交点悄悄回流）** | `backend/regression_tests/test_commit_ownership.py`（AST 扫描 `.commit()`：路由层必须为 0；文件级预算只降不升；新文件出现提交点必须登记归属；`SessionLocal(` 旁路会话白名单） | 3 项全绿；预算 **95 处 / 11 文件** |
+| S3 尾巴 | **端口接入：4 个 Protocol 有了真实实现与生产接线** | `core/runtime/keyed_locks.py` 增 `acquire/release/keyed`（满足 `KeyedLockPort`）；新建 `core/runtime/single_flight.py`（`SingleFlight`，满足 `SingleFlightPort`；`adapter_factory.py` 的 per-key 手工 `with` 改为 `SingleFlight.run`）；新建 `core/runtime/clock.py`（`SystemClock`）并经 `container.clock()` 接入 `services/share_preview_batch_cache.py` 的时间源；`domain/ports/task.py` 的 `TaskRunUseCasePort` 对齐真实 `RunTaskUseCase.run(task, policy, ...)` 签名 | 新增 `regression_tests/test_ports_conformance.py`（6 项：isinstance 结构验收 + 并发只执行一次 + 异常透传 + 时钟接线） |
+| S3 尾巴 | **schema 治理进 CI（模型/迁移偏差变成可执行门禁）** | `scripts/check_schema_drift.py` 修复「`db.base` 破环后不再代为 import models 导致 model_tables=0」并新增 `--ignore-file`；新增 `scripts/schema_drift_allowlist.txt`（10 张遗留表，逐张注释）；新增 `.github/workflows/db-schema-gate.yml`（空库 `alembic upgrade head` → drift 检查 → `migration_preflight --fail-if-pending`） | 实库 drift=0（26/26）；空库跑 48 个 revision 后 drift=0、preflight pending=0，两脚本 exit 0 |
 
-### 10.2 量化结果（2026-11-08 实测，可复现）
+| S4-1/2 | **查询链路：响应装配从 application 下沉到 presentation，先用 golden 锁契约** | 新建 `backend/app/api/presenters/task.py`（`task_out`/`execution_out`/`scheduler_out`，纯函数零 IO）；删除 `backend/app/services/task_serialization.py`；`api/routes/tasks.py`、`api/routes/tasks_stream.py` 与 3 个测试改 import；新增 `regression_tests/test_task_presenter_contract.py`（4 项：字段顺序、截断 3 条、JSON 解析、缺省值） | 454 passed；违规 117→**115**（`application→presentation` 10→8）；基线下调到 115 |
+| S4-3 | **扫码登录会话回收（内存泄漏修复）** | `backend/app/services/drive_account_auth_sessions.py`：创建时 `_purge_expired_locked` 清过期项；`_MAX_SESSIONS=512` 超限淘汰最早到期；新增 `regression_tests/test_auth_session_ttl.py`（3 项） | 3 项全绿；放弃扫码的会话不再持有 adapter 直至进程重启 |
+
+### 10.2 量化结果（2026-11-09 实测，可复现）
 
 | 指标 | 改造前基线 | 当前 | 命令 |
 | --- | --- | --- | --- |
-| 测试总数 | 404 passed / 2 收集失败 | **438 passed, 2 skipped**（+34 项新护栏） | `python -m pytest tests regression_tests -q` |
-| 分层违规 | 165 条（60/38/30/23/10/4） | **117 条（38/27/23/15/10/4）**，净减 48 | `python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json` |
-| 模块 / import 边 | 188 / 610 | 227 / 659（deferred 33→58，均为仓储访问的延迟 import） | 同上 |
+| 测试总数 | 404 passed / 2 收集失败 | **493 passed, 2 skipped**（+89 项新护栏；含网关端口 13、兼容层垫片 5） | `python -m pytest tests regression_tests -q` |
+| 分层违规 | 165 条（60/38/30/23/10/4） | **115 条（38/27/23/15/8/4）**，净减 50 | `python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json` |
+| 模块 / import 边 | 188 / 610 | **329 / 769**（deferred 33→63；增量含仓储访问、时钟/限速/网关实现、composition root 延迟 import，以及 S4-6 搬目录后新增的 84 个旧路径垫片） | 同上 |
 | 路由层裸 `db.commit()` | 89 处 / 18 文件 | **0 处 / 0 文件**（13 个路由文件全部归零，89 处全收口） | `grep -rc "db\.commit()" backend/app/api/routes` |
-| 全 app 提交点 | 146 处（路由 45 / 服务 80 / 扩展 16 / main 2 / scripts 2 / db 1） | **101 处**（服务 80 / 扩展 16 / main 2 / scripts 2 / db 1） | 递归统计 `db\.commit()`；`commit(db)`/`transaction(db)` 不在其中 |
+| 全 app 提交点 | 146 处（路由 45 / 服务 80 / 扩展 16 / main 2 / scripts 2 / db 1） | **95 处 / 11 文件**：handlers 50、actions 20、scheduler 14、drama_lead_in 2、main 2、scripts 2、db+core 2、task_executor 1、telegram_bot_manager 1、share_preview_batch 1（全部登记归属，见 §10.10） | `pytest regression_tests/test_commit_ownership.py -q`；`grep -rn "\.commit()" backend/app` |
 | 锁冲突下的写入语义 | **静默丢数据**（flush 已回滚，重试提交空事务并成功） | 抛原始锁错误（5xx），行不落库 | `pytest regression_tests/test_unit_of_work.py -k lock_conflict -q` |
 | TMDB 批量刷新读事务 | 最多 200 次外部请求共用一个读快照（checkpoint 无法推进） | 每项外部请求前后结束调用方读事务（`close_read_tx=True`）；执行器路径默认不变 | `pytest regression_tests/test_tmdb_refresh_read_txn.py -q` |
 | 环 | 1 个 SCC / 27 模块 | **0 个 SCC**（`app/db/base.py` 末尾的 `import app.models` 已删，Alembic 显式导入） | 同上 |
 | 应用启动 | — | `import app.main` OK | `python -c "import app.main"` |
 | application→persistence 违规 | 60 条 | **15 条**（S3 验收阈值 ≤20） | `.layering-baseline.json` 层对明细 |
+| 端口实现/接线 | 8 个 Protocol、0 引用 | **5 个有实现且进生产路径**（KeyedLock / SingleFlight / Clock / TaskRunUseCase / DriveGateway）；Notifier / Cache 留 S5 | `pytest regression_tests/test_ports_conformance.py regression_tests/test_gateway_port.py -q` |
+| 网盘网关端口 | `DriveGatewayPort` 无实现；分享探测写在服务里直连适配器，`get_stoken`/`get_detail` 的网盘差异靠 `if drive_type == ...` 分支 | **`infrastructure/drive/gateway.py` 实现端口**：响应归一（fid/fid_token/目录判定/size）、失败三阶段（parse/verify/read）、quark `first_page` 与 baidu `check_errno` 收在实现里；`generated_share_check._probe` 改走端口，**用户文案逐字不变** | `pytest regression_tests/test_gateway_port.py -q`（13 项） |
+| 新增网盘接入成本 | 需改服务分支或网关里的 `if drive_type` 才能支持新网盘 | **假第 11 家网盘用例**：只实现适配器方法即可跑通 `list_dir`/`probe_share`，端口层零改动 | 同上 `test_fake_eleventh_drive_needs_no_gateway_change` |
+| 模型/迁移偏差检查 | 无（测试用 `create_all`，从不跑 alembic） | **空库升级后 drift=0**，CI `db-schema-gate` 双脚本 exit 0；新增遗留表必须登记白名单 | `python ../scripts/check_schema_drift.py --ignore-file ../scripts/schema_drift_allowlist.txt` |
 | 执行入口副本 | 6 处直连（含 1 处死代码） | **1 个用例**（`grep -rn "TaskExecutor(" backend/app` 只剩用例与执行器自身） | 见附录 B |
+| 查询链路装配位置 | `services/task_serialization.py`（视图逻辑在应用层） | **`api/presenters/task.py`**（纯函数，无 IO），旧模块已删除、5 处 import 全部改到新路径 | `grep -rn "task_serialization" backend/app`（应为空） |
+| 登录会话内存 | 过期项只在被访问时删除，放弃扫码的会话与其 adapter 永久驻留；无上限 | 每次创建即清过期；上限 512，超出淘汰最早到期 | `pytest regression_tests/test_auth_session_ttl.py -q` |
 | 锁表增长 | 素材名维度无界 dict | `LRUKeyedLocks` 上限 1024/256 | 单测断言上限与淘汰 |
+| 账号快照 | 每次任务/预览都全表查 `drive_accounts` + 逐行解析 JSON（`DatabaseAccountManager.__init__`） | **进程内 TTL 30s + 版本号/指纹双校验**，写路径主动失效；flag 关可回旧路径 | `pytest regression_tests/test_account_snapshot_cache.py -q` |
+| 网盘限速 | 只约束单个 adapter 实例（缓存 TTL 180s、cookie 轮换会产生同账户多实例 → 限速失效） | **按 `(网盘类型, 账户)` 维度共用预约时间点**，不同账户互不阻塞 | 同上（`FakeLimiter` 断言排队 key 与区间） |
+| 令牌刷新 | 各自持实例锁，多实例并发刷新会让后到者作废先到的新 `refresh_token`（症状=偶发「登录失效，请重新扫码」） | **同实例内 single-flight 合并**；guangya 的 401 路径带 `stale_token`，不会把已换好的新令牌再刷废 | `pytest regression_tests/test_runtime_components.py -q` |
+| 提交点归属登记 | 无（散落在路由/服务/线程） | **95 处全部登记四类归属**；路由层 0；新提交点不登记即失败 | `pytest regression_tests/test_commit_ownership.py -q` |
 
 ### 10.3 已做出的五个架构决策（与 §3 的差异需知悉）
 
@@ -783,21 +801,24 @@ class RunTaskUseCase:
 | `use_unified_run_use_case` | True | 各调用点走 `RunTaskUseCase._legacy_execute()`（逐字复刻旧实参） |
 | `use_notify_queue` | True | `send_async()` 退化为同步 `send()`，恢复旧的阻塞语义 |
 | `use_keyed_locks` | True | 素材去重回退到旧的无界 dict 锁表 |
+| `use_account_snapshot_cache` / `account_snapshot_ttl_seconds` | True / 30 | 每次实例化都全表查 `drive_accounts` 并逐行解析（旧行为） |
+| `use_keyed_rate_limiter` | True | 退回「每 adapter 实例一把锁 + 随机 sleep 0.05~0.10s」 |
+| `use_token_refresh_single_flight` | True | xunlei/aliyun/guangya 退回各自原实现（实例锁或裸刷新） |
 
 ### 10.5 尚未完成（S3 接线 / S4 / S5，按优先级）
 
-1. **服务层与扩展层提交归属上移**（S3 主体剩余）：路由层已归零（§10.1），剩余 101 处集中在 `app/services` 80 处（`telegram_bot/handlers.py` 50、`telegram_bot/actions.py` 20、`drama_lead_in.py` 10）与 `app/extensions` 16 处（`task_scheduler.py` 14、`task_executor.py` 1、`telegram_bot_manager.py` 1），另有 `main.py` 2、`scripts` 2、`db/session.py` 1（自身实现）。原则：先写行为对照表（提交时机、失败回滚、响应体、是否在事务内做 IO），再把「一次业务动作一次提交」上移为调用方的事务边界；调度/后台任务路径保留自身事务（无请求作用域）。
-2. **端口接入**（S3 尾巴/S4）：仓储已落地（22 个仓储模块、`container` 唯一装配点），但 `app/domain/ports/` 的 8 个 Protocol **仍是 0 引用**——目前是「服务直接调 container 拿仓储」，还没做到「面向 Protocol 编程」。下一步先让 `TaskRunUseCase` 依赖 `TaskRepositoryPort`/`ClockPort` 的桩实现，再让 `adapter_factory` 走 `DriveGatewayPort`；做完后 `services` 才真正不依赖 SQLAlchemy 的 `Session` 类型。
-3. **物理搬目录 + shim**（S4）：按附录 A 迁移 `services/*` 到 `application/`、`extensions/adapters` 到 `infrastructure/`，旧路径保留 re-export 一个版本。
-4. **迁移与 schema 治理进 CI**（S3 尾巴）：`check_schema_drift` 加 `--ignore` 白名单进 CI；`migration_preflight` 作为部署前检查；10 张遗留表出「删除/归档」决策单。
+1. **提交归属（S3 已关闭，2026-11-09）**：原计划「把服务层 80 处 + 扩展层 16 处提交全部上移」，实测后改为**分类登记 + 预算护栏**（§10.10）。真正可上移且不改变失败语义的只有 `update_drama_lead_in_settings` 的末尾写提交（已交给路由，设置+审计同一次提交）；其余 95 处属于「后台任务自己拥有工作单元」「Telegram 每次 update 一个工作单元」「长 IO 前的只读边界」「有意的渐进持久化」，硬搬会改掉「卡片能刷新」「崩溃可恢复」「单条失败不影响整批」等现有行为。落地物：`end_read_tx()` 把「结束只读事务」与「提交业务数据」分开；`test_commit_ownership.py` 锁定 95 处预算，新提交点必须显式登记。
+2. **端口接入（S3 已关闭，2026-11-09）**：4 个端口已从「0 引用」变成「有实现 + 进生产路径」——`KeyedLockPort`（`LRUKeyedLocks.acquire/release/keyed`）、`SingleFlightPort`（`SingleFlight`，`adapter_factory` 已改用它做首次创建合并）、`ClockPort`（`SystemClock` 经 `container.clock()` 接入预览缓存时间源）、`TaskRunUseCasePort`（签名与真实用例对齐）。`regression_tests/test_ports_conformance.py` 用 `runtime_checkable` 做结构验收。**仍未接线（S4）**：`DriveGatewayPort`（适配器方法名是 `ls_dir/save_file/create_share_link`，与端口的 `list_dir/transfer/check_share` 不一致，需要先说清「端口是给用例用的与网盘无关的语义」还是「改适配器命名」，属 S4 适配器拆分的一部分）、`NotifierPort`（`NotifyQueue.submit` 与 `send` 语义不同）、`CachePort`（现有缓存都是 SQLite 表，进程内 cachetools 只在权限/图片代理用）。
+3. **S4 剩余批次**（2026-11-09，见 §10.12/§10.13/§10.14）：✅ 查询链路 presenter 下沉 + 契约 golden、✅ 扫码会话回收、✅ 账号快照缓存 / 按账户限速 / 令牌刷新 single-flight、✅ `DriveGatewayPort` 实现与装配（裁决为「薄语义层，不吸收执行器编排」，见 §10.14）；⏳ 物理搬目录 + `app/_compat/` shim（按附录 A 迁移 `services/*` → `application/`、`extensions/adapters` → `infrastructure/`，旧路径 re-export 一个版本）。**S4-5 遗留两个已知缺口**：① 令牌刷新 key 按「实例」而非按「账户」——跨实例共享令牌状态需要共享存储（本期不做）；② 适配器侧 `set_config_saver`/`_global_config_saver` 是死代码，`refresh_token` 轮换**不回写数据库**（写库路径见 `backend/app/services/telegram_bot/actions.py:942`），属 R13 幂等/凭据一致性专项。
+4. **迁移与 schema 治理进 CI（S3 已关闭，2026-11-09）**：`check_schema_drift` 新增 `--ignore-file`，白名单 `scripts/schema_drift_allowlist.txt`（10 张遗留表逐张注释）；`.github/workflows/db-schema-gate.yml` 在空库上跑完整迁移链（48 个 revision）后做 drift 与 preflight 双检；本机实测 drift=0、pending=0。**仍待办**：10 张遗留表的「删除/归档」决策单（R17）、部署侧把 `migration_preflight` 加进启动前脚本（当前只有 `backup_before_migrate`）。
 5. **前端契约护栏**（S5）：把 `executions` 固定 3 条、SSE `data:` + `[DONE]`、错误体 `{code,message,detail}`、23 字段 SharePreview 固化成 golden 测试。
-6. **基线维护**：`deferred_imports` 现为 **58**（基线 33）——这是「container + 函数内延迟 import」方案的**预期代价**，不是退化，本轮已用 `--update-baseline` 刷新（同时把 `violations` 预算从 165 下调到 **117**、`cycles` 从 1 改 0，做到「只降不升」）；`modules` 188→227、`internal_imports` 610→659 属新增代码正常增长。
+6. **基线维护**：`deferred_imports` 现为 **59**（基线 33）——这是「container + 函数内延迟 import」方案的**预期代价**，不是退化，本轮已用 `--update-baseline` 刷新（同时把 `violations` 预算从 165 下调到 **117**、`cycles` 从 1 改 0，做到「只降不升」）；`modules` 188→230、`internal_imports` 610→666 属新增代码正常增长。
 7. **风险 R13–R19 的落实**：幂等键、WAL 膨胀监控、通知送达率、调度漏跑、schema 双真相、自动迁移不可逆。「护栏入库」已按用户「精确放行」处理：`.gitignore` 移除 `backend/tests`、`docs` 整行忽略，改为只忽略 `docs/*.{html,png,jpg,jpeg,gif,zip}`（预览垃圾）；并按用户要求把 12 篇历史文档（`docs/backend-optimization-*.md`、`docs/superpowers/`、`docs/WPS*.md`、`docs/追剧任务引流文件*.md`）加回忽略。当前待推送 61 个未跟踪文件 + 25 个已跟踪修改；其中必须推送的是 17 个新架构代码、6 个新 regression test、4 个 scripts、workflow、baseline、26 个 `backend/tests`、5 篇架构文档。
 
 ### 10.6 对应「第几周」
 
 - 原计划：S0 今天 → S1 本周 → S2 下周 → S3 第 3–4 周 → S4/S5 第 5–9 周。
-- 当前：**S0 + S1 + S2 全部完成，S3 主体完成**（§10.9 验收表：application→persistence 60→15、cycles 1→0、路由 commit 89→0、回归全绿、事务边界单测），相当于**第 4 周末**的位置；剩余 S3 尾巴（服务层 80 处 + 扩展层 16 处提交归属上移、端口接入、schema 治理进 CI）与 S4 物理搬迁未开始。
+- 当前：**S0 + S1 + S2 + S3 全部完成（含尾巴）**（§10.9 验收表 + §10.10 提交归属总账 + §10.11 端口与 schema 治理），**S4 全部完成（6/6 批）**：§10.12 查询链路与契约 golden、扫码会话回收；§10.13 账号快照缓存、按账户限速、令牌刷新 single-flight；§10.14 `DriveGatewayPort` 实现与装配；§10.15 + §10.16 物理搬目录 5 批全部落地（`infrastructure/{http,drive,execution,scheduling,notifications,search}` 就位，`services/` `extensions/` `thirdparty/` 只剩 84 个兼容垫片）。回归 **493 绿**、违规 115、环 0。相当于**第 6 周初**的位置；S4 之后只剩 S5（前端契约 golden、CI 补全、垫片删除与技术债收尾）。
 
 ### 10.7 本轮复盘：一次被测试发现的「静默丢数据」
 
@@ -823,7 +844,7 @@ class RunTaskUseCase:
 ### 10.8 提交收口的操作口径（可复制到后续批次）
 
 1. **先分类再动手**：①纯 DB 短事务 → `with transaction(db)`；②事务前有外部 IO（网盘/TMDB/Telegram）→ 只把尾部 `db.commit()` 换成 `commit(db)`；③服务自己管理事务边界（如 `drama_lead_in` 先 commit 结束只读事务再跑网盘 IO）→ 路由只调用 `commit(db)`，不包 `transaction`。
-2. **验收三元组**：全量测试（当前 438 passed, 2 skipped）+ 分层门禁（162 条 ≤ 基线 165）+ `import app.main`；写路径另加「行数确实变化」的行为验证（见 §10.7）。
+2. **验收三元组**：全量测试（当前 447 passed, 2 skipped）+ 分层门禁（117 条 = 基线 117、环 0）+ `import app.main`；写路径另加「行数确实变化」的行为验证（见 §10.7）。
 3. **定点替换、保留用户改动**：编辑前逐文件读原文，只替换目标行；`old_string` 要带足够上下文（`adb.commit()` 会同时命中 `return payload_out` 之类）；工作区 CRLF 文件用 `\r\n` 拼接，避免伪 diff。
 4. **长读事务的关闭必须 opt-in**：服务不能自行 `commit()` 调用方会话——执行器路径可能已 `flush` 执行记录但尚未提交。做法是加 `close_read_tx: bool = False`，只由已知只读的调用方（只读路由、后台刷新任务）传 `True`；默认 `False` 时行为与改造前逐字一致，并有回归测试锁定。
 5. **工具注意**：`py_compile app/api/routes/*.py` 在 pwsh 下不展开 glob（`[Errno 22]`），须逐文件循环；pytest 的 `tmp_path` 若命中他人目录（`backend/pytest-of-qiuqu`）会 `WinError 5`，运行前把 `TMPDIR/TEMP/TMP` 指到 `backend/.tmp`。
@@ -864,13 +885,347 @@ def users_repo():
 | application→persistence 违规 | ≤20 | **15** | 达标 |
 | import 环（SCC） | 0 | **0**（27 模块大环已拆） | 达标 |
 | 路由裸 `db.commit()` | ≤10 | **0** | 达标 |
-| 回归测试 | 全绿 | **438 passed, 2 skipped** | 达标 |
+| 回归测试 | 全绿 | **454 passed, 2 skipped**（含提交归属护栏 3 项、端口验收 6 项、presenter 契约 4 项、会话回收 3 项） | 达标 |
 | 事务边界单测 | 异常后无残留 | `test_unit_of_work.py`（6 项，含真实 SQLite 争锁）+ `test_route_transactions.py`（3 项） | 达标 |
 | 分层门禁 | 只降不升 | violations 165→**117**，exit 0 | 达标 |
 
 **已知例外（计入预算，不隐瞒）**：`tmdb_cache` 3 条边（写路径是 Core + 专用 writer engine，见 §10.3 决策 5）、`drama_lead_in` 4 条边（与 `task_lead_in`/`system_setting` 强耦合，待 S4 与追剧模块一起搬）、`share_preview_batch` 2 条边（`db.session` 与 `DriveAccount`，属 S4 链路重构范围）。
 
 **为什么这一步值得**：业务层不再 import 模型，模型字段改名/拆分时编译器（门禁）能立刻指出受影响的用例；`select()` 集中后，慢查询、缺索引、`noload` 策略有了唯一修改点；后续加缓存/读写分离只需改仓储，不必逐个业务文件改。
+
+### 10.10 提交归属总账（S3 收尾，2026-11-09）
+
+S3 的最后一项是「提交归属」：改造前全 app 有 **146 处** `.commit()`（路由 89、服务 80、扩展 16、main/scripts/db 7），没人说得清「这条写入失败时该谁回滚」。处理结果：**路由层归零，全 app 还剩 95 处，全部登记为四类有意为之的边界**。
+
+**四类归属**：
+
+| 类别 | 含义 | 处置 |
+| --- | --- | --- |
+| `request-scoped`（请求级） | HTTP 请求内的一次业务动作 | 全部上移到路由的 `commit(db)` / `transaction(db)`；路由层裸 `.commit()` **0** |
+| `app-lifecycle`（应用生命周期） | 启动 lifespan、运维脚本这类「进程级一次性写入」，没有请求上下文可依附 | 保留；在预算里登记 |
+| `background-owned`（后台拥有） | 调度器 / 执行器 / Telegram 轮询线程自己就是工作单元的拥有者 | 保留；每个任务/每轮独立提交（卡片可见、崩溃可恢复） |
+| `intentional-progressive`（有意渐进持久化） | 长流程里「先落一段、失败不回滚已成功部分」的记录点 | 保留；用注释写明失败语义 |
+
+**95 处逐文件总账**（与 `test_commit_ownership.py` 的 `COMMIT_BUDGET` 一一对应）：
+
+| 文件 | 处数 | 归属 | 为什么必须由它提交 |
+| --- | --- | --- | --- |
+| `app/core/runtime/tx.py` | 1 | infra | `end_read_tx()` 的实现本体：结束只读事务 |
+| `app/db/session.py` | 1 | infra | `commit_with_locked_retry()` 的实现本体（提交原语） |
+| `app/main.py` | 2 | app-lifecycle | lifespan：权限种子初始化、启动时执行记录清理 |
+| `app/scripts/ensure_admin.py` / `init_db.py` | 2 | app-lifecycle | 运维脚本：建管理员 / 建表后落盘 |
+| `app/extensions/runtime/task_scheduler.py` | 14 | background-owned | 每个定时任务一个工作单元，无请求会话可依附 |
+| `app/extensions/runtime/task_executor.py` | 1 | background-owned | 自动换链每轮独立落盘：刷新卡片、下一轮网络请求不占写锁 |
+| `app/extensions/runtime/telegram_bot_manager.py` | 1 | background-owned | 轮询线程启停状态落盘 |
+| `app/services/telegram_bot/handlers.py` | 50 | telegram-update-unit | 每次 update 一个工作单元：入口提交 + 中间渐进持久化 |
+| `app/services/telegram_bot/actions.py` | 20 | telegram-update-unit | 动作执行后立即持久化，保证卡片刷新可见 |
+| `app/services/drama_lead_in.py` | 2 | intentional-progressive | 清理过期记录；`_store_result` 保存记录并隔离异常（返回 `record=None`） |
+| `app/services/share_preview_batch.py` | 1 | intentional-progressive | `_short_tx` 用独立短会话，避免把调用方的读事务拖长 |
+
+**`end_read_tx()` 与 `commit()` 的分工（容易混，单独强调）**：
+
+1. `end_read_tx(db)` = 「提交一个没有写入的事务」，只用于**只读路径进入外部 IO 之前**（网盘、TMDB HTTP、Telegram），目的是释放 SQLite 快照、让 WAL checkpoint 能推进。它**不得**用来代替业务提交。
+2. `commit(db)` / `transaction(db)` = 业务写入的提交，由**事务边界拥有者**调用（当前是路由，后续是应用用例）。它们会在锁冲突时做安全重试（`commit_with_locked_retry`）。
+3. 服务层只读函数里出现 `db.commit()` 是错误写法（语义不清），应改为 `end_read_tx(db)`；本批已把 `drama_lead_in` 的 7 处、`tmdb_cache` 的 1 处全部替换。
+
+**为什么把 `end_read_tx` 放在 `app/core/runtime/tx.py` 而不是 `app/db/session.py`**：它只是对 Session 状态机的操作，零 ORM 依赖。放在 platform 层后，application 层服务可以合法使用（`application → platform` 允许），不会新增 `application → persistence` 违规；`app/db/session.py` 仍重导出它，旧的 `from app.db.session import end_read_tx` 写法保持可用。实测这样处理后门禁 violations 维持 **117**、deferred 维持 **58**、环 **0**。
+
+**预算护栏（`backend/regression_tests/test_commit_ownership.py`，3 项）**：
+
+| 断言 | 作用 |
+| --- | --- |
+| `test_routes_have_no_raw_commit` | 路由层出现裸 `.commit()` 直接失败（防止提交归属重新散落回 HTTP 层） |
+| `test_commit_counts_stay_within_registered_budget` | ① 出现未登记的文件 → 失败；② 任一文件超过预算 → 失败；③ 预算里有但文件已无提交点 → 失败（要求同步收缩）；④ 总数 > 95 → 失败 |
+| `test_session_local_usage_is_whitelisted` | 直接 `SessionLocal(` 的旁路会话必须登记理由（新增会失败） |
+
+**维护规则**：新增后台上作单元（如新的定时任务、新的轮询线程）应当允许增加提交点，但必须同时改 `COMMIT_BUDGET` 并在 PR/文档写明「为什么这个工作单元没有请求上下文可依附」。这是「只降不升」的唯一合法例外，且必须显式发生。
+
+**验证命令**：
+
+~~~bash
+cd backend
+XXM_TESTING=1 python -m pytest regression_tests/test_commit_ownership.py -q   # 3 passed
+XXM_TESTING=1 python -m pytest tests regression_tests -q                     # 447 passed, 2 skipped
+python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json  # violations=117, cycles=0, exit 0
+~~~
+
+
+### 10.11 端口接入与 schema 治理（2026-11-09，S3 尾巴收口）
+
+**一句话**：把「画在纸上的 8 个 Protocol」变成「4 个有实现、有生产调用点、有结构验收」；把「schema 双真相」变成 CI 里会红的门禁。
+
+#### 端口接线状态
+
+| 端口（`app/domain/ports/`） | 实现 | 生产接线点 | 验收 |
+| --- | --- | --- | --- |
+| `KeyedLockPort` | `core/runtime/keyed_locks.LRUKeyedLocks` 新增 `acquire(key, timeout_seconds)` / `release(key)` / `keyed(key)` 上下文 | 既有两处消费 `get()` 不变（`drama_lead_in` 素材锁 1024、`adapter_factory` 的 256） | `isinstance(locks, KeyedLockPort)`；`keyed()` 异常也释放；`acquire(timeout)` 被占用返回 `False` 不抛 |
+| `SingleFlightPort` | 新建 `core/runtime/single_flight.SingleFlight`（`_guard` + `dict[key, _Flight]`，leader 执行 factory，waiter `Event.wait()`） | `adapter_factory.create_adapter` 的「per-key 锁 + 二次查缓存」手工写法改为 `SingleFlight.run(cache_key, _build)` | 同 key 并发只调用一次 factory、共享结果；factory 抛错时 leader 与等待者拿到**同一个异常**；flight 结束即出表（不缓存结果） |
+| `ClockPort` | 新建 `core/runtime/clock.SystemClock`（`now`/`now_utc`/`monotonic`/`sleep`） | `application/container.clock()` 唯一装配；`services/share_preview_batch_cache._utcnow()` 改走它（过期判断） | `isinstance(clock, ClockPort)`；`spbc.clock is container.clock` |
+| `TaskRunUseCasePort` | `domain/ports/task.py` 的协议签名改为与真实用例一致：`run(task, policy, log=None, *, account_manager=None, init_account_for_task=True)` | `RunTaskUseCase` 即唯一实现；触发方（HTTP/SSE/调度器/Telegram）已全部经 `RunPolicy.for_trigger` 调用 | `isinstance(RunTaskUseCase(None), TaskRunUseCasePort)` |
+| `DriveGatewayPort` | **未接线** | — | 适配器方法是 `ls_dir(pdir_fid, max_items)` / `save_file` / `create_share_link`，与端口的 `list_dir(path)` / `transfer(share_url, target_dir)` / `check_share` 不是同一抽象：前者暴露网盘 fid 细节，后者是「按路径收发文件」。**先做 S4 适配器拆分，再决定是改端口还是加一层 gateway 适配**，否则会把 fid 泄漏进用例层 |
+| `NotifierPort` | **未接线** | — | `NotifyQueue.submit(title, content)` 是「入队」语义，端口 `send(title, message, *, level, meta)` 是「同步送达」语义；合并需要先决定「送达失败如何回传调用方」，属 S4/S5 通知语义专项 |
+| `CachePort` | **未接线** | — | 当前缓存是 SQLite 表（跨重启要活），进程内 `cachetools` 只用于权限缓存与图片代理；把两者塞进同一个 `get/set/ttl` 接口会模糊「重启后是否还在」这个关键差别，需先拆分「进程内缓存」与「持久缓存」两种端口 |
+
+**SingleFlight 的一条关键语义**：等待者拿到的是 leader 的**同一异常对象**（traceback 会指向 leader 线程）。因此 factory 必须自己决定「异常是失败还是可接受结果」——适配器创建路径沿用旧行为，在 factory 内部 `try/except` 记日志并返回 `None`，所以等待者拿到的是 `None`（与改造前「per-key 锁 + 二次查缓存」完全一致）。未来若让 single-flight 承载「必须把异常抛给所有调用方」的场景，要另写测试，不能复用适配器路径。
+
+#### schema 治理门禁
+
+1. **先修工具本身的静默失效**：`scripts/check_schema_drift.py` 原本靠 `app/db/base.py` 末尾的 `import app.models` 注册模型；S3 为破环删掉了那行，脚本随即报 `model_tables=0`、把 36 张表全判成 `db_only`——一个「看起来在跑、其实结论全错」的典型。已改为脚本内显式 `import app.models`（Alembic `env.py` 本来就是这么做的）。
+2. **白名单只允许一个方向**：`--ignore-file scripts/schema_drift_allowlist.txt` 只豁免 10 张已知遗留表（`plugin_*` 2 张 + `sync_*` 8 张，逐张带注释）。`model_only`（模型有、库里没有）永远不豁免——那就是漏迁移。
+3. **CI 用空库跑整条迁移链**：`.github/workflows/db-schema-gate.yml` 设 `XXM_TESTING=1` + `DATABASE_URL=sqlite:///./ci-schema.db`，先 `python -m alembic upgrade head`（48 个 revision），再 `check_schema_drift`（drift 必须为 0），最后 `migration_preflight --fail-if-pending`（必须停在 head）。这与本地实库（37 张表、10 张遗留表）形成互补：空库证明「迁移链能建出模型要的库」，实库证明「现网没有额外偏差」。
+4. **本机实测**：实库 `drift=0`（26/26，忽略 10 张遗留在内共 36 张）；空库升级后 `drift=0`、`pending=0`、`tables=37`、`freelist 2.1%`，两脚本 exit 0。
+
+#### 验证命令
+
+~~~bash
+cd backend
+XXM_TESTING=1 python -m pytest regression_tests/test_ports_conformance.py -q   # 6 passed
+XXM_TESTING=1 python -m pytest tests regression_tests -q                        # 454 passed, 2 skipped
+python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json  # violations=115, deferred=59, cycles=0, exit 0
+python ../scripts/check_schema_drift.py --ignore-file ../scripts/schema_drift_allowlist.txt  # drift=0, exit 0
+python ../scripts/migration_preflight.py --fail-if-pending                      # current=head, pending=0, exit 0
+~~~
+
+#### 残余风险（明确记账）
+
+- **端口签名没有类型检查**：`runtime_checkable` 只验方法名存在，不验参数。项目无 mypy，签名一致性靠上述集成测试与代码评审；一旦 `RunTaskUseCase.run` 再改参数，`TaskRunUseCasePort` 不会自动报错（已在测试注释里写明）。
+- **CI 白名单会「过期不报」**：若某张遗留表将来被迁移删除，白名单里的条目不会失败（脚本只在 drift 非零时失败）。属可接受残留，处理时机是 R17 的「遗留表决策单」。
+- **`db-schema-gate` 需要完整依赖**：workflow 走 `pip install -r backend/requirements.txt`（与镜像一致），比只装 sqlalchemy+alembic 慢；换取的是「CI 里的 app.models 与生产一致」，不引第二份依赖清单。
+
+### 10.12 S4 进展（2026-11-09，第一批：查询链路）
+
+S4 按「先契约、后搬迁、最后才动网盘执行」的顺序拆成 6 批。本批完成前两批 + 一个低风险生命周期修复。
+
+| 批次 | 内容 | 状态 |
+| --- | --- | --- |
+| S4-1 | **响应契约 golden 先落地**：`backend/regression_tests/test_task_presenter_contract.py`（4 项）锁死 `TaskOut` 22 个字段的顺序与取值、`executions` 按 `started_at` 倒序截断 3 条、`addition`/`extra`/`adapter_snapshot` 的 JSON 解析、`lead_in` 缺省值 | ✅ |
+| S4-2 | **presenter 下沉**：`backend/app/services/task_serialization.py` → `backend/app/api/presenters/task.py`（纯函数、零 IO）；旧模块**删除**，2 个路由（`api/routes/tasks.py`、`tasks_stream.py`）与 3 个测试的 import 改到新路径 | ✅ |
+| S4-3 | **扫码登录会话回收**：`backend/app/services/drive_account_auth_sessions.py` 创建前清过期项、上限 512 淘汰最早到期（旧实现只在命中时删除，放弃扫码的会话连同 adapter 永久驻留）；`test_auth_session_ttl.py` 3 项 | ✅ |
+| S4-4 | **`DriveGatewayPort` 实现与装配**：裁决为「端口＝薄语义层」（只吸收响应差异，不吸收执行器编排），实现落在 `infrastructure/drive/gateway.py`，在分享探测链路装配 | ✅ 见 §10.14 |
+| S4-5 | **账号快照缓存**（`DatabaseAccountManager` 每次实例化全表查询）、**按账户限速**（替代实例级 sleep）、**令牌刷新 single-flight** | ✅ 见 §10.13 |
+| S4-6 | **物理搬目录 + `app/_compat/` shim**：按附录 A 迁移 `services/*` → `application/`、`extensions/adapters` → `infrastructure/drive`、`extensions/runtime` → `infrastructure/scheduling`，旧路径 re-export 一个版本 | ⏳ |
+
+#### 为什么 presenter 直接删旧模块、不留 shim
+
+`services/task_serialization.py` 全仓库只有 2 个生产调用方（`api/routes/tasks.py:52`、`api/routes/tasks_stream.py:34`）和 3 个测试 import。若按「旧路径 re-export」保留，会新增一条 `application → presentation` 的依赖边（services 反向 import api），正好撞上分层规则；而改这 5 处 import 的成本极低。**判据**：只有当旧路径的调用方多到改不动（例如 `app.extensions.*` 被 20+ 模块引用）时，才值得付 shim 的依赖代价。
+
+结果：分层违规 117 → **115**（`application→presentation` 10 → 8，旧模块里两处 `services → schemas` 边随搬迁消失），基线随之下调到 115，仍满足「只降不升」。
+
+#### 本批验证
+
+~~~bash
+cd backend
+XXM_TESTING=1 python -m pytest tests regression_tests -q                          # 454 passed, 2 skipped
+XXM_TESTING=1 python -m pytest regression_tests/test_task_presenter_contract.py -q # 4 passed
+XXM_TESTING=1 python -m pytest regression_tests/test_auth_session_ttl.py -q        # 3 passed
+python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json  # violations=115, deferred=59, cycles=0, exit 0
+python -c "import app.main"                                                       # import ok
+grep -rn "task_serialization" app/                                                # 空（旧路径已无引用）
+~~~
+
+#### 下一步的顺序理由
+
+1. **先 S4-5 再 S4-4**：账号快照缓存与 RateLimiter 是「执行链路外围」，改动可独立回滚；`DriveGatewayPort` 一旦装配进转存主链路，行为分叉风险立刻上升，应放在有契约快照与账号层稳定之后。
+2. **S4-6 最后**：物理搬迁只改路径，不改行为；放在行为类改动之后，可以让每次搬迁的 diff 都是纯路径变更，出问题一眼定位。
+3. **每批都必须留「可一键关闭」的开关**（沿用 `settings.use_*` 灰度 flag 约定），默认开启、异常时关回旧路径。
+
+### 10.13 S4 进展（2026-11-09，第二至三批：执行链路外围）
+
+S4-5 的三件事有一个共同点：**不碰网盘协议、不碰转存语义、不改变任何前端契约**，只把「每次任务都重算一遍」「限不住」「会互相作废」这三类问题收敛。因此它可以先于 `DriveGatewayPort` 落地，且每一项都留了可一键关闭的灰度开关。
+
+| 子任务 | 改造前的问题（实测） | 做法 | 落地文件 | 护栏 |
+| --- | --- | --- | --- | --- |
+| 账号快照缓存 | `DatabaseAccountManager.__init__` 每个任务/每次预览都全表 `select(DriveAccount)`，再逐行 `parse_config_json` 两次 + `serialize_config`；调用点 15 处（`task_executor.py:122/:169`、`task_scheduler.py:226`、`tasks_drive.py:55/:157/:200`、`share_preview_batch.py:274/:390/:607/:871/:1009` 等） | `TtlCache`（30s）+ **版本号 + 表指纹双校验**；写路径 7 个服务方法 + 2 个仓储方法各 `invalidate_drive_accounts()`；返回 `deepcopy` | `backend/app/core/runtime/ttl_cache.py`、`cache_version.py`、`backend/app/extensions/runtime/account_manager.py`（重写，118 行） | `test_account_snapshot_cache.py`（10 项） |
+| 按账户限速 | `base_adapter._throttle_request()` 只持**实例**锁 + `random.uniform(0.05,0.10)`；而实例缓存 TTL 180s、cookie 轮换会产生同账户多实例 → 同一账户可被并发打穿 | `KeyedRateLimiter.wait(key, min, max)`：按 `(drive_type, account)` 预约「下一个可用时间点」，不同 key 互不阻塞；key 依次回退到 cookie md5 / index | `backend/app/core/runtime/rate_limiter.py`、`backend/app/extensions/adapters/base_adapter.py` | 同上（`FakeLimiter` 断言排队 key 与区间） |
+| 令牌刷新 | xunlei/aliyun 各自持实例锁、guangya 完全无锁且 `_request()` 两处自动刷新；并发刷新会让后到者作废先到的新 `refresh_token`，症状是「偶发要重新扫码登录」 | `TokenManager.refresh(key, is_valid, refresh)` 用 `SingleFlight` 合并同 key 并发刷新；guangya 的 401 路径传 `stale_token`，`is_valid` 判据是「令牌未被我看到的那个旧值」→ 不会把刚换好的新令牌再刷废 | `backend/app/core/runtime/token_manager.py`、`xunlei_adapter.py`、`aliyun_adapter.py`、`guangya_adapter.py`（实现在 `GuangyaClientLite`） | `test_runtime_components.py`（11 项） |
+
+#### 为什么这四个组件都在 `app/core/runtime/`（platform 层）
+
+`scripts/check_layering.py` 的矩阵里，`application`（`app/services`）与 `persistence`（`app/infrastructure/persistence`）**互相不能 import**，但两者都必须能引用这些组件：写路径（服务层和仓储层）要 `invalidate_drive_accounts()`，读路径（`app/extensions`）要用 `TtlCache`。唯一人人可 import 的层是 `platform`。放在 `app/core/runtime/` 的代价是「平台层出现了一点业务名词（`drive_accounts_version`）」，收益是**零新增分层违规**（本轮 violations 稳定在 115，未因这 4 个新模块增加）。
+
+#### 三条实现约束（评审必看）
+
+1. **缓存只存纯数据，不存 ORM 实例**。命中条件是「版本号相同 **且** 表指纹（`count(id)`、`max(id)`、`max(updated_at)`）相同」。版本号覆盖同进程内的所有写路径；指纹兜底「运维脚本/手工 SQL 改了库、但没走我们的服务方法」。因为指纹里有 `count`，删除一条也会失效；因为 `updated_at` 是 SQLite 秒级精度，**同一秒内的连续两次修改可能指纹相同**——所以写路径必须显式 bump 版本号，不能只依赖指纹。
+2. **令牌刷新 key 按「实例」而不是按「账户」**（`token:{drive_type}:{account}:{instance_id}`）。同一账户可能有多个 adapter 实例（实例缓存 TTL、cookie 轮换），各自的 token 是内存状态；若按账户合并，等待者会被 leader 的「成功」唤醒，但它自己的 `self.token` 并没有变——这是**假成功**，比不合并更危险。跨实例共享令牌需要把令牌状态挪到共享存储（`refresh_token` 回写数据库），属 S4-5 遗留缺口。
+3. **guangya 的 401 刷新必须带 `stale_token`**。若 `is_valid` 只判「是否过期」，并发两条 401 会连续刷新两次：第二次用第一次刚换来的新 `refresh_token` 去换，多数网盘会让第一次的令牌作废——这正是「偶发登录失效」的产生机制。`is_valid = bool(client.token) and client.token != stale_token` 把「别人已经换好了」识别为成功，不再重复刷新。
+
+#### 本批验证
+
+~~~bash
+cd backend
+XXM_TESTING=1 python -m pytest regression_tests/test_runtime_components.py regression_tests/test_account_snapshot_cache.py -q  # 21 passed
+XXM_TESTING=1 python -m pytest tests regression_tests -q                                                    # 475 passed, 2 skipped
+python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json                          # violations=115, deferred=59, cycles=0, exit 0
+python -c "import app.main"                                                                                # import ok
+~~~
+
+#### 遗留与下一步
+
+- **S4-4 `DriveGatewayPort`**：仍未动。端口语义（`list_dir/transfer/check_share`）与适配器命名（`ls_dir/save_file/create_share_link`）不一致，且转存编排散在 `task_executor.py:76`、`drama_executor.py:302-321`、`share_preview_batch.py` 5 处——需要先裁决「端口吸收编排」还是「端口只做薄封装」，再在一条真实链路（分享校验/预览）上装配。
+- **S4-6 物理搬目录**：`services/*` → `application/`、`extensions/adapters` → `infrastructure/drive` 未开始，旧路径 `app/_compat/` shim 也未建。
+- **令牌凭据一致性（R13）**：`set_config_saver`/`_global_config_saver` 是死代码，`refresh_token` 轮换不回写数据库；跨实例令牌共享依赖它。这是「多实例/多 worker 部署」的前置条件，本期按「单进程假设」不做，但必须记录在案。
+
+### 10.14 S4 进展（2026-11-09，第四批：网盘网关端口）
+
+#### 裁决：端口是「薄语义层」，不吸收执行器编排
+
+`DriveGatewayPort` 的协议形状（`list_dir` / `create_dir` / `transfer` / `check_share` / `close`）与适配器方法名（`ls_dir` / `mkdir` / `save_file` / `create_share_link`）并不一致，落地前必须先选一条路。最终选**薄语义层**，理由三条：
+
+1. **端口要吸收的是「各家网盘不一样」，不是「业务怎么做」**。适配器之间真正乱的只有响应结构：`fid`/`fs_id`/`file_id`、`fid_token`/`share_fid_token`/`token`、`is_dir`/`isdir`/`dir`/`file_type`。把这些归一，用例就能用同一套语义读目录、验分享；这是扩展性的真实瓶颈。
+2. **转存主链路的编排不能早搬**。重试轮次、`query_task` 轮询、`save_as_top_fids` 提取、按驱动分支（`uc` 等）、执行记录入库，散在 `extensions/runtime/drama_executor.py`（`_save_items`、`_call_save_file`、`_extract_saved_fids`）与 `share_preview_batch.py` 5 处，且与「失败怎么算」强耦合。搬进端口等于把最危险的逻辑提前，收益却只是文件变短。
+3. **端口先服务一条低风险链路**。分享探测（生成分享链接是否失效）只读、有分类、有既有护栏（`test_generated_share_check.py` 断言每次检测只调一次 `get_stoken`），是最好的第一个装配点。
+
+#### 落地物
+
+| 文件 | 内容 | 说明 |
+| --- | --- | --- |
+| `backend/app/domain/ports/drive.py` | 新增 `ShareProbeResult(valid, kind, message, stage)` 与 `probe_share()`；`check_share` 改为它的布尔糖 | 端口**不产出用户文案**；`stage` 让调用方选兜底文案 |
+| `backend/app/infrastructure/drive/gateway.py` | `AdapterDriveGateway`：`list_dir` / `create_dir` / `probe_share` / `check_share` / `transfer` / `close`，外加 `_get_stoken` / `_get_detail` / `_save_file` / `_classify` 四个差异吸收方法 | 约 280 行；不 import 任何 `app.services` |
+| `backend/app/infrastructure/drive/__init__.py` | re-export `AdapterDriveGateway` / `DriveGatewayError` / `DriveRemoteEntry` / `gateway_for_adapter` | 供 container 延迟 import |
+| `backend/app/application/container.py` | `drive_gateway(adapter, *, drive_type=None)` | 函数内延迟 import 实现；application 只认端口形状 |
+| `backend/app/services/generated_share_check.py` | `_probe` 改走端口；新增 `_map_kind()` 承接 kind→状态/文案映射；`_failure()` 保留为兼容入口 | **用户可见文案逐字不变**（含各 stage 的兜底句） |
+| `backend/regression_tests/test_gateway_port.py` | 13 项 | 协议形状、响应归一、幂等建目录、quark/baidu quirk、三阶段失败、transfer、假第 11 家网盘 |
+
+#### 差异怎么被吸收的（适配器方法 → 端口语义）
+
+| 端口方法 | 实际调用 | 吸收掉的网盘差异 |
+| --- | --- | --- |
+| `list_dir(path)` | `ls_dir(path)` | 列表固定取 `data.list`；名字取 `file_name`/`server_filename`/`name`/`fid`；目录判定按 `is_dir`→`isdir`→`dir`→`kind`→`type`→`file_type` 优先级；大小兼容 `size`/`file_size` |
+| `create_dir(path)` | `mkdir(path)` | `code`/`status` 兼容 int 与 str（0/200）；message 含「已存在」或 `exist` 视为**幂等成功**；其余抛 `DriveGatewayError` |
+| `probe_share(url, passcode)` | `extract_url` → `get_stoken` → `get_detail` | 无 `pwd_id` → `stage="parse"`；无 `stoken` → `stage="verify"` 并调 `classify_share_failure`；读目录失败 → `stage="read"` 同样分类。**quark 传 `first_page=True`，baidu 传 `check_errno=True`**（漏传会把「分享已过期」判成「检测失败」） |
+| `check_share(url, passcode)` | `probe_share(...).valid` | 布尔糖，不重复实现 |
+| `transfer(share_url, target_dir)` | `extract_url` → `get_stoken` → `get_detail` → `save_file` | fid/fid_token 归一；缺 `fid_token` 抛 `kind="invalid"`；`file_names` 用 `inspect.signature` 探测（部分网盘必须传）；**不含重试、不含任务轮询、不写库** |
+| `close()` | `adapter.close()`（存在才调） | 端口不假设适配器一定有该方法 |
+
+#### 为什么 `transfer()` 不进转存主链路（本批的明确边界）
+
+主链路的转存是「探测 → 建目录 → 保存 → 轮询任务 → 提取已保存 fid → 去重 → 入库 → 通知」，其中「已保存 fid 提取」在 `drama_executor` 里按驱动分支（`uc` 与其余不同），失败语义与重试次数写在执行器里。这些是**执行策略**，不是网盘差异。端口的 `transfer()` 只做「分享 → 直接保存到目标目录」这一步，用于：① 分享校验通过后的轻量转存；② 新网盘接入时的冒烟验证（假第 11 家网盘用例就是靠它跑通的）。主链路继续走 `drama_executor`，等 S5 有了执行策略的契约测试再评估是否上移。
+
+#### 两个分层注意点
+
+1. **container 延迟 import** → 门禁 `deferred_imports` +1（59→60），`violations` 不变（115）。这是 §10.3 决策 4 的既定代价，不是退化。
+2. **已知盲区（S4-6 必须处理）**：`scripts/check_layering.py` 的 `LAYER_OF_PREFIX` 还没有 `app.application` / `app.infrastructure` 两个前缀，指向这两个包的 import 会解析成 `unknown` 层而**跳过判定**。也就是说「application 顶层 import infrastructure」现在不会红。本批仍统一走 `container.drive_gateway()` 的延迟 import 纪律；S4-6 搬目录时要把两个前缀登记进门禁，届时会显形一批既有的延迟 import，需要同步 `--update-baseline`（只改 deferred，不改 violations 预算）。
+
+#### 本批验证
+
+~~~bash
+cd backend
+XXM_TESTING=1 python -m pytest regression_tests/test_gateway_port.py -q                                                        # 13 passed
+XXM_TESTING=1 python -m pytest regression_tests/test_generated_share_check.py regression_tests/test_share_failure_classify.py -q  # 7 passed（文案与调用次数未变）
+XXM_TESTING=1 python -m pytest tests regression_tests -q                                                                         # 488 passed, 2 skipped
+python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json                                               # violations=115, deferred=60, cycles=0, exit 0
+python -c "import app.main"                                                                                                      # import ok
+~~~
+
+#### 遗留与下一步
+
+- **S4-6 物理搬目录 + `app/_compat/` shim**：S4 唯一剩余批次。按附录 A 把 `services/*` → `application/`、`extensions/adapters` → `infrastructure/drive`、`extensions/runtime` → `infrastructure/scheduling`，旧路径 re-export 一个版本；同时把 `app.application` / `app.infrastructure` 登记进 `LAYER_OF_PREFIX` 并刷基线。
+- **`NotifierPort` / `CachePort` 仍未接**（S5）：`NotifyQueue.submit` 与端口 `send` 的语义不同（前者是「入队即返回」）；`CachePort` 的现存实现是 SQLite 表，进程内 `TtlCache` 只服务账号快照与权限缓存，需要先定「端口是给进程内缓存还是给持久缓存用」。
+- **`transfer()` 薄实现的生产使用面**：目前只有分享校验后的轻量转存与新网盘冒烟；主链路仍走 `drama_executor`，这条边界要在 S5 的执行策略契约测试里继续守。
+### 10.15 S4-6 进展（2026-11-09）：门禁真升级 + 两批物理搬目录 + 一次事故与恢复
+
+#### 10.15.1 门禁先「变真」，再搬文件
+
+搬目录前必须先把门禁盲区补上，否则搬了也看不见违规：
+
+| 动作 | 文件 | 结果 |
+| --- | --- | --- |
+| `LAYER_OF_PREFIX` 增加 `app.application` → application、`app.infrastructure` → infrastructure | `scripts/check_layering.py` | 此前这两个前缀解析成 `unknown` 层、违规判定直接 `continue`，等于盲区 |
+| 增加 `COMPOSITION_ROOTS = {"app.main", "app.application.container", "app.application.factories"}`，允许任意层引用装配点 | 同上 | 装配点是依赖图终点，不该计入违规 |
+| 拆出 `app/application/factories.py`（`task_executor_class()`） | `backend/app/application/factories.py` | 若放进 `container.py`，会形成 `container → task_executor → services(magic_regex/tmdb_cache/generated_share_check) → container` 的 15 模块新环；工厂只被用例层引用，处于末端 |
+
+登记后立刻暴露真问题（违规 115 → 118 + 一个新环），按上表修完回到 **115 / 环 0**。
+
+#### 10.15.2 已搬的 12 个模块（旧路径全部保留 shim）
+
+| 旧路径 | 新路径 |
+| --- | --- |
+| `backend/app/thirdparty/douban_client.py` | `backend/app/infrastructure/http/douban_client.py` |
+| `backend/app/thirdparty/tmdb_client.py` | `backend/app/infrastructure/http/tmdb_client.py` |
+| `backend/app/extensions/runtime/task_admission.py` | `backend/app/infrastructure/scheduling/task_admission.py` |
+| `backend/app/extensions/runtime/telegram_bot_manager.py` | `backend/app/infrastructure/notifications/telegram_bot_manager.py` |
+| `backend/app/extensions/runtime/account_manager.py` | `backend/app/infrastructure/drive/account_manager.py` |
+| `backend/app/extensions/runtime/adapter_registry.py` | `backend/app/infrastructure/drive/adapter_registry.py` |
+| `backend/app/extensions/runtime/drama_executor.py` | `backend/app/infrastructure/execution/drama_executor.py` |
+| `backend/app/extensions/runtime/execution_log.py` | `backend/app/infrastructure/execution/execution_log.py` |
+| `backend/app/extensions/runtime/magic_rename.py` | `backend/app/infrastructure/execution/magic_rename.py` |
+| `backend/app/extensions/runtime/retry_utils.py` | `backend/app/infrastructure/execution/retry_utils.py` |
+| `backend/app/extensions/runtime/task_executor.py` | `backend/app/infrastructure/execution/task_executor.py` |
+| `backend/app/extensions/runtime/task_scheduler.py` | `backend/app/infrastructure/scheduling/task_scheduler.py` |
+
+shim 形态固定：旧文件只留 docstring（「新路径：…；删除时机：S4-6 完成后一个版本」）+ 显式 re-export 公开名，不复制实现。调用方全部改新路径（21 个文件），`test_commit_ownership.py` 的路径键同步改名。
+
+验收：`pytest tests regression_tests -q` → 488 passed / 2 skipped；门禁 `modules=254 internal_imports=695 deferred_imports=62 violations=115 cycles=0`，exit 0；`import app.main` ok；旧 shim 四个代表路径可 import。
+
+#### 10.15.3 事故：批量替换把 93 个文件写成 1 个字符（已 100% 恢复）
+
+| 项 | 事实 |
+| --- | --- |
+| 现象 | 一次批量改写脚本的 `[0]` 误用，把 93 个 `.py` 写成字符串首字符（`settings.py` 内容只剩 `f`） |
+| 影响面 | `app/api`、`app/application`、`app/core`、`app/db`、`app/domain`、`app/extensions/adapters`、已搬迁的 `infrastructure/*`、部分 tests/regression_tests |
+| 恢复源 | ① 用户自提交 `b865b72`（2026-11-09 00:41:58，含 S3 全套与用户 WIP）整树 `git checkout -- <dir>`；② 事故后的改动从本会话 transcript 重放（300 个写/编辑/程序操作，跳过截断那一条） |
+| 不可用恢复源 | VS Code Local History 0 命中；PyCharm LocalHistory 的 `changes.storageData` 不含代码正文（zlib/zstd 探测无命中） |
+| 重放后修 3 处 | `keyed_locks.py` 补 `import contextlib`；`run_task.py` 改回走 `factories.task_executor_class()`（重放回的是重构前版本，带 3 条跨层违规）；`container.py` 补 `adapter_registry()` 访问器供 `services/tasks.py` 使用 |
+| 最终验收 | 488 passed / 2 skipped；违规 115、环 0、deferred 62、基线已刷新；`compileall -q app` exit 0；旧 shim 可用 |
+
+三条教训（已写进 §10.5 的完成项与团队纪律）：
+
+1. **批量写文件必须先 dry-run 再断言产物**：改写前记录目标文件字节数/首行，写完立刻校验长度与语法，不通过就整批放弃。
+2. **写操作要么幂等、要么可回滚**：已有 `git` 提交点时，批量改动前先确认「回退点是哪一个提交」，而不是假设工作区可恢复。
+3. **每批写入后立刻跑测试与门禁**：本次 42 个 collection error 在第一次全量测试时即暴露，早跑早止损。
+
+#### 10.15.4 后半批次：已完成（详见 §10.16）
+
+1. `backend/app/services/*` → `backend/app/application/`：52 个模块已搬（含 `telegram_bot/`、`notifications/`），旧路径留 shim。
+2. `backend/app/extensions/adapters/*` → `backend/app/infrastructure/drive/{factory.py,adapters/}`；`extensions/search_plugins` → `infrastructure/search/`。
+3. `backend/app/_compat/`：以**清点清单**形式落地（`iter_legacy_shims()` + 5 项护栏测试），不做二次 re-export（否则只是多一层间接、白增延迟 import）。
+4. `LAYER_OF_PREFIX` 的旧前缀保留：搬完后 `app.services` / `app.extensions` / `app.thirdparty` 下只剩垫片，映射到 application / infrastructure 仍然准确，且垫片只 import 新路径、不产生违规。
+### 10.16 S4-6 完成（2026-11-09）：目录与目标树对齐、兼容层与验收
+
+#### 10.16.1 本轮搬完的 5 批（累计 84 个模块，全部旧路径留垫片）
+
+| 批次 | 旧路径 | 新路径 | 模块数 |
+| --- | --- | --- | --- |
+| 1 | `app/thirdparty/{douban,tmdb}_client.py`、`app/extensions/runtime/{task_admission,telegram_bot_manager}.py` | `app/infrastructure/{http,douban_client.py,tmdb_client.py}` / `scheduling/task_admission.py` / `notifications/telegram_bot_manager.py` | 4 |
+| 2 | `app/extensions/runtime/{account_manager,adapter_registry,drama_executor,execution_log,magic_rename,retry_utils,task_executor,task_scheduler}.py` | `app/infrastructure/drive/` (2)、`execution/` (5)、`scheduling/` (1) | 8 |
+| 3 | `app/services/**`（52 个模块，含 `telegram_bot/`、`notifications/`） | `app/application/**`（同名保留） | 52 |
+| 4 | `app/extensions/adapters/**`（15 个：10 家适配器 + base + drive_auth + lead_in_support + `__init__` + `adapter_factory`） | `app/infrastructure/drive/adapters/**`；`adapter_factory.py` → `infrastructure/drive/factory.py` | 15 |
+| 5 | `app/extensions/search_plugins/**`（7 个） | `app/infrastructure/search/**` | 7 |
+
+垫片规则（三批自动化生成，批 1/2 手写）：旧文件只留 docstring + `from <新路径> import (...)` 显式列出顶层名字，**不放实现**；`app/_compat/__init__.py` 的 `iter_legacy_shims()` 扫描这些垫片的 docstring 得到「旧 → 新」清单，`regression_tests/test_compat_shims.py`（5 项）保证：清单非空、新模块可 import、旧路径可 import、无重复指向、关键类对象同一。
+
+#### 10.16.2 搬目录过程中暴露并修掉的两个真问题
+
+| 问题 | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- |
+| 适配器包成环 | `import app.main` 报 `cannot import name AdapterFactory from partially initialized module` | `adapters/__init__.py` 顶层 `from ...drive.factory import AdapterFactory`，而 `factory.py` 顶层 import `adapters.base_adapter` → 包初始化重入 | `adapters/__init__.py` 改用 PEP 562 `__getattr__` 惰性导出 `AdapterFactory` / `AccountManager` |
+| 搜索插件发现目录写死 | 4 个插件测试失败，日志「文件中未定义一个继承 BaseSearchPlugin 的插件」（实际扫到的是垫片） | `app/application/search_plugins.py:26` 的 `PLUGIN_DIR = Path(__file__).resolve().parents[1] / "extensions" / "search_plugins"` 用相对自身位置拼路径，文件搬走后指向垫片目录 | 改为 `parents[1] / "infrastructure" / "search"` |
+
+教训：物理搬目录不只是改 import，**任何用 `__file__` 拼出来的资源路径都要一起改**（插件目录、模板、静态资源、SQL 脚本），并且优先改成「从包 import 常量」而不是相对路径拼字符串。
+
+#### 10.16.3 与目标树的差异（S5 待收）
+
+| 目标（§3.3） | 现状 | 说明 |
+| --- | --- | --- |
+| `infrastructure/persistence/{models,repositories,session,uow}` | `app/models`、`app/db`、`infrastructure/persistence/repositories` | models/db 仍是旧路径：它们是 26 个 ORM 模型 + 全局 Session 工厂，搬迁影响 alembic/env.py、14 处测试 `create_all`、`db/base.py` 的模型注册；建议单独一批做，且先补 schema 迁移演练 |
+| `domain/{task,drive,drama}` 实体与值对象 | `app/domain/ports/*` 8 个 Protocol 已有，实体仍在各处 dict | 领域模型化属 S5 重构，不是搬目录 |
+| `application/queries` 读模型 | 查询仍在 `application/tasks.py` 等服务函数 | 可等前端契约 golden 建立后再拆 |
+| `_compat/` 作为 shim 宿主 | `_compat` 只是清点清单，垫片仍在旧路径 | 垫片放旧路径才能让旧 import 直接命中；二次跳转会多一层导入延迟，收益为零 |
+
+#### 10.16.4 验收（2026-11-09 实测）
+
+~~~bash
+cd backend && python -m pytest tests regression_tests -q
+# 493 passed, 2 skipped in 11.10s
+
+python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json
+# modules=329 internal_imports=769 deferred_imports=63 violations=115 import_cycles=0 largest_cycle=0  (exit 0)
+
+python -c "import app.main; print('import ok')"
+# import ok
+~~~
+
+`backend/.layering-baseline.json` 已刷新为 `{"violations": 115, "deferred_imports": 63, "cycles": 0}`。
 ## 附录 A：现状 → 目标目录映射（可直接当搬迁清单）
 
 | 现状路径 | 目标路径 | 所属阶段 | 备注 |

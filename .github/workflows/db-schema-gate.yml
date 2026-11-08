@@ -1,0 +1,42 @@
+name: db-schema-gate
+
+# 目的：让「迁移能否建出模型期望的库」从口头约定变成可执行门禁。
+# 背景：docs/architecture-evolution-plan.md §1.8 / §7 R17（schema 双真相）。历史上
+# 测试用 Base.metadata.create_all 建库、从不跑 alembic，所以模型/迁移偏差无人发现。
+#
+# 这里从空库跑 alembic upgrade head，再比对 SQLite 表集合与 ORM 模型表集合：
+# - model_only（模型有、迁移没建）=> 漏迁移，必须失败；
+# - db_only（迁移多建、模型没有）=> 只允许 scripts/schema_drift_allowlist.txt 里的
+#   10 张历史遗留表，新增即失败。
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      XXM_TESTING: "1"          # 允许 DATABASE_URL 覆盖（settings.py:106-112）
+      DATABASE_URL: "sqlite:///./ci-schema.db"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+      - name: Apply migrations to a fresh database
+        run: python -m alembic upgrade head
+      - name: Check ORM/schema drift
+        run: |
+          python ../scripts/check_schema_drift.py \
+            --db ci-schema.db \
+            --ignore-file ../scripts/schema_drift_allowlist.txt
+      - name: Migration preflight (must be at head)
+        run: python ../scripts/migration_preflight.py --db ci-schema.db --fail-if-pending

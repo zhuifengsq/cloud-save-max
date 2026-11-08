@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from app.services.drama_share_autoupdate import resolve_drama_shareurl_update
+from app.application.drama_share_autoupdate import resolve_drama_shareurl_update
 
 
 def _task(**overrides):
@@ -33,9 +33,9 @@ class DramaShareAutoUpdateTests(unittest.TestCase):
         groups = [([{"file_name": "08.mp4", "updated_at": 100}], "fid-new", 100, "4k")]
         db = Mock()
         with (
-            patch("app.services.drama_share_autoupdate._search_candidates", return_value=([suggestion], False, {})),
-            patch("app.services.drama_share_autoupdate._prepare_candidates", return_value=([suggestion], {})),
-            patch("app.services.share_preview_batch.fetch_share_file_list_grouped", return_value=groups),
+            patch("app.application.drama_share_autoupdate._search_candidates", return_value=([suggestion], False, {})),
+            patch("app.application.drama_share_autoupdate._prepare_candidates", return_value=([suggestion], {})),
+            patch("app.application.share_preview_batch.fetch_share_file_list_grouped", return_value=groups),
         ):
             result = resolve_drama_shareurl_update(db, task)
 
@@ -49,9 +49,9 @@ class DramaShareAutoUpdateTests(unittest.TestCase):
         groups = [([{"file_name": "08.mp4", "updated_at": 100}], "fid-new", 100, "4k")]
         db = Mock()
         with (
-            patch("app.services.drama_share_autoupdate._search_candidates", return_value=([suggestion], False, {})),
-            patch("app.services.drama_share_autoupdate._prepare_candidates", return_value=([suggestion], {})),
-            patch("app.services.share_preview_batch.fetch_share_file_list_grouped", return_value=groups),
+            patch("app.application.drama_share_autoupdate._search_candidates", return_value=([suggestion], False, {})),
+            patch("app.application.drama_share_autoupdate._prepare_candidates", return_value=([suggestion], {})),
+            patch("app.application.share_preview_batch.fetch_share_file_list_grouped", return_value=groups),
         ):
             result = resolve_drama_shareurl_update(db, task)
 
@@ -63,9 +63,9 @@ class DramaShareAutoUpdateTests(unittest.TestCase):
         suggestion = {"shareurl": "https://pan.quark.cn/s/newshare", "taskname": "测试剧"}
         db = Mock()
         with (
-            patch("app.services.drama_share_autoupdate._search_candidates", return_value=([suggestion], False, {})),
-            patch("app.services.drama_share_autoupdate._prepare_candidates", return_value=([suggestion], {})),
-            patch("app.services.share_preview_batch.fetch_share_file_list_grouped", return_value=[]),
+            patch("app.application.drama_share_autoupdate._search_candidates", return_value=([suggestion], False, {})),
+            patch("app.application.drama_share_autoupdate._prepare_candidates", return_value=([suggestion], {})),
+            patch("app.application.share_preview_batch.fetch_share_file_list_grouped", return_value=[]),
         ):
             result = resolve_drama_shareurl_update(db, task)
 
@@ -84,9 +84,9 @@ class DramaShareAutoUpdateTests(unittest.TestCase):
         suggestion = {"shareurl": "https://pan.quark.cn/s/newshare", "taskname": "测试剧"}
         groups = [([{"file_name": "08.mp4", "updated_at": 100}], "fid-new", 100, "4k")]
         with (
-            patch("app.services.drama_share_autoupdate._search_candidates", return_value=([suggestion], False, {})),
-            patch("app.services.drama_share_autoupdate._prepare_candidates", return_value=([suggestion], {})),
-            patch("app.services.share_preview_batch.fetch_share_file_list_grouped", return_value=groups),
+            patch("app.application.drama_share_autoupdate._search_candidates", return_value=([suggestion], False, {})),
+            patch("app.application.drama_share_autoupdate._prepare_candidates", return_value=([suggestion], {})),
+            patch("app.application.share_preview_batch.fetch_share_file_list_grouped", return_value=groups),
         ):
             result = resolve_drama_shareurl_update(Mock(), task)
 

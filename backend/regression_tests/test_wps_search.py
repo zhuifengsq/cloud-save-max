@@ -7,7 +7,7 @@ from importlib import util
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from app.models.resource_search_source import ResourceSearchSource
-from app.services import search_plugins
+from app.application import search_plugins
 
 
 def paragraph(text, href=None):
@@ -34,8 +34,8 @@ def document():
 
 class WpsSearchTests(unittest.TestCase):
     def setUp(self):
-        self.assertIsNotNone(util.find_spec('app.services.wps_document_search'), 'WPS 搜索服务尚未实现')
-        from app.services import wps_document_search as service
+        self.assertIsNotNone(util.find_spec('app.application.wps_document_search'), 'WPS 搜索服务尚未实现')
+        from app.application import wps_document_search as service
         self.service = service
         self.config = service.validate_config({})
         service.clear_cache(self.config['document_url'])
@@ -142,7 +142,7 @@ class WpsSearchTests(unittest.TestCase):
 
     def test_routes_clear_aggregate_cache_and_keep_saved_config(self):
         from app.api.routes.search_plugins import put_search_plugin_config, post_clear_search_plugin_cache, SearchPluginConfigIn
-        from app.services import resource_search
+        from app.application import resource_search
         engine = create_engine('sqlite://')
         ResourceSearchSource.__table__.create(engine)
         request = Request({'type': 'http', 'method': 'POST', 'path': '/', 'headers': []})

@@ -4,7 +4,7 @@ import pytest
 from starlette.requests import Request
 
 from app.api.routes import media_discovery
-from app.services import proxy_image_cache as cache
+from app.application import proxy_image_cache as cache
 
 
 @pytest.mark.parametrize("url", [

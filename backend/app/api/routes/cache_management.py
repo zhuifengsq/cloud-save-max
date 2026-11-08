@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
 from app.core.settings import settings
-from app.db.session import get_db, transaction
+from app.db.session import get_db, transaction, transaction
 from app.schemas.cache_management import (
     CacheClearOut,
     CacheDeleteOut,
@@ -23,16 +23,16 @@ from app.schemas.cache_management import (
     SharePreviewBatchCacheListOut,
     SharePreviewBatchCachePurgeIn,
 )
-from app.services.invalid_share_links import clear_invalid_share_links, delete_invalid_share_link, list_invalid_share_links
-from app.services.proxy_image_cache import (
+from app.application.invalid_share_links import clear_invalid_share_links, delete_invalid_share_link, list_invalid_share_links
+from app.application.proxy_image_cache import (
     ProxyImageCacheConfig,
     clear_proxy_image_cache,
     purge_expired_proxy_image_cache,
     resolve_proxy_image_cache_dir,
     scan_proxy_image_cache_stats,
 )
-from app.services.share_preview_batch import cache_clear as share_preview_batch_cache_clear
-from app.services.share_preview_batch_cache import (
+from app.application.share_preview_batch import cache_clear as share_preview_batch_cache_clear
+from app.application.share_preview_batch_cache import (
     delete_preview_batch_cache_item,
     list_preview_batch_cache,
     purge_expired_preview_batch_cache,

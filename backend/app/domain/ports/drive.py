@@ -8,7 +8,24 @@ Xunlei/189/139/Guangya）已具备同名能力，不需要继承本协议（stru
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+
+
+@dataclass(frozen=True)
+class ShareProbeResult:
+    """一次「分享链接是否还能打开」的探测结论。
+
+    valid：目录能正常读取（唯一能判定「链接有效」的情况）。
+    kind：与适配器 ``classify_share_failure`` 同一套词表（invalid/passcode/captcha/auth/throttled/pending/unknown）。
+    stage：失败发生在哪一步——parse（链接解析不出分享 id）/ verify（取 stoken 失败）/ read（读目录失败）。
+        调用方据此选择面向用户的兜底文案，端口本身不产出用户文案。
+    """
+
+    valid: bool
+    kind: str = "unknown"
+    message: str = ""
+    stage: str = "verify"
 
 
 @runtime_checkable

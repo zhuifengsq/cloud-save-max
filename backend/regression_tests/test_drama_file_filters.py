@@ -2,8 +2,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.extensions.runtime.drama_executor import DramaTaskExecutor
-from app.extensions.runtime.execution_log import ExecutionLog
+from app.infrastructure.execution.drama_executor import DramaTaskExecutor
+from app.infrastructure.execution.execution_log import ExecutionLog
 
 
 @pytest.mark.parametrize("location", ["normal", "root", "incremental", "whole_folder"])

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 pytest.skip(
-    "weibo 功能已从代码库删除（app.services.weibo_images / app.models.weibo_worker 不存在），测试待重写；" 
+    "weibo 功能已从代码库删除（app.application.weibo_images / app.models.weibo_worker 不存在），测试待重写；" 
     "见 docs/architecture-evolution-plan.md 的 S0 项",
     allow_module_level=True,
 )
@@ -27,7 +27,7 @@ from app.schemas.weibo import (
     WorkerCompleteIn,
     WorkerReportIn,
 )
-from app.services.weibo_tasks import (
+from app.application.weibo_tasks import (
     STATUS_CANCELLED,
     STATUS_COMMENT_DONE,
     STATUS_COMPLETED,

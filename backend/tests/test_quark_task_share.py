@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import Mock, patch
 
-from app.extensions.adapters.quark_adapter import QuarkAdapter
+from app.infrastructure.drive.adapters.quark_adapter import QuarkAdapter
 
 
 class QuarkTaskShareTests(unittest.TestCase):

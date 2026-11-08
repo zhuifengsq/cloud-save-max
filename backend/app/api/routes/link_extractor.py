@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from app.core.deps import require_permissions
 from app.core.errors import ApiError, bad_request
 from app.core.permissions import TASK_READ
-from app.services.wps_document_search import clear_hot_updates_cache, read_hot_updates
+from app.application.wps_document_search import clear_hot_updates_cache, read_hot_updates
 
 
 router = APIRouter()
