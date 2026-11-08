@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.models.task_template import TaskTemplate
 
 router = APIRouter()
@@ -59,8 +59,8 @@ def create_template(payload: TemplateIn, db: Session = Depends(get_db)):
         name=payload.name,
         config_json=json.dumps(payload.config, ensure_ascii=False),
     )
-    db.add(row)
-    db.commit()
+    with transaction(db):
+        db.add(row)
     db.refresh(row)
     return _to_out(row)
 
@@ -70,11 +70,11 @@ def update_template(template_id: int, payload: TemplateUpdateIn, db: Session = D
     row = db.execute(select(TaskTemplate).where(TaskTemplate.id == template_id)).scalars().first()
     if row is None:
         raise HTTPException(status_code=404, detail="模板不存在")
-    if payload.name is not None:
-        row.name = payload.name
-    if payload.config is not None:
-        row.config_json = json.dumps(payload.config, ensure_ascii=False)
-    db.commit()
+    with transaction(db):
+        if payload.name is not None:
+            row.name = payload.name
+        if payload.config is not None:
+            row.config_json = json.dumps(payload.config, ensure_ascii=False)
     db.refresh(row)
     return _to_out(row)
 
@@ -84,6 +84,6 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
     row = db.execute(select(TaskTemplate).where(TaskTemplate.id == template_id)).scalars().first()
     if row is None:
         raise HTTPException(status_code=404, detail="模板不存在")
-    db.delete(row)
-    db.commit()
+    with transaction(db):
+        db.delete(row)
     return {"success": True}

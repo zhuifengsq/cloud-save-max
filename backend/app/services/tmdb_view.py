@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.tmdb_media_cache import TMDBMediaCache
+from app.application.container import tmdb_media_cache_repo
 from app.services.tmdb_settings import get_tmdb_lang_pair
 
 
@@ -48,21 +47,11 @@ def load_tmdb_status_map(db: Session, items: list[object]) -> dict[tuple[str, in
     language, poster_language = get_tmdb_lang_pair(db)
     tv_ids = [tid for mt, tid in keys if mt == "tv"]
     movie_ids = [tid for mt, tid in keys if mt == "movie"]
-    conds = []
-    if tv_ids:
-        conds.append(and_(TMDBMediaCache.media_type == "tv", TMDBMediaCache.tmdb_id.in_(tv_ids)))
-    if movie_ids:
-        conds.append(and_(TMDBMediaCache.media_type == "movie", TMDBMediaCache.tmdb_id.in_(movie_ids)))
-    if not conds:
+    if not tv_ids and not movie_ids:
         return {}
 
-    rows = (
-        db.execute(
-            select(TMDBMediaCache.media_type, TMDBMediaCache.tmdb_id, TMDBMediaCache.status)
-            .where(TMDBMediaCache.language == language, TMDBMediaCache.poster_language == poster_language, or_(*conds))
-            .order_by(TMDBMediaCache.updated_at.desc())
-        )
-        .all()
+    rows = tmdb_media_cache_repo().load_status_rows(
+        db, language=language, poster_language=poster_language, tv_ids=tv_ids, movie_ids=movie_ids
     )
     out: dict[tuple[str, int], str | None] = {}
     for mt, tid, status in rows:
@@ -94,18 +83,8 @@ def load_tmdb_payload_map(db: Session, items: list[object]) -> dict[tuple[str, i
     if not tv_ids:
         return {}
 
-    rows = (
-        db.execute(
-            select(TMDBMediaCache.media_type, TMDBMediaCache.tmdb_id, TMDBMediaCache.payload_json)
-            .where(
-                TMDBMediaCache.media_type == "tv",
-                TMDBMediaCache.tmdb_id.in_(tv_ids),
-                TMDBMediaCache.language == language,
-                TMDBMediaCache.poster_language == poster_language,
-            )
-            .order_by(TMDBMediaCache.updated_at.desc())
-        )
-        .all()
+    rows = tmdb_media_cache_repo().load_payload_rows(
+        db, language=language, poster_language=poster_language, tv_ids=tv_ids
     )
     out: dict[tuple[str, int], dict[str, object] | None] = {}
     for mt, tid, payload in rows:
@@ -126,19 +105,8 @@ def load_tmdb_payload_map(db: Session, items: list[object]) -> dict[tuple[str, i
 def get_tmdb_status(db: Session, mt: str, tid: int) -> str | None:
     """单个媒体的最新状态（无批量 map 时使用）。"""
     language, poster_language = get_tmdb_lang_pair(db)
-    row = (
-        db.execute(
-            select(TMDBMediaCache.status)
-            .where(
-                TMDBMediaCache.media_type == mt,
-                TMDBMediaCache.tmdb_id == tid,
-                TMDBMediaCache.language == language,
-                TMDBMediaCache.poster_language == poster_language,
-            )
-            .order_by(TMDBMediaCache.updated_at.desc())
-            .limit(1)
-        )
-        .first()
+    row = tmdb_media_cache_repo().get_latest_status(
+        db, media_type=mt, tmdb_id=tid, language=language, poster_language=poster_language
     )
     if row is None:
         return None

@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     # 用户角色/权限查询的进程内缓存 TTL（秒）；<=0 关闭。用户/角色/权限变更时会主动失效
     permission_cache_ttl_seconds: int = 30
 
+    # ---- 重构灰度开关：置 False 即回退到旧实现（平滑过渡，见路线图 S1/S2）----
+    # 统一任务执行入口（RunTaskUseCase）
+    use_unified_run_use_case: bool = True
+    # 通知走单消费者队列（不再每个渠道起线程）
+    use_notify_queue: bool = True
+    # 素材/网盘 key 级锁使用 LRU 上限（防止锁表无限增长）
+    use_keyed_locks: bool = True
+
     # 追剧任务引流文件预览令牌有效期（秒）
     drama_lead_in_preview_token_ttl_seconds: int = 600
 

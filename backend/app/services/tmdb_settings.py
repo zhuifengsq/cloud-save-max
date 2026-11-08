@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.tmdb_setting import TMDBSetting
+from app.application.container import tmdb_settings_repo
 
 
 DEFAULT_TMDB_SETTING_ID = 1
@@ -14,14 +14,8 @@ DEFAULT_TMDB_SETTING_ID = 1
 _TMDB_LANG_PAIR_SESSION_KEY = "tmdb_lang_pair"
 
 
-def get_or_create_tmdb_setting(db: Session) -> TMDBSetting:
-    item = db.get(TMDBSetting, DEFAULT_TMDB_SETTING_ID)
-    if item is not None:
-        return item
-    item = TMDBSetting(id=DEFAULT_TMDB_SETTING_ID, config_json=json.dumps({}, ensure_ascii=False))
-    db.add(item)
-    db.flush()
-    return item
+def get_or_create_tmdb_setting(db: Session) -> Any:
+    return tmdb_settings_repo().get_or_create_tmdb_setting(db)
 
 
 def get_tmdb_lang_pair(db: Session) -> tuple[str, str]:
@@ -50,7 +44,7 @@ def _load_json(payload: str | None) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def load_tmdb_config(item: TMDBSetting) -> dict[str, Any]:
+def load_tmdb_config(item: Any) -> dict[str, Any]:
     raw = _load_json(item.config_json)
     api_key = str(raw.get("api_key") or "").strip()
     return {
@@ -60,7 +54,7 @@ def load_tmdb_config(item: TMDBSetting) -> dict[str, Any]:
     }
 
 
-def get_tmdb_runtime_config(item: TMDBSetting) -> dict[str, Any]:
+def get_tmdb_runtime_config(item: Any) -> dict[str, Any]:
     raw = _load_json(item.config_json)
     api_key = str(raw.get("api_key") or "").strip()
     return {
@@ -70,7 +64,7 @@ def get_tmdb_runtime_config(item: TMDBSetting) -> dict[str, Any]:
     }
 
 
-def update_tmdb_setting(db: Session, *, payload: dict[str, Any] | None = None) -> TMDBSetting:
+def update_tmdb_setting(db: Session, *, payload: dict[str, Any] | None = None) -> Any:
     item = get_or_create_tmdb_setting(db)
     if payload is None:
         return item

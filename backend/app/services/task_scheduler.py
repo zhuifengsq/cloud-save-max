@@ -1,34 +1,25 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from typing import Any
+
 from sqlalchemy.orm import Session
 
-from app.models.task_scheduler_setting import TaskSchedulerSetting
+from app.application.container import task_scheduler_setting_repo
 from app.services.scheduler_validation import validate_scheduler_setting
 
 
 DEFAULT_TASK_SCHEDULER_SETTING_ID = 1
 
 
-def load_task_scheduler_setting(db: Session) -> TaskSchedulerSetting | None:
-    return db.get(TaskSchedulerSetting, DEFAULT_TASK_SCHEDULER_SETTING_ID)
+def load_task_scheduler_setting(db: Session) -> Any:
+    return task_scheduler_setting_repo().get_setting(db)
 
 
-def get_or_create_task_scheduler_setting(db: Session) -> TaskSchedulerSetting:
-    setting = (
-        db.execute(select(TaskSchedulerSetting).where(TaskSchedulerSetting.id == DEFAULT_TASK_SCHEDULER_SETTING_ID))
-        .scalars()
-        .first()
-    )
-    if setting is not None:
-        return setting
-    setting = TaskSchedulerSetting(id=DEFAULT_TASK_SCHEDULER_SETTING_ID)
-    db.add(setting)
-    db.flush()
-    return setting
+def get_or_create_task_scheduler_setting(db: Session) -> Any:
+    return task_scheduler_setting_repo().get_or_create_setting(db)
 
 
-def update_task_scheduler_setting(db: Session, *, enabled: bool | None = None, crontab: str | None = None, timezone: str | None = None) -> TaskSchedulerSetting:
+def update_task_scheduler_setting(db: Session, *, enabled: bool | None = None, crontab: str | None = None, timezone: str | None = None) -> Any:
     setting = get_or_create_task_scheduler_setting(db)
     next_crontab = crontab if crontab is not None else getattr(setting, "crontab", None)
     next_timezone = timezone if timezone is not None else getattr(setting, "timezone", None)

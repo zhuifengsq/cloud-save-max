@@ -3,12 +3,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.application.container import magic_regex_repo
 from app.core.errors import bad_request, not_found
 from app.extensions.runtime.magic_rename import MagicRename
-from app.models.magic_regex_rule import MagicRegexRule
 
 
 def builtin_magic_regex() -> dict[str, dict[str, str]]:
@@ -48,14 +47,14 @@ def _validate_regex_pattern(pattern: str) -> None:
         raise bad_request("MAGIC_REGEX_PATTERN_INVALID", f"pattern 正则无效：{exc}") from exc
 
 
-def get_rule(db: Session, key: str) -> MagicRegexRule | None:
-    return db.execute(select(MagicRegexRule).where(MagicRegexRule.key == key)).scalars().first()
+def get_rule(db: Session, key: str) -> Any:
+    return magic_regex_repo().get_rule(db, key=key)
 
 
 def list_rules(db: Session) -> list[dict[str, Any]]:
     builtins = builtin_magic_regex()
     labels = builtin_magic_regex_labels()
-    db_rules = db.execute(select(MagicRegexRule).order_by(MagicRegexRule.key.asc())).scalars().all()
+    db_rules = magic_regex_repo().list_rules(db)
     db_by_key = {r.key: r for r in db_rules}
 
     preferred_order = ["$TV_MAGIC", "$SHOW_PRO"]
@@ -128,7 +127,7 @@ def get_enabled_magic_regex_map(db: Session) -> dict[str, dict[str, str]]:
     return {r["key"]: {"pattern": r["pattern"], "replace": r["replace"]} for r in rules}
 
 
-def upsert_rule(db: Session, *, key: str, payload: dict[str, Any]) -> MagicRegexRule:
+def upsert_rule(db: Session, *, key: str, payload: dict[str, Any]) -> Any:
     key = str(key or "").strip()
     if not key.startswith("$"):
         raise bad_request("MAGIC_REGEX_KEY_INVALID", "key 必须以 $ 开头")
@@ -161,10 +160,14 @@ def upsert_rule(db: Session, *, key: str, payload: dict[str, Any]) -> MagicRegex
         pattern = str(pattern)
         replace = str(replace)
         _validate_regex_pattern(pattern)
-        row = MagicRegexRule(key=key, label=(str(label) if label is not None else None), pattern=pattern, replace=replace, enabled=bool(True if enabled is None else enabled))
-        db.add(row)
-        db.flush()
-        return row
+        return magic_regex_repo().create_rule(
+            db,
+            key=key,
+            label=(str(label) if label is not None else None),
+            pattern=pattern,
+            replace=replace,
+            enabled=bool(True if enabled is None else enabled),
+        )
 
     if label is not None:
         row.label = str(label) if str(label).strip() else None
@@ -184,5 +187,4 @@ def delete_rule(db: Session, *, key: str) -> None:
     row = get_rule(db, key)
     if row is None:
         raise not_found("MAGIC_REGEX_RULE_NOT_FOUND", "规则不存在")
-    db.delete(row)
-    db.flush()
+    magic_regex_repo().delete_rule(db, row)

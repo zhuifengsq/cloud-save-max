@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import USER_READ, USER_WRITE
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.schemas.user import (
     RoleOut,
     UserBatchRolesIn,
@@ -42,18 +42,18 @@ def post_user(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user = create_user(db, username=payload.username, email=payload.email, password=payload.password)
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="user.create",
-        target_type="user",
-        target_id=str(user.id),
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-    )
-    db.commit()
+    with transaction(db):
+        user = create_user(db, username=payload.username, email=payload.email, password=payload.password)
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="user.create",
+            target_type="user",
+            target_id=str(user.id),
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+        )
     db.refresh(user)
     return _user_out(user)
 
@@ -66,19 +66,19 @@ def patch_user_status(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user = set_user_status(db, user_id=user_id, is_active=payload.is_active)
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="user.set_status",
-        target_type="user",
-        target_id=str(user_id),
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-        detail=f"is_active={payload.is_active}",
-    )
-    db.commit()
+    with transaction(db):
+        user = set_user_status(db, user_id=user_id, is_active=payload.is_active)
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="user.set_status",
+            target_type="user",
+            target_id=str(user_id),
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+            detail=f"is_active={payload.is_active}",
+        )
     db.refresh(user)
     return _user_out(user)
 
@@ -91,19 +91,19 @@ def post_user_roles(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    user = set_user_roles(db, user_id=user_id, role_ids=payload.role_ids)
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="user.set_roles",
-        target_type="user",
-        target_id=str(user_id),
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-        detail=f"role_ids={payload.role_ids}",
-    )
-    db.commit()
+    with transaction(db):
+        user = set_user_roles(db, user_id=user_id, role_ids=payload.role_ids)
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="user.set_roles",
+            target_type="user",
+            target_id=str(user_id),
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+            detail=f"role_ids={payload.role_ids}",
+        )
     db.refresh(user)
     return _user_out(user)
 
@@ -115,19 +115,19 @@ def post_batch_status(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    updated = batch_set_status(db, user_ids=payload.user_ids, is_active=payload.is_active)
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="user.batch_set_status",
-        target_type="user",
-        target_id=",".join(str(i) for i in payload.user_ids),
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-        detail=f"is_active={payload.is_active}",
-    )
-    db.commit()
+    with transaction(db):
+        updated = batch_set_status(db, user_ids=payload.user_ids, is_active=payload.is_active)
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="user.batch_set_status",
+            target_type="user",
+            target_id=",".join(str(i) for i in payload.user_ids),
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+            detail=f"is_active={payload.is_active}",
+        )
     return {"updated": updated}
 
 
@@ -138,17 +138,17 @@ def post_batch_roles(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    updated = batch_set_roles(db, user_ids=payload.user_ids, role_ids=payload.role_ids)
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="user.batch_set_roles",
-        target_type="user",
-        target_id=",".join(str(i) for i in payload.user_ids),
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-        detail=f"role_ids={payload.role_ids}",
-    )
-    db.commit()
+    with transaction(db):
+        updated = batch_set_roles(db, user_ids=payload.user_ids, role_ids=payload.role_ids)
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="user.batch_set_roles",
+            target_type="user",
+            target_id=",".join(str(i) for i in payload.user_ids),
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+            detail=f"role_ids={payload.role_ids}",
+        )
     return {"updated": updated}

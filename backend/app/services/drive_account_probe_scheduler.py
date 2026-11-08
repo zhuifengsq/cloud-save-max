@@ -1,26 +1,22 @@
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.orm import Session
 
-from app.models.drive_account_probe_scheduler_setting import DriveAccountProbeSchedulerSetting
+from app.application.container import drive_account_probe_scheduler_setting_repo
 from app.services.scheduler_validation import validate_scheduler_setting
 
 
 DEFAULT_DRIVE_ACCOUNT_PROBE_SCHEDULER_SETTING_ID = 1
 
 
-def load_drive_account_probe_scheduler_setting(db: Session) -> DriveAccountProbeSchedulerSetting | None:
-    return db.get(DriveAccountProbeSchedulerSetting, DEFAULT_DRIVE_ACCOUNT_PROBE_SCHEDULER_SETTING_ID)
+def load_drive_account_probe_scheduler_setting(db: Session) -> Any:
+    return drive_account_probe_scheduler_setting_repo().get_setting(db)
 
 
-def get_or_create_drive_account_probe_scheduler_setting(db: Session) -> DriveAccountProbeSchedulerSetting:
-    item = db.get(DriveAccountProbeSchedulerSetting, DEFAULT_DRIVE_ACCOUNT_PROBE_SCHEDULER_SETTING_ID)
-    if item is not None:
-        return item
-    item = DriveAccountProbeSchedulerSetting(id=DEFAULT_DRIVE_ACCOUNT_PROBE_SCHEDULER_SETTING_ID)
-    db.add(item)
-    db.flush()
-    return item
+def get_or_create_drive_account_probe_scheduler_setting(db: Session) -> Any:
+    return drive_account_probe_scheduler_setting_repo().get_or_create_setting(db)
 
 
 def update_drive_account_probe_scheduler_setting(
@@ -30,7 +26,7 @@ def update_drive_account_probe_scheduler_setting(
     crontab: str | None = None,
     timezone: str | None = None,
     enabled_only: bool | None = None,
-) -> DriveAccountProbeSchedulerSetting:
+) -> Any:
     item = get_or_create_drive_account_probe_scheduler_setting(db)
     next_crontab = crontab if crontab is not None else getattr(item, "crontab", None)
     next_timezone = timezone if timezone is not None else getattr(item, "timezone", None)

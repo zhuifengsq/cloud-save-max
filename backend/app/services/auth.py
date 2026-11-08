@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 
 from fastapi import Request, Response
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.application.container import refresh_tokens_repo, users_repo
 from app.core.errors import bad_request, unauthorized
 from app.core.security import (
     create_access_token,
@@ -15,8 +16,6 @@ from app.core.security import (
 )
 from app.core.settings import settings
 from app.core.deps import load_user_roles_permissions
-from app.models.refresh_token import RefreshToken
-from app.models.user import User
 
 
 def _utcnow() -> datetime:
@@ -60,9 +59,8 @@ def clear_refresh_cookie(response: Response) -> None:
     )
 
 
-def authenticate_user(db: Session, username: str, password: str) -> User:
-    stmt = select(User).where(User.username == username)
-    user = db.execute(stmt).scalars().first()
+def authenticate_user(db: Session, username: str, password: str) -> Any:
+    user = users_repo().get_user_by_username(db, username)
     if user is None or not user.is_active:
         raise unauthorized("AUTH_BAD_CREDENTIALS", "用户名或密码错误")
     if not verify_password(password, user.hashed_password):
@@ -70,33 +68,31 @@ def authenticate_user(db: Session, username: str, password: str) -> User:
     return user
 
 
-def issue_tokens(db: Session, *, user: User, permissions: list[str], request: Request, response: Response) -> str:
+def issue_tokens(db: Session, *, user: Any, permissions: list[str], request: Request, response: Response) -> str:
     refresh_plain = generate_refresh_token()
     refresh_hash = hash_refresh_token(refresh_plain)
     now = _utcnow()
 
-    db.add(
-        RefreshToken(
-            user_id=user.id,
-            token_hash=refresh_hash,
-            expires_at=now + timedelta(seconds=settings.refresh_token_expires_seconds),
-            ip=_client_ip(request),
-            user_agent=_user_agent(request),
-            last_used_at=now,
-        )
+    refresh_tokens_repo().add_refresh_token(
+        db,
+        user_id=user.id,
+        token_hash=refresh_hash,
+        expires_at=now + timedelta(seconds=settings.refresh_token_expires_seconds),
+        ip=_client_ip(request),
+        user_agent=_user_agent(request),
+        last_used_at=now,
     )
     _set_refresh_cookie(response, refresh_plain)
     return create_access_token(str(user.id), permissions)
 
 
-def refresh_access_token(db: Session, *, request: Request, response: Response) -> tuple[User, str]:
+def refresh_access_token(db: Session, *, request: Request, response: Response) -> tuple[Any, str]:
     refresh_plain = request.cookies.get(settings.refresh_token_cookie_name)
     if not refresh_plain:
         raise unauthorized("AUTH_NO_REFRESH", "请重新登录")
 
     token_hash = hash_refresh_token(refresh_plain)
-    stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
-    token = db.execute(stmt).scalars().first()
+    token = refresh_tokens_repo().get_by_token_hash(db, token_hash)
     if token is None:
         raise unauthorized("AUTH_REFRESH_INVALID", "请重新登录")
 
@@ -104,7 +100,7 @@ def refresh_access_token(db: Session, *, request: Request, response: Response) -
     if token.revoked_at is not None or _normalize_dt(token.expires_at) <= now:
         raise unauthorized("AUTH_REFRESH_EXPIRED", "请重新登录")
 
-    user = db.get(User, token.user_id)
+    user = users_repo().get_user(db, token.user_id)
     if user is None or not user.is_active:
         raise unauthorized("AUTH_INVALID_USER", "账号不可用")
 
@@ -121,8 +117,7 @@ def revoke_refresh_token(db: Session, *, request: Request) -> None:
         return
 
     token_hash = hash_refresh_token(refresh_plain)
-    stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
-    token = db.execute(stmt).scalars().first()
+    token = refresh_tokens_repo().get_by_token_hash(db, token_hash)
     if token is None:
         return
     if token.revoked_at is None:

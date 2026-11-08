@@ -15,12 +15,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.application.container import resource_search_sources_repo
 from app.core.errors import bad_request, not_found
 from app.extensions.search_plugins.base import BaseSearchPlugin
-from app.models.resource_search_source import ResourceSearchSource
 
 
 logger = logging.getLogger(__name__)
@@ -103,20 +102,11 @@ def discover_search_plugins(*, plugin_dir: Path = PLUGIN_DIR) -> list[dict[str, 
     return discovered
 
 
-def _ensure_rows(db: Session, discovered: list[dict[str, Any]]) -> dict[str, ResourceSearchSource]:
+def _ensure_rows(db: Session, discovered: list[dict[str, Any]]) -> dict[str, Any]:
     keys = [_source_key(item["key"]) for item in discovered]
     if not keys:
         return {}
-    rows = {
-        row.key: row
-        for row in db.execute(select(ResourceSearchSource).where(ResourceSearchSource.key.in_(keys))).scalars().all()
-    }
-    for key in keys:
-        if key not in rows:
-            row = ResourceSearchSource(key=key, enabled=False, config_json="{}")
-            db.add(row)
-            rows[key] = row
-    db.flush()
+    rows = resource_search_sources_repo().ensure_plugin_rows(db, keys)
     for item in discovered:
         if item['plugin'] is None:
             continue

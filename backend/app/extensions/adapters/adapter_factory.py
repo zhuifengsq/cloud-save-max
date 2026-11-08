@@ -9,8 +9,10 @@ import hashlib
 import json
 import logging
 import threading
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Type
 
+from app.core.runtime.keyed_locks import LRUKeyedLocks
 from app.extensions.adapters.base_adapter import BaseCloudDriveAdapter
 from app.extensions.adapters.quark_adapter import QuarkAdapter
 from app.extensions.adapters.cloud115_adapter import Cloud115Adapter
@@ -59,10 +61,16 @@ class AdapterFactory:
     }
 
     # 实例缓存: (drive_type, account_name, mode, config_hash) -> adapter_instance
-    _instance_cache: Dict[str, BaseCloudDriveAdapter] = {}
-    # 请求线程 / 任务执行线程 / 调度线程会同时取同一账户的实例，查表与写入必须加锁，
-    # 否则并发首次调用会各自创建一个实例（随后只有一个留在缓存里，登录却发生多次）。
+    # 用 OrderedDict 记录插入序以便淘汰：旧实现是无限 dict，账号/配置（config_hash）
+    # 一变就新增实例且永不释放，长时间运行会累积登录态与 HTTP 连接。
+    _instance_cache: "OrderedDict[str, BaseCloudDriveAdapter]" = OrderedDict()
+    _instance_cache_max = 64
+    # 查表与写入必须加锁，否则并发首次调用会各自创建一个实例（随后只有一个留在缓存里，
+    # 登录却发生多次）。但构造适配器（构造函数里可能有登录网络 IO，秒~数十秒级）不能
+    # 放在这把全局锁内，否则一个账号登录会阻塞所有账号的取实例。改为：全局锁只保护
+    # 缓存读写，构造用 per-key 锁做 single-flight（同 key 只构造一次，不同 key 并行）。
     _cache_lock = threading.RLock()
+    _key_locks = LRUKeyedLocks(maxsize=256)
     # init() 成功后在 TTL 内跳过重复登录；ADAPTER_INIT_TTL_SECONDS=0 表示每次都重新登录。
     DEFAULT_INIT_TTL_SECONDS = 180.0
 
@@ -144,12 +152,15 @@ class AdapterFactory:
         runtime_config = adapter_class.resolve_runtime_config(config=config, cookie=cookie)
 
         cache_key = cls._make_cache_key(drive_type, runtime_config, account_name, no_login=no_login)
-        # 查表 + 创建放在同一把锁里：并发首次调用只会创建并缓存一个实例，
-        # 避免同一账户出现多个实例、各自登录、状态互不可见。
-        with cls._cache_lock:
-            cached = cls._instance_cache.get(cache_key)
+        cached = cls._cache_get(cache_key, account_name)
+        if cached is not None:
+            return cached
+
+        # 构造（可能包含 init/登录网络 IO）在全局锁外，用 per-key 锁做 single-flight：
+        # 同名账户并发首次调用只会创建一个实例，不同账户之间不再互相阻塞。
+        with cls._key_locks.get(cache_key):
+            cached = cls._cache_get(cache_key, account_name)
             if cached is not None:
-                setattr(cached, "account_name", account_name or "")
                 return cached
 
             try:
@@ -161,15 +172,53 @@ class AdapterFactory:
                     no_login=no_login,
                 )
                 setattr(adapter, "account_name", account_name or "")
-                cls._instance_cache[cache_key] = adapter
+                cls._cache_put(cache_key, adapter)
                 return adapter
             except Exception as e:
                 logger.exception("创建适配器失败: %s", e)
                 return None
 
     @classmethod
+    def _cache_get(cls, cache_key: str, account_name: str) -> Optional[BaseCloudDriveAdapter]:
+        """持锁读缓存并刷新 LRU 位置；命中时同步 account_name。"""
+        with cls._cache_lock:
+            cached = cls._instance_cache.get(cache_key)
+            if cached is None:
+                return None
+            cls._instance_cache.move_to_end(cache_key)
+            setattr(cached, "account_name", account_name or "")
+            return cached
+
+    @classmethod
+    def _cache_put(cls, cache_key: str, adapter: BaseCloudDriveAdapter) -> None:
+        """持锁写缓存，超出上限按插入序淘汰最旧实例并关闭它（close 在锁外调用）。"""
+        evicted: List[BaseCloudDriveAdapter] = []
+        with cls._cache_lock:
+            existing = cls._instance_cache.pop(cache_key, None)
+            if existing is not None and existing is not adapter:
+                evicted.append(existing)
+            cls._instance_cache[cache_key] = adapter
+            cls._instance_cache.move_to_end(cache_key)
+            while len(cls._instance_cache) > cls._instance_cache_max:
+                _, victim = cls._instance_cache.popitem(last=False)
+                evicted.append(victim)
+        for old in evicted:
+            cls._close_adapter(old)
+
+    @staticmethod
+    def _close_adapter(adapter: BaseCloudDriveAdapter) -> None:
+        """淘汰实例时尽力关闭其连接；关闭失败不能影响新实例创建。"""
+        close = getattr(adapter, "close", None)
+        if not callable(close):
+            return
+        try:
+            close()
+        except Exception as exc:
+            logger.warning("淘汰适配器实例时 close() 失败: %s", exc)
+
+    @classmethod
     def clear_cache(cls):
-        """清空实例缓存（配置更新时调用）"""
+        """清空实例缓存（配置更新时调用）。保留原有语义：只丢引用，不主动 close。"""
         with cls._cache_lock:
             cls._instance_cache.clear()
 

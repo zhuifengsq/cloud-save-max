@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import forbidden
 from app.core.permissions import PLUGIN_READ, PLUGIN_WRITE, TASK_READ
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.services.api_search_sources import (
     create_api_source,
     delete_api_source,
@@ -79,8 +79,8 @@ def get_api_sources(current: CurrentUser = Depends(get_current_user), db: Sessio
 @router.post("/api-sources", dependencies=[Depends(require_permissions(PLUGIN_WRITE))])
 def post_api_source(payload: ApiSourceCreateIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     _require_admin(current)
-    result = create_api_source(db, payload.model_dump())
-    db.commit()
+    with transaction(db):
+        result = create_api_source(db, payload.model_dump())
     cache_clear()
     return result
 
@@ -88,8 +88,8 @@ def post_api_source(payload: ApiSourceCreateIn, current: CurrentUser = Depends(g
 @router.patch("/api-sources/{source_id:int}", dependencies=[Depends(require_permissions(PLUGIN_WRITE))])
 def patch_api_source(source_id: int, payload: ApiSourceUpdateIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, Any]:
     _require_admin(current)
-    result = update_api_source(db, source_id, payload.model_dump(exclude_unset=True))
-    db.commit()
+    with transaction(db):
+        result = update_api_source(db, source_id, payload.model_dump(exclude_unset=True))
     cache_clear()
     return result
 
@@ -97,8 +97,8 @@ def patch_api_source(source_id: int, payload: ApiSourceUpdateIn, current: Curren
 @router.delete("/api-sources/{source_id:int}", dependencies=[Depends(require_permissions(PLUGIN_WRITE))])
 def remove_api_source(source_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, bool]:
     _require_admin(current)
-    delete_api_source(db, source_id)
-    db.commit()
+    with transaction(db):
+        delete_api_source(db, source_id)
     cache_clear()
     return {"success": True}
 

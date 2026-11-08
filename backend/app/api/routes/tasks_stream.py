@@ -19,9 +19,10 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
 from app.core.deps import CurrentUser, get_current_user_scoped, require_permissions_scoped
 from app.core.permissions import TASK_RUN
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, commit
 from app.extensions.runtime.execution_log import ExecutionLog
 from app.extensions.runtime.task_admission import task_admission
 from app.extensions.runtime.task_executor import TaskExecutor
@@ -149,7 +150,7 @@ async def post_run_task_stream(request: Request, task_id: int, current: CurrentU
                 user_agent=request.headers.get('user-agent'),
                 success=True,
             )
-            adb.commit()
+            commit(adb)
             return payload
 
     slot = task_admission.reserve(task_id)
@@ -172,8 +173,8 @@ async def post_run_task_stream(request: Request, task_id: int, current: CurrentU
             log = ExecutionLog(emit_line=emit_line, emit_stage=emit_stage)
             try:
                 wtask = get_task(wdb, task_id)
-                execution = TaskExecutor(wdb).run_task(wtask, log=log)
-                wdb.commit()
+                execution = RunTaskUseCase(wdb, executor_cls=TaskExecutor).run(wtask, RunPolicy.for_trigger('sse'), log=log)
+                commit(wdb)
                 wdb.refresh(execution)
                 if str(getattr(wtask, "task_type", "") or "") == "drama":
                     try:
@@ -249,7 +250,7 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
                 success=True,
                 detail=str(payload.taskname or ""),
             )
-            adb.commit()
+            commit(adb)
             return payload_out
 
     slot = task_admission.reserve(None)
@@ -289,7 +290,7 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
                     extra_json=json.dumps(payload.extra or {}, ensure_ascii=False),
                 )
                 wtask.id = 0
-                execution = TaskExecutor(wdb).run_task(wtask, log=log, persist_execution=False)
+                execution = RunTaskUseCase(wdb, executor_cls=TaskExecutor).run(wtask, RunPolicy.for_trigger('preview'), log=log)
                 q.put(
                     (
                         "done",

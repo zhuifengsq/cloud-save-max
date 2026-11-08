@@ -1545,6 +1545,37 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             }
         )
 
+    # 百度分享失效/文件被删时返回的 errno（与 ERROR_CODES 保持一致）
+    SHARE_INVALID_ERRNOS = (-1, -9, 105, 145)
+
+    def classify_share_failure(self, response: Dict[str, Any]) -> Dict[str, str]:
+        """把百度分享校验失败响应归类（生成分享链接检测、任务引流共用）。"""
+        data = response if isinstance(response, dict) else {}
+        status = data.get("status")
+        errno = self._lead_in_to_int(data.get("code"), 0)
+        message = str(data.get("message") or "").strip()
+        if str(status) == "500":
+            return {"kind": "auth", "message": message or "账号未登录或 Cookie 已失效"}
+        if errno in (4, 200025) or "提取码" in message:
+            return {"kind": "passcode", "message": message or "提取码错误"}
+        if errno in self.SHARE_INVALID_ERRNOS or any(
+            word in message
+            for word in ("不存在", "已失效", "失效", "过期", "删除")
+        ):
+            return {"kind": "invalid", "message": message or "分享链接不存在或已失效"}
+        if errno == -7 or "审核" in message:
+            return {"kind": "pending", "message": message or "分享文件夹等待审核中"}
+        if errno == -62 or "验证码" in message:
+            return {"kind": "captcha", "message": message or "需要输入验证码"}
+        if errno in (-6, -21):
+            return {
+                "kind": "auth",
+                "message": message or self.ERROR_CODES.get(errno, "认证失败，请检查Cookie是否有效"),
+            }
+        if errno == -65 or "频率" in message or "限流" in message or str(status) == "429":
+            return {"kind": "throttled", "message": message or "访问频率过高，请稍后重试"}
+        return {"kind": "unknown", "message": message}
+
     def _lead_in_baidu_stoken_error(
         self, response: Dict[str, Any], passcode: str
     ) -> Dict[str, Any]:
@@ -1553,12 +1584,14 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         status = data.get("status")
         errno = self._lead_in_to_int(data.get("code"), 0)
         message = str(data.get("message") or "").strip()
-        if status == 500:
+        verdict = self.classify_share_failure(response)
+        kind = str(verdict.get("kind") or "unknown")
+        if str(status) == "500":
             return self._lead_in_error(
                 "LEAD_IN_FAILED",
                 "百度网盘账号未登录或 Cookie 已失效，请先保存有效账号",
             )
-        if errno in (4, 200025) or "提取码" in message:
+        if kind == "passcode":
             if not passcode:
                 return self._lead_in_error(
                     "LEAD_IN_PASSCODE_REQUIRED",
@@ -1568,14 +1601,12 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 "LEAD_IN_PASSCODE_INVALID",
                 f"提取码错误，请检查后重试（{message or '提取码错误'}）",
             )
-        if errno in (-1, -9, 105, 145, -7) or any(
-            word in message for word in ("不存在", "已失效", "失效", "过期", "审核", "删除")
-        ):
+        if kind in ("invalid", "pending"):
             return self._lead_in_error(
                 "LEAD_IN_MATERIAL_UNAVAILABLE",
                 f"素材分享链接不可用：{message or '链接不存在或已失效'}",
             )
-        if errno == -62:
+        if kind == "captcha":
             return self._lead_in_error(
                 "LEAD_IN_FAILED",
                 "该分享需要验证码，请先在网盘网页端打开一次分享并完成验证后再试",

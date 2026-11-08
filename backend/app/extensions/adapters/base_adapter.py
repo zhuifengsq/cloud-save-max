@@ -364,6 +364,37 @@ class BaseCloudDriveAdapter(ABC):
         raise NotImplementedError(f"{self.DRIVE_NAME}暂不支持创建分享链接")
 
     # ------------------------------------------------------------------
+    # 分享链接失效判定
+    #
+    # 各网盘分享校验失败时的响应结构、错误码体系完全不同，这里只统一「结论」：
+    #   invalid    链接已失效/被取消/文件已删除（可以确定不可用，需要提醒用户）
+    #   passcode   需要提取码或提取码错误
+    #   captcha    需要验证码/人工验证
+    #   auth       账号未登录、Cookie 失效、认证失败
+    #   throttled  限流、访问频率过高
+    #   pending    等待审核等暂时不可用
+    #   unknown    无法判断（调用方按「检测失败」处理，不当作链接失效）
+    # 各网盘适配器按自己的错误码表重写本方法；未重写的网盘一律 unknown。
+    # 生成分享链接检测、任务引流等场景共用本方法，避免各写一份判定表。
+    # ------------------------------------------------------------------
+    SHARE_FAILURE_KINDS = (
+        "invalid",
+        "passcode",
+        "captcha",
+        "auth",
+        "throttled",
+        "pending",
+        "unknown",
+    )
+
+    def classify_share_failure(self, response: Dict[str, Any]) -> Dict[str, str]:
+        """把一次分享校验失败响应归类成统一的结论（默认无法判断）。"""
+        message = ""
+        if isinstance(response, dict):
+            message = str(response.get("message") or "").strip()
+        return {"kind": "unknown", "message": message}
+
+    # ------------------------------------------------------------------
     # 任务引流（引流文件）可选能力
     #
     # 任务上的「添加引流文件」只走下面这组统一操作：

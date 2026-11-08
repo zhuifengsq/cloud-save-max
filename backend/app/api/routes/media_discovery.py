@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import require_permissions
 from app.core.permissions import TASK_READ
 from app.core.settings import settings
-from app.db.session import get_db
+from app.db.session import commit, get_db
 from app.schemas.media_discovery import (
     DoubanCategoryListOut,
     MediaDiscoverListOut,
@@ -96,9 +96,9 @@ def get_tmdb_detail(
     if mt not in ("movie", "tv"):
         return TMDBDetailOut(media_type=mt or media_type, data={}, update_weekdays=[], episode_weekdays=[])
     configured, data, update_weekdays, episode_weekdays = tmdb_detail(
-        db, media_type=mt, tmdb_id=tmdb_id, force_refresh=force  # type: ignore[arg-type]
+        db, media_type=mt, tmdb_id=tmdb_id, force_refresh=force, close_read_tx=True  # type: ignore[arg-type]
     )
-    db.commit()
+    commit(db)
     return TMDBDetailOut(
         media_type=mt,
         data=data or {},
@@ -117,8 +117,8 @@ def get_tmdb_credits(
     mt = str(media_type or "").strip().lower()
     if mt not in ("movie", "tv"):
         return TMDBCreditsOut(configured=False, cast=[])
-    configured, cast = tmdb_credits(db, media_type=mt, tmdb_id=tmdb_id, limit=limit)  # type: ignore[arg-type]
-    db.commit()
+    configured, cast = tmdb_credits(db, media_type=mt, tmdb_id=tmdb_id, limit=limit, close_read_tx=True)  # type: ignore[arg-type]
+    commit(db)
     return TMDBCreditsOut(
         configured=configured,
         cast=[TMDBCastMemberOut(name=item.get("name", ""), character=item.get("character", "")) for item in cast],

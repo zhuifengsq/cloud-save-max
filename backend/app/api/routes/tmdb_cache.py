@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.schemas.tmdb_cache import (
     TMDBCacheDeleteOut,
@@ -272,7 +272,8 @@ def post_tmdb_cache_refresh(
         queued = trigger_refresh_async(db, media_type=mt, tmdb_id=payload.tmdb_id, language=language, poster_language=poster_language)  # type: ignore[arg-type]
     else:
         get_tmdb_detail_cached(
-            db, media_type=mt, tmdb_id=payload.tmdb_id, force_refresh=bool(payload.force)  # type: ignore[arg-type]
+            db, media_type=mt, tmdb_id=payload.tmdb_id, force_refresh=bool(payload.force),  # type: ignore[arg-type]
+            close_read_tx=True,
         )
 
     audit.write_audit_log(
@@ -286,7 +287,7 @@ def post_tmdb_cache_refresh(
         success=True,
         detail=f"force={bool(payload.force)} async={bool(payload.async_refresh)}",
     )
-    db.commit()
+    commit(db)
 
     row = db.scalar(lookup)
     return TMDBCacheRefreshOut(queued=queued, status=_status_out(configured=configured, mt=mt, tid=payload.tmdb_id, row=row))
@@ -303,19 +304,19 @@ def post_tmdb_cache_set_ttl(
     if mt not in ("movie", "tv"):
         return TMDBCacheSetTTLOut(updated=False, status=TMDBCacheStatusOut(configured=False, media_type=mt, tmdb_id=payload.tmdb_id, exists=False))
 
-    configured, row = set_ttl_seconds(db, media_type=mt, tmdb_id=int(payload.tmdb_id), ttl_seconds=int(payload.ttl_seconds))  # type: ignore[arg-type]
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="tmdb.cache.set_ttl",
-        target_type="tmdb_media_cache",
-        target_id=f"{mt}:{int(payload.tmdb_id)}",
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-        detail=f"ttl_seconds={int(payload.ttl_seconds)}",
-    )
-    db.commit()
+    with transaction(db):
+        configured, row = set_ttl_seconds(db, media_type=mt, tmdb_id=int(payload.tmdb_id), ttl_seconds=int(payload.ttl_seconds))  # type: ignore[arg-type]
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="tmdb.cache.set_ttl",
+            target_type="tmdb_media_cache",
+            target_id=f"{mt}:{int(payload.tmdb_id)}",
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+            detail=f"ttl_seconds={int(payload.ttl_seconds)}",
+        )
     if row is not None:
         db.refresh(row)
     return TMDBCacheSetTTLOut(updated=row is not None, status=_status_out(configured=bool(configured), mt=mt, tid=int(payload.tmdb_id), row=row))
@@ -333,19 +334,19 @@ def delete_tmdb_cache_item(
     if mt not in ("movie", "tv"):
         return TMDBCacheDeleteOut(deleted=0)
 
-    configured, deleted = delete_cache_item(db, media_type=mt, tmdb_id=int(tmdb_id))  # type: ignore[arg-type]
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="tmdb.cache.delete",
-        target_type="tmdb_media_cache",
-        target_id=f"{mt}:{int(tmdb_id)}",
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-        detail=f"deleted={int(deleted)} configured={bool(configured)}",
-    )
-    db.commit()
+    with transaction(db):
+        configured, deleted = delete_cache_item(db, media_type=mt, tmdb_id=int(tmdb_id))  # type: ignore[arg-type]
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="tmdb.cache.delete",
+            target_type="tmdb_media_cache",
+            target_id=f"{mt}:{int(tmdb_id)}",
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+            detail=f"deleted={int(deleted)} configured={bool(configured)}",
+        )
     return TMDBCacheDeleteOut(deleted=int(deleted))
 
 @router.post(
@@ -359,7 +360,9 @@ def post_tmdb_cache_refresh_linked_tasks(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    result = refresh_linked_tasks(db, enabled_only=bool(payload.enabled_only), max_items=int(payload.max_items), force=bool(payload.force))
+    result = refresh_linked_tasks(
+        db, enabled_only=bool(payload.enabled_only), max_items=int(payload.max_items), force=bool(payload.force), close_read_tx=True
+    )
     audit.write_audit_log(
         db,
         actor_user_id=current.user.id,
@@ -371,7 +374,7 @@ def post_tmdb_cache_refresh_linked_tasks(
         success=True,
         detail=_safe_json(result),
     )
-    db.commit()
+    commit(db)
     return TMDBCacheRefreshLinkedTasksOut(configured=bool(result.get("configured")), targets=int(result.get("targets") or 0), refreshed=int(result.get("refreshed") or 0))
 
 
@@ -382,19 +385,19 @@ def post_tmdb_cache_purge(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    deleted = purge_cold_cache(db, retention_days=int(payload.retention_days))
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="tmdb.cache.purge",
-        target_type="tmdb_media_cache",
-        target_id=None,
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-        detail=f"retention_days={int(payload.retention_days)} deleted={int(deleted)}",
-    )
-    db.commit()
+    with transaction(db):
+        deleted = purge_cold_cache(db, retention_days=int(payload.retention_days))
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="tmdb.cache.purge",
+            target_type="tmdb_media_cache",
+            target_id=None,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+            detail=f"retention_days={int(payload.retention_days)} deleted={int(deleted)}",
+        )
     return TMDBCachePurgeOut(deleted=int(deleted))
 
 
@@ -408,9 +411,9 @@ def get_tmdb_cache_scheduler_setting(db: Session = Depends(get_db)):
     if setting is not None:
         # 纯读请求不提交、不 refresh：只回滚只读事务，省掉一次全行查询
         return _scheduler_out(setting)
-    setting = get_or_create_tmdb_cache_scheduler_setting(db)
-    payload = _scheduler_out(setting)
-    db.commit()
+    with transaction(db):
+        setting = get_or_create_tmdb_cache_scheduler_setting(db)
+        payload = _scheduler_out(setting)
     return payload
 
 
@@ -425,18 +428,18 @@ def patch_tmdb_cache_scheduler_setting(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    setting = update_tmdb_cache_scheduler_setting(db, **payload.model_dump(exclude_unset=True))
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="tmdb.cache.scheduler.update",
-        target_type="tmdb_cache_scheduler_setting",
-        target_id=str(setting.id),
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-    )
-    db.commit()
+    with transaction(db):
+        setting = update_tmdb_cache_scheduler_setting(db, **payload.model_dump(exclude_unset=True))
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="tmdb.cache.scheduler.update",
+            target_type="tmdb_cache_scheduler_setting",
+            target_id=str(setting.id),
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+        )
     db.refresh(setting)
     task_scheduler_manager.reload()
     return _scheduler_out(setting)

@@ -8,6 +8,7 @@ from treelib import Tree
 
 from app.db.base import Base
 from app.extensions.adapters.baidu_adapter import BaiduAdapter
+from app.extensions.adapters.quark_adapter import QuarkAdapter
 from app.extensions.runtime import task_executor
 from app.models.task import Task
 from app.models.task_execution import TaskExecution
@@ -61,6 +62,8 @@ def test_checks_generated_link_each_run_without_blocking_transfer(monkeypatch):
         {"code": 41012},
         {"code": 0, "data": {"stoken": "verified"}},
         {"code": 41012},
+        {"code": 41012},
+        {"code": 41012},
     ])
 
     def token(share_id, passcode):
@@ -76,12 +79,14 @@ def test_checks_generated_link_each_run_without_blocking_transfer(monkeypatch):
         assert first_page
         return {"code": 0, "data": {"list": []}}
 
-    adapter = SimpleNamespace(
-        DRIVE_TYPE="quark", is_active=True, nickname="测试",
-        ensure_initialized=lambda **kw: True,
-        extract_url=lambda url: (url.rsplit("/", 1)[-1], "", "0", []),
-        get_stoken=token, get_detail=detail,
-    )
+    # 用真实的 QuarkAdapter 实例（不初始化网络），让检测走真实的失败分类逻辑
+    adapter = object.__new__(QuarkAdapter)
+    adapter.is_active = True
+    adapter.nickname = "测试"
+    adapter.ensure_initialized = lambda **kw: True
+    adapter.extract_url = lambda url: (url.rsplit("/", 1)[-1], "", "0", [])
+    adapter.get_stoken = token
+    adapter.get_detail = detail
     manager = SimpleNamespace(init_for_tasks=lambda _: None, get_adapter_for_task=lambda _, **kw: adapter)
 
     class FakeDrama:
@@ -118,8 +123,20 @@ def test_checks_generated_link_each_run_without_blocking_transfer(monkeypatch):
             assert build_task_section(task, execution)[1] == expected_notify
 
         assert events == ["check", "transfer"] * 5
+
+        # 手动点「执行」：链接已失效时每次都要提醒，不受去重限制
+        for _ in range(2):
+            execution = task_executor.TaskExecutor(db).run_task(
+                task, account_manager=manager, share_check_always_notify=True,
+            )
+            db.commit()
+            check = read_share_check(execution.adapter_snapshot)
+            assert check["status"] == "invalid" and check["notify"] is True
+            assert build_task_section(task, execution)[1] is True
+
+        assert events == ["check", "transfer"] * 7
         overview = build_drama_overview(db)
         assert overview["summary"]["execution_failed"] == 0
         failures = overview["recent_failures"]
-        assert len(failures) == 4 and all(row["stage"] == "generated_share_check" for row in failures)
+        assert len(failures) == 6 and all(row["stage"] == "generated_share_check" for row in failures)
     engine.dispose()

@@ -100,6 +100,7 @@ class TaskExecutor:
         persist_execution: bool = True,
         account_manager: DatabaseAccountManager | None = None,
         init_account_for_task: bool = True,
+        share_check_always_notify: bool = False,
         _auto_update_depth: int = 0,
         _tried_shareurls: set[str] | None = None,
         _generated_share_check: dict | None = None,
@@ -120,7 +121,9 @@ class TaskExecutor:
         if account_manager is None:
             account_manager = DatabaseAccountManager(self.db)
         if persist_execution and task.id and task.task_type == "drama" and _auto_update_depth == 0:
-            _generated_share_check = check_generated_share(self.db, task, account_manager)
+            _generated_share_check = check_generated_share(
+                self.db, task, account_manager, always_notify=share_check_always_notify
+            )
             if _generated_share_check:
                 log.section("分享链接检测")
                 log.line(_generated_share_check["message"])

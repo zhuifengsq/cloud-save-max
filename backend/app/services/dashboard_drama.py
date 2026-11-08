@@ -4,11 +4,9 @@ import json
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, noload
+from sqlalchemy.orm import Session
 
-from app.models.task import Task
-from app.models.task_execution import TaskExecution
+from app.application.container import tasks_repo
 from app.services.generated_share_check import FAILURE_STAGE, read_share_check
 from app.services.task_scheduler import get_or_create_task_scheduler_setting
 
@@ -59,11 +57,7 @@ def build_drama_overview(db: Session, *, days: int = 30) -> dict:
     month_start = datetime(now_utc.year, now_utc.month, 1)
 
     scheduler = get_or_create_task_scheduler_setting(db)
-    tasks = (
-        db.execute(select(Task).options(noload(Task.executions)).where(Task.task_type == "drama").order_by(Task.id.asc()))
-        .scalars()
-        .all()
-    )
+    tasks = tasks_repo().list_drama_tasks(db)
 
     enabled_task_count = 0
     tmdb_bound_count = 0
@@ -101,24 +95,7 @@ def build_drama_overview(db: Session, *, days: int = 30) -> dict:
 
     # 只取仪表盘需要的列：执行记录含 run_log/tree_summary 等大文本字段，
     # 加载整行会让窗口内的数千条记录额外搬运十几 MB 数据（合成库实测 103ms → 36ms）。
-    executions = (
-        db.execute(
-            select(
-                TaskExecution.status,
-                TaskExecution.started_at,
-                TaskExecution.finished_at,
-                TaskExecution.task_id,
-                TaskExecution.stage,
-                TaskExecution.message,
-                TaskExecution.adapter_snapshot,
-                Task.taskname,
-            )
-            .join(Task, Task.id == TaskExecution.task_id)
-            .where(Task.task_type == "drama", TaskExecution.started_at >= since)
-            .order_by(TaskExecution.started_at.desc())
-        )
-        .all()
-    )
+    executions = tasks_repo().list_drama_execution_rows(db, since=since)
 
     for status, started_at, finished_at, task_id, stage, message, snapshot, taskname in executions:
         status = str(status or "").strip().lower()

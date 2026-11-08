@@ -6,7 +6,7 @@ import json
 from app.core.errors import ApiError, bad_request, not_found
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import DRIVE_ACCOUNT_READ, DRIVE_ACCOUNT_WRITE
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.schemas.drive_account import DriveAccountCreateIn, DriveAccountOut, DriveAccountStatusIn, DriveAccountUpdateIn, DriveTypeOut
 from app.schemas.drive_account_auth import DriveAccountCaptchaSubmitIn, DriveAccountSmsSubmitIn
 from app.schemas.drive_account_probe_scheduler import DriveAccountProbeSchedulerSettingOut, DriveAccountProbeSchedulerSettingUpdateIn
@@ -72,17 +72,17 @@ def get_drive_account_probe_scheduler_setting(db: Session = Depends(get_db)):
     if setting is not None:
         # 纯读请求不提交、不 refresh：只回滚只读事务，省掉一次全行查询
         return _probe_scheduler_out(setting)
-    setting = get_or_create_drive_account_probe_scheduler_setting(db)
-    payload = _probe_scheduler_out(setting)
-    db.commit()
+    with transaction(db):
+        setting = get_or_create_drive_account_probe_scheduler_setting(db)
+        payload = _probe_scheduler_out(setting)
     return payload
 
 
 @router.patch('/probe/scheduler', response_model=DriveAccountProbeSchedulerSettingOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def patch_drive_account_probe_scheduler_setting(request: Request, payload: DriveAccountProbeSchedulerSettingUpdateIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     setting = update_drive_account_probe_scheduler_setting(db, **payload.model_dump(exclude_unset=True))
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.probe_scheduler.update', target_type='drive_account_probe_scheduler_setting', target_id=str(setting.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.probe_scheduler.update', target_type='drive_account_probe_scheduler_setting', target_id=str(setting.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(setting)
     task_scheduler_manager.reload()
     return _probe_scheduler_out(setting)
@@ -91,8 +91,8 @@ def patch_drive_account_probe_scheduler_setting(request: Request, payload: Drive
 @router.post('', response_model=DriveAccountOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account(request: Request, payload: DriveAccountCreateIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     account = create_drive_account(db, **payload.model_dump())
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.create', target_type='drive_account', target_id=str(account.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.create', target_type='drive_account', target_id=str(account.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(account)
     return _out(account)
 
@@ -100,8 +100,8 @@ def post_account(request: Request, payload: DriveAccountCreateIn, current: Curre
 @router.patch('/{account_id}', response_model=DriveAccountOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def patch_account(request: Request, account_id: int, payload: DriveAccountUpdateIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     account = update_drive_account(db, account_id, **payload.model_dump(exclude_unset=True))
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.update', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.update', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(account)
     return _out(account)
 
@@ -112,6 +112,23 @@ def patch_account_status(request: Request, account_id: int, payload: DriveAccoun
         account = probe_drive_account(db, account_id)
         if account.runtime_status != "active":
             account.enabled = False
+            with transaction(db):
+                audit.write_audit_log(
+                    db,
+                    actor_user_id=current.user.id,
+                    action="drive_account.status",
+                    target_type="drive_account",
+                    target_id=str(account_id),
+                    ip=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                    success=False,
+                    detail=f"enabled=True probe=failed fail_count={getattr(account, 'probe_fail_count', 0) or 0} error={account.last_error or ''}",
+                )
+            db.refresh(account)
+            raise bad_request("DRIVE_ACCOUNT_PROBE_FAILED", "账号探测失败，无法启用", detail=account.last_error or "驱动初始化失败")
+        account.enabled = True
+        account.probe_fail_count = 0
+        with transaction(db):
             audit.write_audit_log(
                 db,
                 actor_user_id=current.user.id,
@@ -120,14 +137,14 @@ def patch_account_status(request: Request, account_id: int, payload: DriveAccoun
                 target_id=str(account_id),
                 ip=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
-                success=False,
-                detail=f"enabled=True probe=failed fail_count={getattr(account, 'probe_fail_count', 0) or 0} error={account.last_error or ''}",
+                success=True,
+                detail="enabled=True probe=ok",
             )
-            db.commit()
-            db.refresh(account)
-            raise bad_request("DRIVE_ACCOUNT_PROBE_FAILED", "账号探测失败，无法启用", detail=account.last_error or "驱动初始化失败")
-        account.enabled = True
-        account.probe_fail_count = 0
+        db.refresh(account)
+        return _out(account)
+
+    account = set_drive_account_enabled(db, account_id, False)
+    with transaction(db):
         audit.write_audit_log(
             db,
             actor_user_id=current.user.id,
@@ -137,25 +154,8 @@ def patch_account_status(request: Request, account_id: int, payload: DriveAccoun
             ip=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
             success=True,
-            detail="enabled=True probe=ok",
+            detail="enabled=False",
         )
-        db.commit()
-        db.refresh(account)
-        return _out(account)
-
-    account = set_drive_account_enabled(db, account_id, False)
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="drive_account.status",
-        target_type="drive_account",
-        target_id=str(account_id),
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-        detail="enabled=False",
-    )
-    db.commit()
     db.refresh(account)
     return _out(account)
 
@@ -163,8 +163,8 @@ def patch_account_status(request: Request, account_id: int, payload: DriveAccoun
 @router.post('/{account_id}/default', response_model=DriveAccountOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account_default(request: Request, account_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     account = set_default_drive_account(db, account_id)
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.default', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.default', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(account)
     return _out(account)
 
@@ -172,16 +172,16 @@ def post_account_default(request: Request, account_id: int, current: CurrentUser
 @router.delete('/{account_id}', dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def delete_account(request: Request, account_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     delete_drive_account(db, account_id)
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.delete', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.delete', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     return {'ok': True}
 
 
 @router.post('/{account_id}/probe', response_model=DriveAccountOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account_probe(request: Request, account_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     account = probe_drive_account(db, account_id)
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.probe', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.probe', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(account)
     return _out(account)
 
@@ -189,8 +189,8 @@ def post_account_probe(request: Request, account_id: int, current: CurrentUser =
 @router.post('/{account_id}/auth/start', response_model=DriveAccountOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account_auth_start(request: Request, account_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     account = probe_drive_account(db, account_id)
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_start', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_start', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(account)
     return _out(account)
 
@@ -213,8 +213,8 @@ def post_account_auth_qrcode_start(request: Request, account_id: int, current: C
         adapter={"t": data.get("t") or "", "ck": data.get("ck") or ""},
         payload={"qrcode_url": data.get("qrCodeUrl") or "", "status": "NEW"},
     )
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_start', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_start', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     return {"account_id": account.id, "drive_type": account.drive_type, "method": "qrcode", "session_id": session.session_id, "payload": session.payload}
 
 
@@ -241,13 +241,13 @@ def post_account_auth_qrcode_poll(request: Request, session_id: str, current: Cu
         config["refresh_token"] = str(data.get("refresh_token") or "")
         update_drive_account(db, account.id, config=config)
         account = probe_drive_account(db, account.id)
-        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_confirm', target_type='drive_account', target_id=str(account.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-        db.commit()
+        with transaction(db):
+            audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_confirm', target_type='drive_account', target_id=str(account.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
         db.refresh(account)
         return _out(account)
     session.payload.update({"status": str(data.get("status") or ""), "message": str(data.get("message") or "")})
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_poll', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_poll', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     raise ApiError(
         code="DRIVE_ACCOUNT_AUTH_PENDING",
         message="扫码未完成",
@@ -302,8 +302,8 @@ def post_account_auth_captcha_submit(request: Request, session_id: str, payload:
     delete_auth_session(session_id)
     update_drive_account(db, session.account_id, config=adapter.export_runtime_config())
     account = probe_drive_account(db, session.account_id)
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_captcha', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_captcha', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(account)
     return _out(account)
 
@@ -317,8 +317,8 @@ def post_account_auth_sms_send(request: Request, session_id: str, current: Curre
         raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
     adapter = session.adapter
     result = adapter.send_sms()
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_sms_send', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_sms_send', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     return result
 
 
@@ -360,8 +360,8 @@ def post_account_auth_sms_submit(request: Request, session_id: str, payload: Dri
             },
             ensure_ascii=False,
         )
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_sms_submit', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_sms_submit', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(account)
     return _out(account)
 
@@ -370,44 +370,44 @@ def post_account_auth_sms_submit(request: Request, session_id: str, payload: Dri
 def post_account_sign_in(request: Request, account_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         result = sign_in_drive_account(db, account_id)
-        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.sign_in', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-        db.commit()
+        with transaction(db):
+            audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.sign_in', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
         return result
     except ApiError as e:
-        audit.write_audit_log(
-            db,
-            actor_user_id=current.user.id,
-            action='drive_account.sign_in',
-            target_type='drive_account',
-            target_id=str(account_id),
-            ip=request.client.host if request.client else None,
-            user_agent=request.headers.get('user-agent'),
-            success=False,
-            detail=f"{e.code}:{e.message}",
-        )
-        db.commit()
+        with transaction(db):
+            audit.write_audit_log(
+                db,
+                actor_user_id=current.user.id,
+                action='drive_account.sign_in',
+                target_type='drive_account',
+                target_id=str(account_id),
+                ip=request.client.host if request.client else None,
+                user_agent=request.headers.get('user-agent'),
+                success=False,
+                detail=f"{e.code}:{e.message}",
+            )
         raise
     except Exception as e:
-        audit.write_audit_log(
-            db,
-            actor_user_id=current.user.id,
-            action='drive_account.sign_in',
-            target_type='drive_account',
-            target_id=str(account_id),
-            ip=request.client.host if request.client else None,
-            user_agent=request.headers.get('user-agent'),
-            success=False,
-            detail=str(e)[:500],
-        )
-        db.commit()
+        with transaction(db):
+            audit.write_audit_log(
+                db,
+                actor_user_id=current.user.id,
+                action='drive_account.sign_in',
+                target_type='drive_account',
+                target_id=str(account_id),
+                ip=request.client.host if request.client else None,
+                user_agent=request.headers.get('user-agent'),
+                success=False,
+                detail=str(e)[:500],
+            )
         raise ApiError(code="DRIVE_ACCOUNT_SIGN_IN_FAILED", message="签到失败", http_status=500, detail=str(e))
 
 
 @router.post('/refresh-profiles', response_model=list[DriveAccountOut], dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_refresh_profiles(request: Request, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     items = refresh_drive_account_profiles(db)
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.refresh_profiles', target_type='drive_account', target_id='*', ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.refresh_profiles', target_type='drive_account', target_id='*', ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     for item in items:
         db.refresh(item)
     return [_out(item) for item in items]

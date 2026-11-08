@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import require_permissions
 from app.core.permissions import AUDIT_READ, AUDIT_WRITE
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.models.audit_log import AuditLog
 from app.models.audit_log_scheduler_setting import AuditLogSchedulerSetting
 from app.schemas.audit_log import AuditLogItemOut, AuditLogListOut
@@ -33,9 +33,9 @@ class AuditLogSchedulerOut(BaseModel):
 def _get_or_create_scheduler(db: Session) -> AuditLogSchedulerSetting:
     setting = db.query(AuditLogSchedulerSetting).first()
     if not setting:
-        setting = AuditLogSchedulerSetting()
-        db.add(setting)
-        db.commit()
+        with transaction(db):
+            setting = AuditLogSchedulerSetting()
+            db.add(setting)
         db.refresh(setting)
     return setting
 
@@ -71,8 +71,8 @@ def get_audit_logs(
 
 @router.delete("", dependencies=[Depends(require_permissions(AUDIT_WRITE))])
 def delete_all_audit_logs(db: Session = Depends(get_db)):
-    db.query(AuditLog).delete()
-    db.commit()
+    with transaction(db):
+        db.query(AuditLog).delete()
     return {"ok": True}
 
 
@@ -90,15 +90,15 @@ def get_audit_log_scheduler(db: Session = Depends(get_db)):
 @router.patch("/scheduler", response_model=AuditLogSchedulerOut, dependencies=[Depends(require_permissions(AUDIT_WRITE))])
 def update_audit_log_scheduler(payload: AuditLogSchedulerIn, db: Session = Depends(get_db)):
     setting = _get_or_create_scheduler(db)
-    if payload.enabled is not None:
-        setting.enabled = payload.enabled
-    if payload.crontab is not None:
-        setting.crontab = payload.crontab
-    if payload.timezone is not None:
-        setting.timezone = payload.timezone
-    if payload.retention_days is not None:
-        setting.retention_days = payload.retention_days
-    db.commit()
+    with transaction(db):
+        if payload.enabled is not None:
+            setting.enabled = payload.enabled
+        if payload.crontab is not None:
+            setting.crontab = payload.crontab
+        if payload.timezone is not None:
+            setting.timezone = payload.timezone
+        if payload.retention_days is not None:
+            setting.retention_days = payload.retention_days
     db.refresh(setting)
     return AuditLogSchedulerOut(
         enabled=setting.enabled,

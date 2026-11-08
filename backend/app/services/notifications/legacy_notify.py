@@ -796,3 +796,52 @@ def send(title: str, content: str, ignore_default_config: bool = False, channels
             return results
         finally:
             push_config = snapshot
+
+
+_notify_queue: "object | None" = None
+_notify_queue_lock = threading.Lock()
+
+
+def _deliver_notification(title: str, content: str, channels: list[str] | None, kwargs: dict) -> None:
+    """队列消费者入口：复用现有 send()（渠道扇出与返回结构不变）。"""
+    send(title, content, channels=channels, **kwargs)
+
+
+def get_notify_queue():
+    """进程内通知队列单例；首次调用时创建，消费者线程在首次 submit 时启动。"""
+    global _notify_queue
+    from app.services.notifications.queue import DEFAULT_MAXSIZE, NotifyQueue
+
+    with _notify_queue_lock:
+        if _notify_queue is None:
+            _notify_queue = NotifyQueue(maxsize=DEFAULT_MAXSIZE, handler=_deliver_notification)
+        return _notify_queue
+
+
+def reset_notify_queue() -> None:
+    """测试用：丢弃队列单例，下一次 send_async 重新创建。"""
+    global _notify_queue
+    with _notify_queue_lock:
+        _notify_queue = None
+
+
+def send_async(
+    title: str,
+    content: str,
+    *,
+    channels: list[str] | None = None,
+    **kwargs,
+) -> bool:
+    """异步发送通知：入队后立即返回，渠道扇出由通知队列的唯一消费者线程执行。
+
+    - use_notify_queue=True（默认）：入队，队列满时丢弃并返回 False；
+    - use_notify_queue=False：回退为同步 send()，保持旧的阻塞语义（返回 True）。
+    send() 本身的同步语义完全不变，这里只是多一条非阻塞入口。
+    """
+    from app.core.settings import settings
+
+    if not settings.use_notify_queue:
+        send(title, content, channels=channels, **kwargs)
+        return True
+
+    return get_notify_queue().submit(title, content, channels=channels, kwargs=kwargs)

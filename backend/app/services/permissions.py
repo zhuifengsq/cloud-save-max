@@ -1,8 +1,11 @@
-from sqlalchemy import select
+from __future__ import annotations
+
+from typing import Any
+
 from sqlalchemy.orm import Session
 
-from app.models.permission import Permission
+from app.application.container import permissions_repo
 
 
-def list_permissions(db: Session) -> list[Permission]:
-    return db.execute(select(Permission).order_by(Permission.id.asc())).scalars().all()
+def list_permissions(db: Session) -> list[Any]:
+    return permissions_repo().list_permissions(db)

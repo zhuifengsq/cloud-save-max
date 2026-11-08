@@ -11,10 +11,11 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import and_, func, select, update as sa_update
 from sqlalchemy.orm import Session
 
+from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ, TASK_RUN, TASK_WRITE
-from app.db.session import get_db
+from app.db.session import commit, get_db, transaction
 from app.extensions.adapters.adapter_factory import AdapterFactory
 from app.extensions.adapters.base_adapter import BaseCloudDriveAdapter
 from app.extensions.runtime.adapter_registry import AdapterRegistry
@@ -73,7 +74,7 @@ def get_task_suggestions(q: str = "", d: int = 0, drive_type: str = "", sf: str 
         dt = str(drive_type or "").strip() or None
         items, changed, msg = fetch_task_suggestions(db, keyword=q, deep=d, drive_type=dt, search_filter=sf, search_exclude=se, search_date_from=df, search_filter_mode=sfm, search_exclude_mode=sem)
         if changed:
-            db.commit()
+            commit(db)
         # 标记屏蔽分享者（不过滤，只标记）
         if items:
             from app.models.system_setting import SystemSetting
@@ -172,16 +173,16 @@ def post_stop_completed_drama_tasks(request: Request, current: CurrentUser = Dep
         success=True,
         detail=f"checked={checked}, matched={len(matched_ids)}, stopped={stopped}",
     )
-    db.commit()
+    commit(db)
 
     return StopCompletedDramaTasksOut(checked=int(checked or 0), matched=len(matched_ids), stopped=stopped, task_ids=matched_ids[:50])
 
 
 @router.post('', response_model=TaskOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
 def post_task(request: Request, payload: TaskCreateIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = create_task(db, **payload.model_dump())
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='task.create', target_type='task', target_id=str(task.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        task = create_task(db, **payload.model_dump())
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='task.create', target_type='task', target_id=str(task.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(task)
     # 新建任务必然没有执行记录，显式传空列表避免一次多余查询。
     return task_out(db, task, executions=[])
@@ -189,27 +190,27 @@ def post_task(request: Request, payload: TaskCreateIn, current: CurrentUser = De
 
 @router.patch('/{task_id:int}', response_model=TaskOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
 def patch_task(request: Request, task_id: int, payload: TaskUpdateIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = update_task(db, task_id, **payload.model_dump(exclude_unset=True))
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='task.update', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        task = update_task(db, task_id, **payload.model_dump(exclude_unset=True))
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='task.update', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(task)
     return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3), lead_in_map=load_lead_in_summary_map(db, [task.id]))
 
 
 @router.patch('/{task_id:int}/status', response_model=TaskOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
 def patch_task_status(request: Request, task_id: int, payload: TaskStatusIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = set_task_enabled(db, task_id, payload.enabled)
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='task.status', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True, detail=f'enabled={payload.enabled}')
-    db.commit()
+    with transaction(db):
+        task = set_task_enabled(db, task_id, payload.enabled)
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='task.status', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True, detail=f'enabled={payload.enabled}')
     db.refresh(task)
     return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3), lead_in_map=load_lead_in_summary_map(db, [task.id]))
 
 
 @router.delete('/{task_id:int}', dependencies=[Depends(require_permissions(TASK_WRITE))])
 def delete_task_by_id(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    delete_task(db, task_id)
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='task.delete', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        delete_task(db, task_id)
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='task.delete', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     return {'ok': True}
 
 
@@ -217,9 +218,9 @@ def delete_task_by_id(request: Request, task_id: int, current: CurrentUser = Dep
 def post_run_task(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     with task_admission.reserve(task_id):
         task = get_task(db, task_id)
-        execution = TaskExecutor(db).run_task(task)
+        execution = RunTaskUseCase(db, executor_cls=TaskExecutor).run(task, RunPolicy.for_trigger('http'))
         audit.write_audit_log(db, actor_user_id=current.user.id, action='task.run', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=execution.status == 'success', detail=execution.message)
-        db.commit()
+        commit(db)
         db.refresh(execution)
         if str(getattr(task, "task_type", "") or "") == "drama":
             try:
@@ -290,7 +291,7 @@ def post_create_task_share(request: Request, task_id: int, current: CurrentUser 
         ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True,
         detail=f'drive_type={account.drive_type}',
     )
-    db.commit()
+    commit(db)
     return TaskShareLinkOut(
         share_url=share_url,
         share_id=str(result.get('share_id') or ''),
@@ -309,17 +310,17 @@ def get_task_scheduler_setting(db: Session = Depends(get_db)):
     if setting is not None:
         # 纯读请求不提交、不 refresh：只回滚只读事务，省掉一次全行查询
         return scheduler_out(setting)
-    setting = get_or_create_task_scheduler_setting(db)
-    payload = scheduler_out(setting)
-    db.commit()
+    with transaction(db):
+        setting = get_or_create_task_scheduler_setting(db)
+        payload = scheduler_out(setting)
     return payload
 
 
 @router.patch('/scheduler', response_model=TaskSchedulerSettingOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
 def patch_task_scheduler_setting(request: Request, payload: TaskSchedulerSettingUpdateIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    setting = update_task_scheduler_setting(db, **payload.model_dump(exclude_unset=True))
-    audit.write_audit_log(db, actor_user_id=current.user.id, action='task.scheduler.update', target_type='task_scheduler_setting', target_id=str(setting.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.commit()
+    with transaction(db):
+        setting = update_task_scheduler_setting(db, **payload.model_dump(exclude_unset=True))
+        audit.write_audit_log(db, actor_user_id=current.user.id, action='task.scheduler.update', target_type='task_scheduler_setting', target_id=str(setting.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(setting)
     task_scheduler_manager.reload()
     return scheduler_out(setting)

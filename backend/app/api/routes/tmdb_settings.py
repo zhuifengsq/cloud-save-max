@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.schemas.tmdb_settings import TMDBConfigOut, TMDBConfigUpdateIn
 from app.services import audit
 from app.services.tmdb_settings import get_or_create_tmdb_setting, load_tmdb_config, update_tmdb_setting
@@ -28,18 +28,18 @@ def patch_tmdb_config(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> TMDBConfigOut:
-    item = update_tmdb_setting(db, payload=payload.model_dump(exclude_unset=True))
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="tmdb.config.update",
-        target_type="tmdb_setting",
-        target_id="config",
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-    )
-    db.commit()
+    with transaction(db):
+        item = update_tmdb_setting(db, payload=payload.model_dump(exclude_unset=True))
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="tmdb.config.update",
+            target_type="tmdb_setting",
+            target_id="config",
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+        )
     db.refresh(item)
     data = load_tmdb_config(item)
     return TMDBConfigOut(**data)

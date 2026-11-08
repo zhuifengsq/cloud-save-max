@@ -15,6 +15,7 @@ from sqlalchemy.exc import OperationalError, TimeoutError as PoolTimeout
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
+from app.db.session import end_read_tx
 from app.models.task import Task
 from app.models.tmdb_media_cache import TMDBMediaCache
 from app.models.tmdb_setting import TMDBSetting
@@ -63,6 +64,20 @@ def _cache_writer(db: Session):
 
 def _cache_write_busy(exc: Exception) -> bool:
     return isinstance(exc, PoolTimeout) or "database is locked" in str(exc).lower()
+
+
+def _close_read_transaction(db: Session) -> None:
+    """结束调用方会话的读事务，供长批量刷新在两次外部 IO 之间让出 WAL checkpoint。
+
+    只允许在「调用方确认当前没有未提交写入」的只读上下文里使用（只读路由、后台刷新
+    任务）。SQLite WAL 的 checkpoint 需要所有读事务结束才能推进，否则 -wal 会随批量
+    刷新持续增长（见方案 §7 R14）。
+    """
+    try:
+        end_read_tx(db)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _touch_last_accessed_at_best_effort(db: Session, row: TMDBMediaCache, accessed_at: datetime) -> None:
@@ -602,12 +617,17 @@ def refresh_tmdb_detail_sync(
     poster_language: str,
     force: bool = False,
     existing_only: bool = False,
+    close_read_tx: bool = False,
 ) -> tuple[TMDBMediaCache | None, dict[str, Any] | None, list[int], list[int]]:
     now = _now()
     key = _cache_key(media_type, tmdb_id, language, poster_language)
     configured, api_key, _, _ = _get_runtime_tmdb_config(db)
     if not configured:
         return _read_cache_row(db, key), None, [], []
+    if close_read_tx:
+        # 领标记/写回都走独立 writer 引擎；这里先结束调用方读事务，
+        # 让 writer 提交时的 WAL checkpoint 不被长读事务挡住。
+        _close_read_transaction(db)
     if not _claim_refresh(db, key, now, credits=False, force=force, existing_only=existing_only):
         row = _read_cache_row(db, key, reload=True)
         return row, *_cached_details(row, media_type)
@@ -682,6 +702,7 @@ def get_tmdb_detail_cached(
     media_type: MediaType,
     tmdb_id: int,
     force_refresh: bool = False,
+    close_read_tx: bool = False,
 ) -> tuple[bool, dict[str, Any] | None, list[int], list[int], TMDBMediaCache | None]:
     configured, _, language, poster_language = _get_runtime_tmdb_config(db)
     if not configured:
@@ -699,6 +720,7 @@ def get_tmdb_detail_cached(
                 language=language,
                 poster_language=poster_language,
                 force=True,
+                close_read_tx=close_read_tx,
             )
             return True, details, update_weekdays, episode_weekdays, row2
         if row.expires_at is not None and row.expires_at > now and row.payload_json:
@@ -726,6 +748,7 @@ def get_tmdb_detail_cached(
         language=language,
         poster_language=poster_language,
         force=force_refresh,
+        close_read_tx=close_read_tx,
     )
     return True, details, update_weekdays, episode_weekdays, row2
 
@@ -755,6 +778,7 @@ def get_tmdb_credits_cached(
     media_type: MediaType,
     tmdb_id: int,
     limit: int = 8,
+    close_read_tx: bool = False,
 ) -> tuple[bool, list[dict[str, str]]]:
     """带 DB 缓存的 TMDB 演员表。
 
@@ -772,6 +796,8 @@ def get_tmdb_credits_cached(
     cached = _normalize_cast(_load_json(row.credits_json)) if row is not None else []
     if row is not None and row.credits_expires_at is not None and row.credits_expires_at > now:
         return True, cached[:lim]
+    if close_read_tx:
+        _close_read_transaction(db)
     if not _claim_refresh(db, key, now, credits=True):
         row = _read_cache_row(db, key, reload=True)
         return True, _normalize_cast(_load_json(row.credits_json))[:lim] if row is not None else []
@@ -805,6 +831,7 @@ def refresh_linked_tasks(
     enabled_only: bool = True,
     max_items: int = 200,
     force: bool = True,
+    close_read_tx: bool = False,
 ) -> dict[str, int]:
     configured, _, language, poster_language = _get_runtime_tmdb_config(db)
     if not configured:
@@ -829,6 +856,10 @@ def refresh_linked_tasks(
         seen.add(key)
         targets.append(key)
 
+    if close_read_tx:
+        # targets 已是纯元组，结束读事务后逐项刷新，不让整批任务共用一个快照。
+        _close_read_transaction(db)
+
     refreshed = 0
     for t, tid in targets[: max(0, int(max_items))]:
         row, _, _, _ = refresh_tmdb_detail_sync(
@@ -838,6 +869,7 @@ def refresh_linked_tasks(
             language=language,
             poster_language=poster_language,
             force=force,
+            close_read_tx=close_read_tx,
         )
         if row is not None:
             refreshed += 1
@@ -849,6 +881,7 @@ def refresh_expired_cache(
     *,
     max_items: int = 200,
     force: bool = True,
+    close_read_tx: bool = False,
 ) -> dict[str, int]:
     configured, _, language, poster_language = _get_runtime_tmdb_config(db)
     if not configured:
@@ -857,7 +890,7 @@ def refresh_expired_cache(
     now = _now()
     rows = (
         db.execute(
-            select(TMDBMediaCache)
+            select(TMDBMediaCache.media_type, TMDBMediaCache.tmdb_id)
             .where(
                 TMDBMediaCache.language == language,
                 TMDBMediaCache.poster_language == poster_language,
@@ -866,23 +899,28 @@ def refresh_expired_cache(
             .order_by(TMDBMediaCache.expires_at.asc().nullsfirst())
             .limit(max(1, int(max_items)))
         )
-        .scalars()
         .all()
     )
+    targets = [(str(mt), int(tid)) for mt, tid in rows if tid is not None]
+
+    if close_read_tx:
+        # 行数据已取出，结束读事务：整批最多 200 次网络请求，不应共用一个读快照。
+        _close_read_transaction(db)
 
     refreshed = 0
-    for row in rows:
+    for media_type, tmdb_id in targets:
         r, _, _, _ = refresh_tmdb_detail_sync(
             db,
-            media_type=row.media_type,  # type: ignore[arg-type]
-            tmdb_id=int(row.tmdb_id),
+            media_type=media_type,  # type: ignore[arg-type]
+            tmdb_id=tmdb_id,
             language=language,
             poster_language=poster_language,
             force=force,
+            close_read_tx=close_read_tx,
         )
         if r is not None:
             refreshed += 1
-    return {"configured": 1, "targets": len(rows), "refreshed": refreshed}
+    return {"configured": 1, "targets": len(targets), "refreshed": refreshed}
 
 
 def purge_cold_cache(db: Session, *, retention_days: int = 60) -> int:

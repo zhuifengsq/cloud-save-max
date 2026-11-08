@@ -4,11 +4,10 @@ import json
 import logging
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.application.container import drive_accounts_repo
 from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.models.drive_account import DriveAccount
 from app.services.episode_number import extract_episode, guess_episode, parse_size
 from app.services.resource_search import fetch_task_suggestions
 from app.services.tmdb_cache import get_tmdb_detail_cached
@@ -49,7 +48,7 @@ def _is_auto_update_enabled(task: object) -> bool:
 def _pick_drive_type(db: Session, task: object) -> str | None:
     account_name = str(getattr(task, "account_name", "") or "").strip()
     if account_name:
-        row = db.execute(select(DriveAccount.drive_type).where(DriveAccount.name == account_name)).scalars().first()
+        row = drive_accounts_repo().get_drive_type_by_name(db, name=account_name)
         if row:
             dt = str(row or "").strip()
             return dt or None

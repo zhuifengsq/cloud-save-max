@@ -1,0 +1,157 @@
+"""RunPolicy 真值表 + 统一执行入口参数对齐（纯函数断言，不连库）。
+
+边界：准入（task_admission.reserve）仍在各调用点，本用例不占槽——这里用假执行器
+记录实参，验证灰度开关两端的参数与改造前逐点一致。
+"""
+
+from __future__ import annotations
+
+from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
+
+import pytest
+
+from app.application.use_cases import run_task as run_task_use_case
+from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
+
+
+# trigger -> (share_check_always_notify, persist_execution)
+TRUTH_TABLE = {
+    "http": (True, True),
+    "sse": (True, True),
+    "scheduler": (False, True),
+    "telegram": (True, True),
+    "preview": (False, False),
+}
+
+
+@pytest.mark.parametrize("trigger", sorted(TRUTH_TABLE))
+def test_policy_truth_table(trigger):
+    policy = RunPolicy.for_trigger(trigger)
+    assert policy.trigger == trigger
+    assert (policy.share_check_always_notify, policy.persist_execution) == TRUTH_TABLE[trigger]
+
+
+def test_for_trigger_normalizes_case_and_space():
+    assert RunPolicy.for_trigger("  SSE ") == RunPolicy.for_trigger("sse")
+
+
+def test_for_trigger_rejects_unknown():
+    with pytest.raises(ValueError):
+        RunPolicy.for_trigger("unknown")
+    with pytest.raises(ValueError):
+        RunPolicy.for_trigger("")
+
+
+def test_policy_is_frozen():
+    policy = RunPolicy.for_trigger("http")
+    with pytest.raises(FrozenInstanceError):
+        policy.persist_execution = False  # type: ignore[misc]
+
+
+def test_policy_has_no_slot_flag():
+    """准入归调用点，RunPolicy 不得再承载 use_slot（避免死字段误导）。"""
+    assert not hasattr(RunPolicy.for_trigger("http"), "use_slot")
+
+
+class _RecordingExecutor:
+    calls: list[dict] = []
+
+    def __init__(self, db):
+        self.db = db
+
+    def run_task(self, task, **kwargs):
+        _RecordingExecutor.calls.append({"task": task, "kwargs": kwargs})
+        return SimpleNamespace(status="success")
+
+
+@pytest.fixture
+def fake_deps(monkeypatch):
+    _RecordingExecutor.calls = []
+
+    def fake_executor_cls(db):
+        return _RecordingExecutor(db)
+
+    task = SimpleNamespace(id=17)
+    return SimpleNamespace(task=task, executor_cls=fake_executor_cls)
+
+
+def _set_flag(monkeypatch, value: bool) -> None:
+    monkeypatch.setattr(
+        run_task_use_case,
+        "settings",
+        SimpleNamespace(use_unified_run_use_case=value),
+    )
+
+
+def test_legacy_path_matches_old_call_arguments(fake_deps, monkeypatch):
+    """灰度开关关闭时，逐字复刻改造前 5 个活调用点的实参（第 6 处是已删除的死代码）。"""
+    _set_flag(monkeypatch, False)
+    log = object()
+    manager = object()
+
+    for trigger in ("http", "telegram"):
+        RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
+            fake_deps.task, RunPolicy.for_trigger(trigger)
+        )
+    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
+        fake_deps.task, RunPolicy.for_trigger("sse"), log=log
+    )
+    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
+        fake_deps.task,
+        RunPolicy.for_trigger("scheduler"),
+        account_manager=manager,
+        init_account_for_task=False,
+    )
+    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
+        fake_deps.task, RunPolicy.for_trigger("preview"), log=log
+    )
+
+    assert [call["kwargs"] for call in _RecordingExecutor.calls] == [
+        {"share_check_always_notify": True},
+        {"share_check_always_notify": True},
+        {"log": log, "share_check_always_notify": True},
+        {"account_manager": manager, "init_account_for_task": False},
+        {"log": log, "persist_execution": False},
+    ]
+
+
+def test_unified_path_derives_arguments_from_policy(fake_deps, monkeypatch):
+    _set_flag(monkeypatch, True)
+    manager = object()
+
+    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
+        fake_deps.task,
+        RunPolicy.for_trigger("scheduler"),
+        account_manager=manager,
+        init_account_for_task=False,
+    )
+
+    assert _RecordingExecutor.calls[0]["kwargs"] == {
+        "log": None,
+        "persist_execution": True,
+        "account_manager": manager,
+        "init_account_for_task": False,
+        "share_check_always_notify": False,
+    }
+
+
+def test_default_executor_is_task_executor():
+    """生产路径不传 executor_cls 时使用真实 TaskExecutor（调用点仍可注入假实现）。"""
+    from app.extensions.runtime.task_executor import TaskExecutor
+
+    use_case = RunTaskUseCase(db=object())
+    assert use_case.executor_cls is TaskExecutor
+
+
+def test_legacy_and_unified_share_one_entry(fake_deps, monkeypatch):
+    """灰度开关只切换参数来源，执行入口唯一：两种模式都必须命中同一个假执行器。"""
+    _set_flag(monkeypatch, True)
+    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
+        fake_deps.task, RunPolicy.for_trigger("http")
+    )
+    _set_flag(monkeypatch, False)
+    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
+        fake_deps.task, RunPolicy.for_trigger("http")
+    )
+    assert len(_RecordingExecutor.calls) == 2

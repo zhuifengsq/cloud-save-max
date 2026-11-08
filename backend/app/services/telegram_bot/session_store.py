@@ -7,8 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.telegram_bot_session import TelegramBotSession
-from app.models.telegram_bot_state import TelegramBotState
+from app.application.container import telegram_bot_session_repo
 
 
 DEFAULT_TELEGRAM_BOT_STATE_ID = 1
@@ -38,14 +37,8 @@ def _dumps(value: dict[str, Any] | None) -> str:
     return json.dumps(value or {}, ensure_ascii=False)
 
 
-def get_or_create_bot_state(db: Session) -> TelegramBotState:
-    item = db.get(TelegramBotState, DEFAULT_TELEGRAM_BOT_STATE_ID)
-    if item is not None:
-        return item
-    item = TelegramBotState(id=DEFAULT_TELEGRAM_BOT_STATE_ID, last_update_id=0)
-    db.add(item)
-    db.flush()
-    return item
+def get_or_create_bot_state(db: Session) -> Any:
+    return telegram_bot_session_repo().get_or_create_bot_state(db)
 
 
 def get_last_update_id(db: Session) -> int:
@@ -77,18 +70,8 @@ def mark_poll_error(db: Session, message: str) -> TelegramBotState:
     return item
 
 
-def get_or_create_session(db: Session, *, chat_id: int, user_id: int) -> TelegramBotSession:
-    row = (
-        db.query(TelegramBotSession)
-        .filter(TelegramBotSession.chat_id == int(chat_id), TelegramBotSession.user_id == int(user_id))
-        .first()
-    )
-    if row is not None:
-        return row
-    row = TelegramBotSession(chat_id=int(chat_id), user_id=int(user_id), scene="home", step="idle", context_json="{}")
-    db.add(row)
-    db.flush()
-    return row
+def get_or_create_session(db: Session, *, chat_id: int, user_id: int) -> Any:
+    return telegram_bot_session_repo().get_or_create_session(db, chat_id=chat_id, user_id=user_id)
 
 
 def load_session_data(db: Session, *, chat_id: int, user_id: int) -> TelegramSessionData:
@@ -112,7 +95,7 @@ def save_session_data(
     step: str | None = None,
     context: dict[str, Any] | None = None,
     last_message_id: int | None | object = None,
-) -> TelegramBotSession:
+) -> Any:
     row = get_or_create_session(db, chat_id=chat_id, user_id=user_id)
     if scene is not None:
         row.scene = str(scene or "home")
@@ -134,7 +117,7 @@ def reset_session(
     scene: str = "home",
     step: str = "idle",
     preserve_message_id: bool = True,
-) -> TelegramBotSession:
+) -> Any:
     row = get_or_create_session(db, chat_id=chat_id, user_id=user_id)
     last_message_id = row.last_message_id if preserve_message_id else None
     row.scene = scene

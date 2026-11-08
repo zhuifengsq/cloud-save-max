@@ -24,7 +24,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError, bad_request
+from app.core.runtime.keyed_locks import LRUKeyedLocks
 from app.core.settings import settings
+from app.db.session import end_read_tx
 from app.extensions.adapters.adapter_factory import AdapterFactory
 from app.extensions.runtime.adapter_registry import AdapterRegistry
 from app.models.drive_account import DriveAccount
@@ -58,6 +60,9 @@ MATERIAL_MODES = (MATERIAL_MODE_SHARE, MATERIAL_MODE_OWN_FILE)
 
 _LEAD_IN_LOCK_GUARD = threading.Lock()
 _LEAD_IN_LOCKS: dict[tuple[str, str, str, str], threading.Lock] = {}
+# 灰度开关 use_keyed_locks=True 时用这把有上限的锁表：key 含目录与素材名，
+# 基数随运营配置（网盘 × 账号 × 目录 × 素材）增长，旧 dict 只增不减。
+_LEAD_IN_KEYED_LOCKS = LRUKeyedLocks(maxsize=1024)
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +281,7 @@ def update_drama_lead_in_settings(db: Session, data: dict[str, Any]) -> dict[str
         )
 
     # 先结束只读事务：随后的网盘登录/解析期间不能持有数据库事务。
-    db.commit()
+    end_read_tx(db)
 
     resolved: list[dict[str, Any]] = []
     for item in prepared:
@@ -293,7 +298,7 @@ def update_drama_lead_in_settings(db: Session, data: dict[str, Any]) -> dict[str
             adapter = _build_adapter(account)
             if adapter is None:
                 raise bad_request("LEAD_IN_ACCOUNT_UNAVAILABLE", "网盘账号不可用，请检查账号配置")
-            db.commit()
+            end_read_tx(db)
             if not _init_adapter(adapter):
                 raise bad_request("LEAD_IN_ACCOUNT_UNAVAILABLE", "网盘账号不可用（登录失败），请检查账号状态")
             resolver = getattr(adapter, "lead_in_resolve_own_file", None)
@@ -314,7 +319,7 @@ def update_drama_lead_in_settings(db: Session, data: dict[str, Any]) -> dict[str
         adapter = _build_adapter(account)
         if adapter is None:
             raise bad_request("LEAD_IN_ACCOUNT_UNAVAILABLE", "网盘账号不可用，请检查账号配置")
-        db.commit()
+        end_read_tx(db)
         if not _init_adapter(adapter):
             raise bad_request("LEAD_IN_ACCOUNT_UNAVAILABLE", "网盘账号不可用（登录失败），请检查账号状态")
         response = _safe_call(
@@ -377,7 +382,8 @@ def update_drama_lead_in_settings(db: Session, data: dict[str, Any]) -> dict[str
 
     _set_setting(db, SETTING_KEY_ENABLED, "1" if enabled else "0", SETTING_DESCRIPTION_ENABLED)
     _set_setting(db, SETTING_KEY_MATERIALS, json.dumps(materials, ensure_ascii=False), SETTING_DESCRIPTION_MATERIALS)
-    db.commit()
+    # 提交归属：写设置 + 审计由路由的事务边界统一提交（原实现在此提前 commit）。
+    db.flush()
     return build_settings_payload(db)
 
 
@@ -398,7 +404,7 @@ def scan_drama_lead_in_material(db: Session, drive_type: str, shareurl: str, pas
     adapter = _build_adapter(account)
     if adapter is None:
         raise bad_request("LEAD_IN_ACCOUNT_UNAVAILABLE", "网盘账号不可用，请检查账号配置")
-    db.commit()
+    end_read_tx(db)
     if not _init_adapter(adapter):
         raise bad_request("LEAD_IN_ACCOUNT_UNAVAILABLE", "网盘账号不可用（登录失败），请检查账号状态")
     response = _safe_call(adapter.lead_in_resolve_material, shareurl, str(passcode or ""), "")
@@ -550,7 +556,7 @@ def _own_file_context(
     adapter = _build_adapter(account)
     if adapter is None:
         raise bad_request("LEAD_IN_ACCOUNT_UNAVAILABLE", "网盘账号不可用，请检查账号配置")
-    db.commit()
+    end_read_tx(db)
     if not _init_adapter(adapter):
         raise bad_request("LEAD_IN_ACCOUNT_UNAVAILABLE", "网盘账号不可用（登录失败），请检查账号状态")
     return adapter, capability, path
@@ -818,7 +824,7 @@ def build_task_lead_in_preview(db: Session, task: Task) -> dict[str, Any]:
         result["reason"] = "网盘账号不可用"
         return result
     # 读取到此结束：网盘调用期间不持有数据库事务。
-    db.commit()
+    end_read_tx(db)
     if not _init_adapter(adapter):
         result["reason"] = "网盘账号不可用"
         return result
@@ -1057,7 +1063,7 @@ def confirm_task_lead_in(
                 user_agent=user_agent,
             )
         # 结束只读事务：网盘调用期间不持有数据库事务。
-        db.commit()
+        end_read_tx(db)
 
         def finish(status: str, message: str) -> dict[str, Any]:
             return _store_result(
@@ -1387,8 +1393,14 @@ def load_lead_in_summary_map(db: Session, task_ids: list[int]) -> dict[int, dict
 
 
 def lead_in_lock(drive_type: str, account_name: str, dir_path: str, material_name: str) -> threading.Lock:
-    """进程内并发锁：(网盘, 账号, 目录, 素材名) 维度，非阻塞获取。"""
+    """进程内并发锁：(网盘, 账号, 目录, 素材名) 维度，非阻塞获取。
+
+    use_keyed_locks=True（默认）走 LRUKeyedLocks（上限 1024，淘汰未持有的锁）；
+    置 False 回退到旧的无限 dict 实现。单进程假设：多 worker 时跨进程不互斥。
+    """
     key = (str(drive_type or ""), str(account_name or ""), str(dir_path or ""), str(material_name or ""))
+    if settings.use_keyed_locks:
+        return _LEAD_IN_KEYED_LOCKS.get(key)
     with _LEAD_IN_LOCK_GUARD:
         lock = _LEAD_IN_LOCKS.get(key)
         if lock is None:

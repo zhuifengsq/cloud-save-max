@@ -180,9 +180,10 @@ def tmdb_detail(
     media_type: MediaType,
     tmdb_id: int,
     force_refresh: bool = False,
+    close_read_tx: bool = False,
 ) -> tuple[bool, dict[str, Any] | None, list[int], list[int]]:
     configured, data, update_weekdays, episode_weekdays, _row = get_tmdb_detail_cached(
-        db, media_type=media_type, tmdb_id=tmdb_id, force_refresh=force_refresh
+        db, media_type=media_type, tmdb_id=tmdb_id, force_refresh=force_refresh, close_read_tx=close_read_tx
     )
     return configured, data, update_weekdays, episode_weekdays
 
@@ -193,12 +194,13 @@ def tmdb_credits(
     media_type: MediaType,
     tmdb_id: int,
     limit: int = 8,
+    close_read_tx: bool = False,
 ) -> tuple[bool, list[dict[str, str]]]:
     """返回 TMDB 演员表，按 TMDB 原始排序取前 limit 位（文案里用来填「主演」）。
 
     走 DB 缓存：第一次 1~2 秒（TMDB 网络），之后毫秒级返回。
     """
-    return get_tmdb_credits_cached(db, media_type=media_type, tmdb_id=tmdb_id, limit=limit)
+    return get_tmdb_credits_cached(db, media_type=media_type, tmdb_id=tmdb_id, limit=limit, close_read_tx=close_read_tx)
 
 
 def _infer_tv_update_weekdays(tv_id: int, details: dict[str, Any], client: TMDBClient) -> list[int]:

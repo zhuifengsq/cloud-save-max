@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
-from app.db.session import SessionLocal
+from app.application.container import db_session
 from app.extensions.runtime.task_admission import task_admission
 from app.services.telegram_bot.actions import TelegramBotActions
 from app.services.telegram_bot.callbacks import parse_callback
@@ -1286,7 +1286,7 @@ class TelegramBotHandler:
         if not self._allowed(chat_id, user_id):
             return
         text = str(message.get("text") or "").strip()
-        with SessionLocal() as db:
+        with db_session() as db:
             session = load_session_data(db, chat_id=chat_id, user_id=user_id)
             if text.startswith("/"):
                 self._handle_command(db, chat_id, text, session.last_message_id)
@@ -1401,7 +1401,7 @@ class TelegramBotHandler:
         if not self._allowed(chat_id, user_id):
             self._answer_callback(callback_id, "无权限")
             return
-        with SessionLocal() as db:
+        with db_session() as db:
             try:
                 self._dispatch_callback(db, chat_id, message_id, parts)
                 self._answer_callback(callback_id)
@@ -2353,7 +2353,7 @@ class TelegramBotHandler:
             raise
 
         def worker() -> None:
-            with SessionLocal() as db:
+            with db_session() as db:
                 try:
                     result = job(db)
                     lines = [success_title, str(result)]

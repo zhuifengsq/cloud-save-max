@@ -4,12 +4,11 @@ import json
 import logging
 from datetime import datetime
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.application.container import task_executions_repo
 from app.extensions.adapters.adapter_factory import AdapterFactory
 from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.models.task_execution import TaskExecution
 from app.services.task_executions import history_limit
 from app.services.task_share_links import get_task_share_link
 
@@ -28,19 +27,23 @@ def read_share_check(snapshot: str | None) -> dict:
     return check if isinstance(check, dict) else {}
 
 
-def _failure(drive_type: str, response: dict, fallback: str) -> tuple[str, str]:
-    code = str(response.get("code", ""))
-    message = str(response.get("message") or "").strip()
-    if code == "41012" and drive_type == "quark":
-        return "invalid", "分享已被取消"
-    if drive_type == "baidu" and code in {"-1", "105", "145"}:
-        return "invalid", {"-1": "分享链接不存在", "105": "分享链接已过期", "145": "分享链接已失效"}[code]
-    if message in {"分享链接已失效", "分享链接已过期", "分享链接不存在", "分享已取消", "好友已取消了分享", "分享不存在"}:
-        return "invalid", message
-    if "提取码" in message or (drive_type == "baidu" and code in {"4", "200025"}):
+def _failure(adapter, response: dict, fallback: str) -> tuple[str, str]:
+    """把适配器给出的分类结论映射成本功能的状态与提示文案。
+
+    判定逻辑由各网盘适配器的 classify_share_failure 负责，这里只管：
+    - 确定为失效（invalid）才提示用户，其余一律按「检测失败」处理，避免误报。
+    """
+    verdict = adapter.classify_share_failure(response)
+    kind = str(verdict.get("kind") or "unknown")
+    message = str(verdict.get("message") or "").strip()
+    if kind == "invalid":
+        return "invalid", message or fallback
+    if kind == "passcode":
         return "error", "分享提取码无法通过验证"
-    if "限流" in message or "频率过高" in message or str(response.get("status")) == "429":
+    if kind == "throttled":
         return "error", "网盘请求频率过高，稍后重试"
+    if kind == "auth":
+        return "error", message or "网盘账号登录失败"
     return "error", fallback
 
 
@@ -66,16 +69,21 @@ def _probe(record: dict, manager) -> tuple[str, str]:
     token = adapter.get_stoken(pwd_id, record.get("passcode") or url_passcode or "", **token_options) or {}
     stoken = (token.get("data") or {}).get("stoken")
     if not stoken:
-        return _failure(drive_type, token, "网盘暂时无法验证分享链接")
+        return _failure(adapter, token, "网盘暂时无法验证分享链接")
 
     options = {"first_page": True} if drive_type == "quark" else {}
     detail = adapter.get_detail(pwd_id, stoken, str(folder_id or "0"), **options) or {}
     if str(detail.get("code")) == "0" and isinstance((detail.get("data") or {}).get("list"), list):
         return "valid", "分享目录可以正常打开"
-    return _failure(drive_type, detail, "网盘暂时无法读取分享目录")
+    return _failure(adapter, detail, "网盘暂时无法读取分享目录")
 
 
-def check_generated_share(db: Session, task, manager) -> dict | None:
+def check_generated_share(db: Session, task, manager, *, always_notify: bool = False) -> dict | None:
+    """检测任务生成出来的分享链接是否还有效。
+
+    always_notify=True 时（手动点「执行」的场景），只要检测到失效就标记通知，
+    不再受「上次已判定失效就不重复提醒」的去重限制；定时任务保持去重，避免每天刷屏。
+    """
     record = get_task_share_link(task)
     if record is None:
         return None
@@ -83,13 +91,7 @@ def check_generated_share(db: Session, task, manager) -> dict | None:
     identity = {key: str(record.get(key) or "") for key in ("share_id", "saved_at")}
     last_definitive = None
     try:
-        with db.no_autoflush:
-            snapshots = db.scalars(
-                select(TaskExecution.adapter_snapshot)
-                .where(TaskExecution.task_id == task.id)
-                .order_by(TaskExecution.id.desc())
-                .limit(history_limit())
-            ).all()
+        snapshots = task_executions_repo().list_recent_adapter_snapshots(db, task_id=task.id, limit=history_limit())
         for snapshot in snapshots:
             previous = read_share_check(snapshot)
             if all(previous.get(key) == value for key, value in identity.items()):
@@ -108,5 +110,5 @@ def check_generated_share(db: Session, task, manager) -> dict | None:
         "message": message,
         "checked_at": datetime.now().astimezone().isoformat(),
         "last_definitive": status if status in {"valid", "invalid"} else last_definitive,
-        "notify": status == "invalid" and last_definitive != "invalid",
+        "notify": status == "invalid" and (always_notify or last_definitive != "invalid"),
     }

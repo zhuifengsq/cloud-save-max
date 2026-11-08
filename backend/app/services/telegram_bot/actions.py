@@ -7,20 +7,17 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.routes.tasks_share import post_share_preview
+from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
 from app.core.errors import ApiError, bad_request, not_found
 from app.extensions.adapters.adapter_factory import AdapterFactory
 from app.extensions.adapters.aliyun_adapter import AliyunAdapter
 from app.extensions.adapters.drive_auth import DriveAuthRequired
 from app.extensions.runtime.account_manager import DatabaseAccountManager
 from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.models.drive_account import DriveAccount
-from app.models.notification_setting import NotificationSetting
-from app.models.task import Task
-from app.models.task_execution import TaskExecution
+from app.application.container import drive_accounts_repo, task_executions_repo, tasks_repo
 from app.services.drive_account_auth_sessions import create_auth_session, delete_auth_session, get_auth_session
 from app.services.dashboard_drama import build_drama_overview
 from app.services.drive_account_probe_scheduler import (
@@ -30,8 +27,11 @@ from app.services.drive_account_probe_scheduler import (
 from app.services.drive_accounts import (
     build_capacity_overview,
     create_drive_account,
+    get_active_account,
     get_drive_account,
     list_drive_accounts,
+    pick_any_default_account,
+    pick_default_account_name,
     probe_drive_account,
     refresh_drive_account_profiles,
     serialize_drive_account,
@@ -63,7 +63,6 @@ from app.services.tasks import (
     set_task_enabled,
     update_task,
 )
-from app.extensions.runtime.task_executor import TaskExecutor
 from app.services.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config, load_tmdb_config, update_tmdb_setting
 
 
@@ -96,70 +95,15 @@ def _loads_json_detail(value: str | None) -> dict[str, Any]:
 
 
 def _pick_default_account_name(db: Session, drive_type: str) -> str | None:
-    active = (
-        db.execute(
-            select(DriveAccount)
-            .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type, DriveAccount.runtime_status == "active")
-            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
-        )
-        .scalars()
-        .first()
-    )
-    if active is not None:
-        return str(active.name)
-    fallback = (
-        db.execute(
-            select(DriveAccount)
-            .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type)
-            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
-        )
-        .scalars()
-        .first()
-    )
-    return None if fallback is None else str(fallback.name)
+    return pick_default_account_name(db, drive_type)
 
 
-def _pick_any_default_account(db: Session) -> DriveAccount | None:
-    active = (
-        db.execute(
-            select(DriveAccount)
-            .where(DriveAccount.enabled.is_(True), DriveAccount.runtime_status == "active")
-            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
-        )
-        .scalars()
-        .first()
-    )
-    if active is not None:
-        return active
-    return (
-        db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True)).order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc()))
-        .scalars()
-        .first()
-    )
+def _pick_any_default_account(db: Session) -> Any | None:
+    return pick_any_default_account(db)
 
 
-def _get_active_account(db: Session, account_name: str) -> DriveAccount | None:
-    name = str(account_name or "").strip()
-    if not name:
-        return None
-    active = (
-        db.execute(
-            select(DriveAccount).where(
-                DriveAccount.enabled.is_(True),
-                DriveAccount.name == name,
-                DriveAccount.runtime_status == "active",
-            )
-        )
-        .scalars()
-        .first()
-    )
-    if active is not None:
-        return active
-    return (
-        db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True), DriveAccount.name == name))
-        .scalars()
-        .first()
-    )
+def _get_active_account(db: Session, account_name: str) -> Any | None:
+    return get_active_account(db, account_name)
 
 
 def _bool_is_dir(payload: dict[str, Any]) -> bool:
@@ -370,7 +314,7 @@ def _tv_progress_text(detail: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
-def _task_execution_summary(execution: TaskExecution | None) -> dict[str, Any] | None:
+def _task_execution_summary(execution: Any | None) -> dict[str, Any] | None:
     if execution is None:
         return None
     return {
@@ -383,7 +327,7 @@ def _task_execution_summary(execution: TaskExecution | None) -> dict[str, Any] |
     }
 
 
-def _task_to_dict(db: Session, task: Task) -> dict[str, Any]:
+def _task_to_dict(db: Session, task: Any) -> dict[str, Any]:
     latest_execution = None
     if "executions" in task.__dict__:
         # 集合已被显式装配（列表场景），直接用，空列表就代表没有执行记录。
@@ -392,16 +336,7 @@ def _task_to_dict(db: Session, task: Task) -> dict[str, Any]:
             latest_execution = sorted(loaded, key=lambda x: x.id, reverse=True)[0]
     else:
         # 未装配时只查最近一条：绝不能 getattr(task, "executions") 触发全量懒加载。
-        latest_execution = (
-            db.execute(
-                select(TaskExecution)
-                .where(TaskExecution.task_id == int(task.id))
-                .order_by(TaskExecution.id.desc())
-                .limit(1)
-            )
-            .scalars()
-            .first()
-        )
+        latest_execution = task_executions_repo().get_latest_for_task(db, int(task.id))
     return {
         "id": int(task.id),
         "task_uid": str(task.task_uid),
@@ -431,8 +366,8 @@ class TelegramBotActions:
     def build_status_summary(self) -> dict[str, Any]:
         drama = build_drama_overview(self.db, days=30)
         capacity = build_capacity_overview(self.db)
-        task_total = self.db.execute(select(func.count(Task.id))).scalar_one()
-        task_enabled = self.db.execute(select(func.count(Task.id)).where(Task.enabled.is_(True))).scalar_one()
+        task_total = tasks_repo().count_tasks(self.db)
+        task_enabled = tasks_repo().count_enabled_tasks(self.db)
         return {
             "tasks_total": int(task_total or 0),
             "tasks_enabled": int(task_enabled or 0),
@@ -477,7 +412,8 @@ class TelegramBotActions:
 
     def run_task(self, task_id: int) -> dict[str, Any]:
         task = get_task(self.db, int(task_id))
-        execution = TaskExecutor(self.db).run_task(task)
+        # 执行槽由 Telegram handlers._run_async 提前占用，用例内不再重复占槽。
+        execution = RunTaskUseCase(self.db).run(task, RunPolicy.for_trigger('telegram'))
         self.db.commit()
         self.db.refresh(execution)
         section = build_share_check_section(task, execution)
@@ -489,11 +425,7 @@ class TelegramBotActions:
         return _task_execution_summary(execution) or {}
 
     def list_task_executions(self, task_id: int, *, limit: int = 5) -> list[dict[str, Any]]:
-        rows = (
-            self.db.execute(select(TaskExecution).where(TaskExecution.task_id == int(task_id)).order_by(TaskExecution.id.desc()).limit(int(limit)))
-            .scalars()
-            .all()
-        )
+        rows = task_executions_repo().list_desc(self.db, int(task_id), limit=int(limit))
         return [_task_execution_summary(x) or {} for x in rows]
 
     def search_resources(self, keyword: str, *, drive_type: str | None = None) -> dict[str, Any]:
@@ -640,11 +572,7 @@ class TelegramBotActions:
         candidate_urls = list(dict.fromkeys(candidate_urls))
         task = None
         if candidate_urls:
-            task = (
-                self.db.execute(select(Task).where(Task.shareurl.in_(candidate_urls)).order_by(Task.id.asc()))
-                .scalars()
-                .first()
-            )
+            task = tasks_repo().get_first_by_shareurls(self.db, candidate_urls)
 
         latest_video: dict[str, Any] | None = None
         if preview_item is not None:
@@ -827,11 +755,7 @@ class TelegramBotActions:
         return supported_drive_types()
 
     def list_account_names(self) -> list[str]:
-        rows = (
-            self.db.execute(select(DriveAccount.name).where(DriveAccount.enabled.is_(True)).order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc()))
-            .scalars()
-            .all()
-        )
+        rows = drive_accounts_repo().list_enabled_names(self.db)
         return [str(x) for x in rows if x]
 
     def list_magic_regex_rules(self) -> list[dict[str, str]]:
@@ -1010,7 +934,7 @@ class TelegramBotActions:
         data = resp.get("data") or {}
         if str(data.get("status") or "") == "CONFIRMED" and str(data.get("refresh_token") or ""):
             delete_auth_session(session_id)
-            account = self.db.get(DriveAccount, int(session.account_id))
+            account = drive_accounts_repo().get_account(self.db, int(session.account_id))
             if account is None:
                 raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "驱动账号不存在")
             config = AdapterRegistry.parse_config_json(account.drive_type, account.config_json, account.cookie)

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import forbidden
 from app.core.permissions import PLUGIN_READ, PLUGIN_WRITE
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.services import audit
 from app.services.resource_search import cache_clear
 from app.services.search_plugins import (
@@ -64,8 +64,8 @@ def get_search_plugins(current: CurrentUser = Depends(get_current_user), db: Ses
 def refresh_search_plugins(request: Request, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     _require_admin(current)
     plugins = list_search_plugins(db)
-    _audit(db, request, current, "search_plugin.refresh", "*")
-    db.commit()
+    with transaction(db):
+        _audit(db, request, current, "search_plugin.refresh", "*")
     cache_clear()
     return {"plugins": plugins}
 
@@ -84,8 +84,8 @@ async def post_upload_search_plugin(
     finally:
         await file.close()
     plugins = list_search_plugins(db)
-    _audit(db, request, current, "search_plugin.upload", uploaded["key"])
-    db.commit()
+    with transaction(db):
+        _audit(db, request, current, "search_plugin.upload", uploaded["key"])
     cache_clear()
     return {"uploaded": uploaded, "plugins": plugins}
 
@@ -99,9 +99,9 @@ def patch_search_plugin(
     db: Session = Depends(get_db),
 ):
     _require_admin(current)
-    item = set_search_plugin_enabled(db, key, payload.enabled)
-    _audit(db, request, current, "search_plugin.update", key)
-    db.commit()
+    with transaction(db):
+        item = set_search_plugin_enabled(db, key, payload.enabled)
+        _audit(db, request, current, "search_plugin.update", key)
     cache_clear()
     return item
 
@@ -121,9 +121,9 @@ def post_test_search_plugin(
 def put_search_plugin_config(request: Request, key: str, payload: SearchPluginConfigIn,
                              current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     _require_admin(current)
-    item = save_search_plugin_config(db, key, payload.config)
-    _audit(db, request, current, 'search_plugin.config', key)
-    db.commit()
+    with transaction(db):
+        item = save_search_plugin_config(db, key, payload.config)
+        _audit(db, request, current, 'search_plugin.config', key)
     cache_clear()
     return item
 
@@ -132,8 +132,8 @@ def put_search_plugin_config(request: Request, key: str, payload: SearchPluginCo
 def post_clear_search_plugin_cache(request: Request, key: str,
                                    current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     _require_admin(current)
-    result = clear_search_plugin_cache(db, key)
+    with transaction(db):
+        result = clear_search_plugin_cache(db, key)
+        _audit(db, request, current, 'search_plugin.clear_cache', key)
     cache_clear()
-    _audit(db, request, current, 'search_plugin.clear_cache', key)
-    db.commit()
     return result

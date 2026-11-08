@@ -1,26 +1,22 @@
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.orm import Session
 
-from app.models.tmdb_cache_scheduler_setting import TMDBCacheSchedulerSetting
+from app.application.container import tmdb_cache_scheduler_setting_repo
 from app.services.scheduler_validation import validate_scheduler_setting
 
 
 DEFAULT_TMDB_CACHE_SCHEDULER_SETTING_ID = 1
 
 
-def load_tmdb_cache_scheduler_setting(db: Session) -> TMDBCacheSchedulerSetting | None:
-    return db.get(TMDBCacheSchedulerSetting, DEFAULT_TMDB_CACHE_SCHEDULER_SETTING_ID)
+def load_tmdb_cache_scheduler_setting(db: Session) -> Any:
+    return tmdb_cache_scheduler_setting_repo().get_setting(db)
 
 
-def get_or_create_tmdb_cache_scheduler_setting(db: Session) -> TMDBCacheSchedulerSetting:
-    item = db.get(TMDBCacheSchedulerSetting, DEFAULT_TMDB_CACHE_SCHEDULER_SETTING_ID)
-    if item is not None:
-        return item
-    item = TMDBCacheSchedulerSetting(id=DEFAULT_TMDB_CACHE_SCHEDULER_SETTING_ID)
-    db.add(item)
-    db.flush()
-    return item
+def get_or_create_tmdb_cache_scheduler_setting(db: Session) -> Any:
+    return tmdb_cache_scheduler_setting_repo().get_or_create_setting(db)
 
 
 def update_tmdb_cache_scheduler_setting(
@@ -32,7 +28,7 @@ def update_tmdb_cache_scheduler_setting(
     max_items_per_run: int | None = None,
     only_refresh_linked_tasks: bool | None = None,
     retention_days: int | None = None,
-) -> TMDBCacheSchedulerSetting:
+) -> Any:
     item = get_or_create_tmdb_cache_scheduler_setting(db)
     next_crontab = crontab if crontab is not None else getattr(item, "crontab", None)
     next_timezone = timezone if timezone is not None else getattr(item, "timezone", None)

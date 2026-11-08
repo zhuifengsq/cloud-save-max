@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import CurrentUser, get_current_user, load_user_roles_permissions
 from app.core.settings import settings
-from app.db.session import get_db
+from app.db.session import commit, get_db
 from app.schemas.auth import LoginOut, MeOut, TokenOut
 from app.services import audit
 from app.services.auth import authenticate_user, clear_refresh_cookie, refresh_access_token, revoke_refresh_token, issue_tokens
@@ -32,7 +32,7 @@ def login(
         user_agent=request.headers.get("user-agent"),
         success=True,
     )
-    db.commit()
+    commit(db)
 
     return LoginOut(
         access_token=access_token,
@@ -58,7 +58,7 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     #     user_agent=request.headers.get("user-agent"),
     #     success=True,
     # )
-    db.commit()
+    commit(db)
 
     return TokenOut(access_token=access_token, expires_in=settings.access_token_expires_seconds)
 
@@ -76,7 +76,7 @@ def logout(request: Request, response: Response, current: CurrentUser = Depends(
         user_agent=request.headers.get("user-agent"),
         success=True,
     )
-    db.commit()
+    commit(db)
 
     return {"ok": True}
 

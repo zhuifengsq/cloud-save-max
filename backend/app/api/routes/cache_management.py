@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
 from app.core.settings import settings
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.schemas.cache_management import (
     CacheClearOut,
     CacheDeleteOut,
@@ -112,8 +112,8 @@ def delete_share_preview_batch_cache_item(
     shareurl: str = Query(..., min_length=8, max_length=2048),
     db: Session = Depends(get_db),
 ):
-    deleted = delete_preview_batch_cache_item(db, shareurl=shareurl)
-    db.commit()
+    with transaction(db):
+        deleted = delete_preview_batch_cache_item(db, shareurl=shareurl)
     return CacheDeleteOut(deleted=int(deleted))
 
 
@@ -126,12 +126,12 @@ def post_share_preview_batch_cache_purge(
     payload: SharePreviewBatchCachePurgeIn = Body(...),
     db: Session = Depends(get_db),
 ):
-    if bool(payload.expired_only):
-        deleted = purge_expired_preview_batch_cache(db)
-    else:
-        retention = int(payload.retention_seconds or 0) or int(settings.tasks_share_preview_batch_db_cache_retention_seconds or 0) or 0
-        deleted = purge_old_preview_batch_cache(db, retention_seconds=retention)
-    db.commit()
+    with transaction(db):
+        if bool(payload.expired_only):
+            deleted = purge_expired_preview_batch_cache(db)
+        else:
+            retention = int(payload.retention_seconds or 0) or int(settings.tasks_share_preview_batch_db_cache_retention_seconds or 0) or 0
+            deleted = purge_old_preview_batch_cache(db, retention_seconds=retention)
     return CachePurgeOut(deleted=int(deleted))
 
 
@@ -181,8 +181,8 @@ def delete_invalid_share_links_item(
     shareurl: str = Query(..., min_length=8, max_length=2048),
     db: Session = Depends(get_db),
 ):
-    deleted = delete_invalid_share_link(db, shareurl=shareurl)
-    db.commit()
+    with transaction(db):
+        deleted = delete_invalid_share_link(db, shareurl=shareurl)
     return CacheDeleteOut(deleted=int(deleted))
 
 
@@ -195,8 +195,8 @@ def post_invalid_share_links_clear(
     payload: InvalidShareLinkClearIn = Body(...),
     db: Session = Depends(get_db),
 ):
-    deleted = clear_invalid_share_links(db, drive_type=payload.drive_type)
-    db.commit()
+    with transaction(db):
+        deleted = clear_invalid_share_links(db, drive_type=payload.drive_type)
     return CachePurgeOut(deleted=int(deleted))
 
 

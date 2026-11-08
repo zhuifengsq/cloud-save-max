@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import load_user_roles_permissions
 from app.core.errors import ApiError
 from app.core.settings import settings
-from app.db.session import get_db
+from app.db.session import commit, get_db
 from app.schemas.auth import LoginOut, MeOut
 from app.schemas.setup import SetupAdminIn, SetupStatusOut
 from app.services import audit
@@ -45,7 +45,7 @@ def post_admin(request: Request, response: Response, payload: SetupAdminIn, db: 
         user_agent=request.headers.get("user-agent"),
         success=True,
     )
-    db.commit()
+    commit(db)
 
     return LoginOut(
         access_token=access_token,

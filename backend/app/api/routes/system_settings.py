@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.models.system_setting import SystemSetting
 from app.schemas.system_settings import SystemSettingOut, SystemSettingUpdateIn
 
@@ -52,21 +52,20 @@ def update_sharer_filter_settings(
     payload: SystemSettingUpdateIn,
     db: Session = Depends(get_db),
 ) -> SystemSettingOut:
-    if payload.preferred_sharers is not None:
-        _set_setting(db, "preferred_sharers", payload.preferred_sharers, "优选分享者列表，多个昵称用竖线分隔")
-    if payload.blocked_sharers is not None:
-        _set_setting(db, "blocked_sharers", payload.blocked_sharers, "屏蔽分享者列表，多个昵称用竖线分隔")
-    if payload.validate_batch_size is not None:
-        v = max(1, min(20, int(payload.validate_batch_size)))
-        _set_setting(db, "validate_batch_size", str(v), "搜索验证并行数")
-    if payload.preview_cache_ttl_seconds is not None:
-        v = max(30, min(3600, int(payload.preview_cache_ttl_seconds)))
-        _set_setting(db, "preview_cache_ttl_seconds", str(v), "文件列表缓存时长（秒）")
-    if payload.search_cache_ttl_seconds is not None:
-        v = max(1, min(3600, int(payload.search_cache_ttl_seconds)))
-        _set_setting(db, "search_cache_ttl_seconds", str(v), "搜索缓存时长（秒）")
-
-    db.commit()
+    with transaction(db):
+        if payload.preferred_sharers is not None:
+            _set_setting(db, "preferred_sharers", payload.preferred_sharers, "优选分享者列表，多个昵称用竖线分隔")
+        if payload.blocked_sharers is not None:
+            _set_setting(db, "blocked_sharers", payload.blocked_sharers, "屏蔽分享者列表，多个昵称用竖线分隔")
+        if payload.validate_batch_size is not None:
+            v = max(1, min(20, int(payload.validate_batch_size)))
+            _set_setting(db, "validate_batch_size", str(v), "搜索验证并行数")
+        if payload.preview_cache_ttl_seconds is not None:
+            v = max(30, min(3600, int(payload.preview_cache_ttl_seconds)))
+            _set_setting(db, "preview_cache_ttl_seconds", str(v), "文件列表缓存时长（秒）")
+        if payload.search_cache_ttl_seconds is not None:
+            v = max(1, min(3600, int(payload.search_cache_ttl_seconds)))
+            _set_setting(db, "search_cache_ttl_seconds", str(v), "搜索缓存时长（秒）")
 
     return SystemSettingOut(
         preferred_sharers=_get_setting(db, "preferred_sharers"),
@@ -111,7 +110,7 @@ def get_filter_rules(db: Session = Depends(get_db)) -> FilterWordRuleListOut:
 @router.put("/filter-rules", response_model=FilterWordRuleListOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
 def replace_filter_rules(payload: FilterWordRuleListOut, db: Session = Depends(get_db)) -> FilterWordRuleListOut:
     rules = [{"name": r.name, "keywords": r.keywords} for r in payload.rules]
-    _save_filter_rules(db, rules)
-    db.commit()
+    with transaction(db):
+        _save_filter_rules(db, rules)
     return payload
 

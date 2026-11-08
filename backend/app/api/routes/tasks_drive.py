@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db
+from app.db.session import commit, get_db
 from app.extensions.runtime.adapter_registry import AdapterRegistry
 from app.extensions.runtime.account_manager import DatabaseAccountManager
 from app.schemas.task_browse import (
@@ -234,5 +234,5 @@ def post_drive_delete(
         success=bool(ok),
         detail=f'drive_type={drive_type or ""} count={len(fids)}',
     )
-    db.commit()
+    commit(db)
     return DriveDeleteOut(ok=bool(ok), message=message or None, deleted=len(fids) if ok else 0)

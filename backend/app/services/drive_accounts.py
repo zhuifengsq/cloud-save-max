@@ -12,27 +12,27 @@ from app.core.errors import ApiError, bad_request, not_found
 from app.extensions.adapters.adapter_factory import AdapterFactory
 from app.extensions.adapters.drive_auth import DriveAuthRequired
 from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.models.drive_account import DriveAccount
+from app.application.container import drive_accounts_repo
 from app.services.drive_account_auth_sessions import create_auth_session
 
 BEIJING_TZ = ZoneInfo('Asia/Shanghai')
 
 
-def list_drive_accounts(db: Session) -> list[DriveAccount]:
-    return db.execute(select(DriveAccount).order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())).scalars().all()
+def list_drive_accounts(db: Session) -> list[Any]:
+    return drive_accounts_repo().list_accounts(db)
 
 
-def get_drive_account(db: Session, account_id: int) -> DriveAccount:
-    account = db.get(DriveAccount, account_id)
+def get_drive_account(db: Session, account_id: int) -> Any:
+    account = drive_accounts_repo().get_account(db, account_id)
     if account is None:
         raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '驱动账号不存在')
     return account
 
 
-def create_drive_account(db: Session, **payload) -> DriveAccount:
+def create_drive_account(db: Session, **payload) -> Any:
     if payload['drive_type'] not in AdapterFactory.get_supported_types():
         raise bad_request('DRIVE_TYPE_INVALID', '不支持的驱动类型')
-    exists = db.execute(select(DriveAccount.id).where(DriveAccount.name == payload['name'])).first()
+    exists = drive_accounts_repo().find_id_by_name(db, name=payload['name'])
     if exists:
         raise bad_request('DRIVE_ACCOUNT_EXISTS', '驱动账号名称已存在')
     config, cookie = _normalize_account_payload(
@@ -40,23 +40,22 @@ def create_drive_account(db: Session, **payload) -> DriveAccount:
         payload.get('config'),
         payload.get('cookie'),
     )
-    account = DriveAccount(
+    account = drive_accounts_repo().new_account(
+        db,
         name=payload['name'],
         drive_type=payload['drive_type'],
         cookie=cookie,
         enabled=payload.get('enabled', True),
         is_default=payload.get('is_default', False),
         capacity_warning_threshold=payload.get('capacity_warning_threshold', 85),
+        config_json=json.dumps(config, ensure_ascii=False),
     )
-    account.config_json = json.dumps(config, ensure_ascii=False)
-    db.add(account)
-    db.flush()
     if account.is_default:
         set_default_drive_account(db, account.id)
     return account
 
 
-def update_drive_account(db: Session, account_id: int, **payload) -> DriveAccount:
+def update_drive_account(db: Session, account_id: int, **payload) -> Any:
     account = get_drive_account(db, account_id)
     for key, value in payload.items():
         if key in {'cookie', 'config'}:
@@ -79,15 +78,15 @@ def update_drive_account(db: Session, account_id: int, **payload) -> DriveAccoun
     return account
 
 
-def set_drive_account_enabled(db: Session, account_id: int, enabled: bool) -> DriveAccount:
+def set_drive_account_enabled(db: Session, account_id: int, enabled: bool) -> Any:
     account = get_drive_account(db, account_id)
     account.enabled = enabled
     return account
 
 
-def set_default_drive_account(db: Session, account_id: int) -> DriveAccount:
+def set_default_drive_account(db: Session, account_id: int) -> Any:
     account = get_drive_account(db, account_id)
-    items = db.execute(select(DriveAccount)).scalars().all()
+    items = drive_accounts_repo().list_all_accounts(db)
     for item in items:
         item.is_default = item.id == account.id
     return account
@@ -95,10 +94,10 @@ def set_default_drive_account(db: Session, account_id: int) -> DriveAccount:
 
 def delete_drive_account(db: Session, account_id: int) -> None:
     account = get_drive_account(db, account_id)
-    db.delete(account)
+    drive_accounts_repo().delete_account(db, account)
 
 
-def probe_drive_account(db: Session, account_id: int) -> DriveAccount:
+def probe_drive_account(db: Session, account_id: int) -> Any:
     account = get_drive_account(db, account_id)
     runtime_config = AdapterRegistry.parse_config_json(account.drive_type, account.config_json, account.cookie)
     runtime_cookie = AdapterRegistry.serialize_config(account.drive_type, runtime_config)
@@ -194,11 +193,11 @@ def supported_drive_types() -> list[dict[str, str]]:
     return AdapterRegistry.supported_drive_types()
 
 
-def resolve_drive_account_config(account: DriveAccount) -> dict:
+def resolve_drive_account_config(account: Any) -> dict:
     return AdapterRegistry.parse_config_json(account.drive_type, account.config_json, account.cookie)
 
 
-def resolve_drive_account_profile(account: DriveAccount) -> dict[str, Any]:
+def resolve_drive_account_profile(account: Any) -> dict[str, Any]:
     if not account.profile_json:
         return {}
     try:
@@ -226,7 +225,7 @@ def extract_capacity_metrics(profile: dict[str, Any]) -> tuple[int | None, int |
     return used_space, total_space, usage_ratio
 
 
-def serialize_drive_account(account: DriveAccount) -> dict[str, Any]:
+def serialize_drive_account(account: Any) -> dict[str, Any]:
     profile = resolve_drive_account_profile(account)
     used_space, total_space, usage_ratio = extract_capacity_metrics(profile)
     return {
@@ -251,7 +250,7 @@ def serialize_drive_account(account: DriveAccount) -> dict[str, Any]:
     }
 
 
-def refresh_drive_account_profiles(db: Session) -> list[DriveAccount]:
+def refresh_drive_account_profiles(db: Session) -> list[Any]:
     accounts = list_drive_accounts(db)
     for account in accounts:
         probe_drive_account(db, account.id)
@@ -300,7 +299,7 @@ def build_capacity_overview(db: Session) -> dict[str, Any]:
     }
 
 
-def _build_account_profile(adapter: Any, account: DriveAccount) -> dict[str, Any] | None:
+def _build_account_profile(adapter: Any, account: Any) -> dict[str, Any] | None:
     profile = adapter.get_account_config()
     if not isinstance(profile, dict):
         return None
@@ -345,71 +344,29 @@ def _normalize_account_payload(
 
 
 
-def get_active_account(db: Session, account_name: str) -> DriveAccount | None:
+def get_active_account(db: Session, account_name: str) -> Any | None:
     """按名称取可用账号：优先 runtime_status=active，取不到再退回 enabled 账号。"""
     name = str(account_name or "").strip()
     if not name:
         return None
-    active = (
-        db.execute(
-            select(DriveAccount).where(
-                DriveAccount.enabled.is_(True),
-                DriveAccount.name == name,
-                DriveAccount.runtime_status == "active",
-            )
-        )
-        .scalars()
-        .first()
-    )
+    active = drive_accounts_repo().find_active_by_name(db, name=name)
     if active is not None:
         return active
-    return (
-        db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True), DriveAccount.name == name))
-        .scalars()
-        .first()
-    )
+    return drive_accounts_repo().find_enabled_by_name(db, name=name)
 
 
 def pick_default_account_name(db: Session, drive_type: str) -> str | None:
     """按网盘类型挑默认账号名（默认账号优先、再按 id 升序），没有可用账号返回 None。"""
-    active = (
-        db.execute(
-            select(DriveAccount)
-            .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type, DriveAccount.runtime_status == "active")
-            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
-        )
-        .scalars()
-        .first()
-    )
+    active = drive_accounts_repo().find_active_by_type(db, drive_type=drive_type)
     if active is not None:
         return active.name
-    fallback = (
-        db.execute(
-            select(DriveAccount)
-            .where(DriveAccount.enabled.is_(True), DriveAccount.drive_type == drive_type)
-            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
-        )
-        .scalars()
-        .first()
-    )
+    fallback = drive_accounts_repo().find_enabled_by_type(db, drive_type=drive_type)
     return None if fallback is None else fallback.name
 
 
-def pick_any_default_account(db: Session) -> DriveAccount | None:
+def pick_any_default_account(db: Session) -> Any | None:
     """不限网盘类型地挑一个默认账号（默认账号优先、再按 id 升序）。"""
-    active = (
-        db.execute(
-            select(DriveAccount)
-            .where(DriveAccount.enabled.is_(True), DriveAccount.runtime_status == "active")
-            .order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc())
-        )
-        .scalars()
-        .first()
-    )
+    active = drive_accounts_repo().find_any_active(db)
     if active is not None:
         return active
-    return (
-        db.execute(select(DriveAccount).where(DriveAccount.enabled.is_(True)).order_by(DriveAccount.is_default.desc(), DriveAccount.id.asc()))
-        .scalars()
-        .first()
-    )
+    return drive_accounts_repo().find_any_enabled(db)

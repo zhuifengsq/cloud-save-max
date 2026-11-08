@@ -610,6 +610,27 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             }
         )
 
+    # 夸克分享被取消/失效时返回的错误码（与 _lead_in_quark_stoken 共用）
+    SHARE_INVALID_CODES = (41004, 41005, 41009, 41012)
+
+    def classify_share_failure(self, response: Dict[str, Any]) -> Dict[str, str]:
+        """把夸克分享校验失败响应归类（生成分享链接检测、任务引流共用）。"""
+        data = response if isinstance(response, dict) else {}
+        code = self._lead_in_to_int(data.get("code"), 0)
+        message = str(data.get("message") or "").strip()
+        if self._lead_in_quark_passcode_issue(data):
+            return {"kind": "passcode", "message": message or "该分享需要提取码"}
+        if any(word in message for word in ("登录", "认证", "Cookie", "cookie", "账号")):
+            return {"kind": "auth", "message": message or "账号登录失败"}
+        if code in self.SHARE_INVALID_CODES or any(
+            word in message
+            for word in ("不存在", "已失效", "失效", "取消", "过期", "违规", "删除")
+        ):
+            return {"kind": "invalid", "message": message or "分享链接不存在或已失效"}
+        if "限流" in message or "频率过高" in message or str(data.get("status")) == "429":
+            return {"kind": "throttled", "message": message or "请求频率过高，请稍后重试"}
+        return {"kind": "unknown", "message": message}
+
     def _lead_in_quark_stoken(
         self, pwd_id: str, passcode: str
     ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -628,7 +649,9 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         if stoken and code in (None, 0, "0") and status in (None, 200, "200"):
             return stoken, None
         message = str(response.get("message") or "").strip()
-        if self._lead_in_quark_passcode_issue(response):
+        verdict = self.classify_share_failure(response)
+        kind = str(verdict.get("kind") or "unknown")
+        if kind == "passcode":
             if not passcode:
                 return None, self._lead_in_error(
                     "LEAD_IN_PASSCODE_REQUIRED",
@@ -638,9 +661,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 "LEAD_IN_PASSCODE_INVALID",
                 f"提取码错误，请检查后重试（{message or '请确认提取码'}）",
             )
-        if code in (41004, 41005, 41009, 41012) or any(
-            word in message for word in ("不存在", "已失效", "失效", "取消", "过期", "违规", "删除")
-        ):
+        if kind == "invalid":
             return None, self._lead_in_error(
                 "LEAD_IN_MATERIAL_UNAVAILABLE",
                 f"素材分享链接不可用：{message or '链接不存在或已失效'}",

@@ -17,6 +17,7 @@ from app.core.errors import ApiError
 from app.core.logging import setup_logging
 from app.core.settings import settings
 from app.middlewares.gzip import GZipMiddleware
+from app.db.backup import backup_before_migrate
 from app.db.session import SessionLocal
 from app.extensions.runtime.telegram_bot_manager import telegram_bot_manager
 from app.extensions.runtime.task_scheduler import task_scheduler_manager
@@ -65,6 +66,8 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # 迁移前先热备：SQLite 的 schema 变更是不可逆的（见 docs/architecture-evolution-plan.md R17）
+        backup_before_migrate()
         _run_db_migrations_if_needed()
         try:
             with SessionLocal() as db:

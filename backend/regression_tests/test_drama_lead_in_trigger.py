@@ -290,7 +290,7 @@ class DramaLeadInTriggerRegressionTests(unittest.TestCase):
             def __init__(self, db):
                 self.db = db
 
-            def run_task(self, task):
+            def run_task(self, task, **kwargs):
                 calls.append(int(task.id))
                 execution = TaskExecution(
                     task_id=int(task.id),

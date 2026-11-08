@@ -5,23 +5,17 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.notification_setting import NotificationSetting
+from app.application.container import notification_settings_repo
 
 
 DEFAULT_NOTIFICATION_SETTING_ID = 1
 
 
-def get_or_create_notification_setting(db: Session) -> NotificationSetting:
-    item = db.get(NotificationSetting, DEFAULT_NOTIFICATION_SETTING_ID)
-    if item is not None:
-        return item
-    item = NotificationSetting(id=DEFAULT_NOTIFICATION_SETTING_ID, config_json=json.dumps({}, ensure_ascii=False))
-    db.add(item)
-    db.flush()
-    return item
+def get_or_create_notification_setting(db: Session) -> Any:
+    return notification_settings_repo().get_or_create_notification_setting(db)
 
 
-def load_notification_config(item: NotificationSetting) -> dict[str, Any]:
+def load_notification_config(item: Any) -> dict[str, Any]:
     if not item.config_json:
         return {}
     try:
@@ -43,7 +37,7 @@ def update_notification_setting(
     db: Session,
     *,
     config: dict[str, Any] | None = None,
-) -> NotificationSetting:
+) -> Any:
     item = get_or_create_notification_setting(db)
     if config is not None:
         config.pop("CONSOLE", None)

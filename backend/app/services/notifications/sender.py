@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.settings import settings
 from app.services.notifications import legacy_notify
 from app.services.notifications.settings import get_or_create_notification_setting, load_notification_config
+
+logger = logging.getLogger(__name__)
 
 
 def _get_channel_enabled_map(config: dict[str, Any]) -> dict[str, bool]:
@@ -74,6 +78,17 @@ def send_runtime(
     merged = dict(legacy_notify.DEFAULT_PUSH_CONFIG)
     merged.update(config or {})
     if not _should_send(merged, title, content):
+        return []
+    if settings.use_notify_queue:
+        # 通知在任务线程/调度线程里是尾部动作，但渠道 HTTP 最坏要等几十秒
+        # （legacy_notify.send 会 join 每个渠道线程）。这里只做配置判断与入队，
+        # 真正的扇出交给通知队列的唯一消费者线程，调用方立即返回。
+        try:
+            legacy_notify.send_async(
+                title, content, ignore_default_config=True, channels=channels, **merged
+            )
+        except Exception:
+            logger.warning("通知入队失败，已跳过本次通知: %s", title, exc_info=True)
         return []
     try:
         return legacy_notify.send(title, content, ignore_default_config=True, channels=channels, **merged)

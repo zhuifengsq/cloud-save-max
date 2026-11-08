@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db
+from app.db.session import commit, get_db
 from app.schemas.drama_lead_in import (
     DramaLeadInOwnDirIn,
     DramaLeadInOwnDirOut,
@@ -68,7 +68,7 @@ def put_drama_lead_in_settings(
             ensure_ascii=False,
         )[:1024],
     )
-    db.commit()
+    commit(db)
     return DramaLeadInSettingsOut(**result)
 
 
@@ -100,7 +100,7 @@ def post_drama_lead_in_own_file_resolve(
             ensure_ascii=False,
         )[:1024],
     )
-    db.commit()
+    commit(db)
     return DramaLeadInOwnFileResolveOut(**result)
 
 
@@ -138,7 +138,7 @@ def post_drama_lead_in_own_file_list(
             ensure_ascii=False,
         )[:1024],
     )
-    db.commit()
+    commit(db)
     return DramaLeadInOwnDirOut(**result)
 
 
@@ -164,5 +164,5 @@ def post_drama_lead_in_scan(
             ensure_ascii=False,
         )[:1024],
     )
-    db.commit()
+    commit(db)
     return DramaLeadInScanOut(**result)

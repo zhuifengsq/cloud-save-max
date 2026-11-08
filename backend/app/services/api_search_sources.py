@@ -9,11 +9,10 @@ from urllib.parse import quote, urlparse
 
 import jmespath
 import requests
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.application.container import resource_search_sources_repo
 from app.core.errors import bad_request, not_found
-from app.models.resource_search_source import ResourceSearchSource
 
 
 API_KEY_PREFIX = "api:"
@@ -73,21 +72,17 @@ def _clean_config(payload: dict[str, Any], previous: dict[str, Any] | None = Non
     return data
 
 
-def _out(row: ResourceSearchSource) -> dict[str, Any]:
+def _out(row: Any) -> dict[str, Any]:
     return {"id": row.id, "enabled": bool(row.enabled), **_config(row)}
 
 
 def list_api_sources(db: Session) -> list[dict[str, Any]]:
-    rows = db.execute(
-        select(ResourceSearchSource)
-        .where(ResourceSearchSource.key.like(f"{API_KEY_PREFIX}%"))
-        .order_by(ResourceSearchSource.id.desc())
-    ).scalars().all()
+    rows = resource_search_sources_repo().list_api_sources(db, key_prefix=API_KEY_PREFIX)
     return [_out(row) for row in rows]
 
 
-def get_api_source(db: Session, source_id: int) -> ResourceSearchSource:
-    row = db.get(ResourceSearchSource, int(source_id))
+def get_api_source(db: Session, source_id: int) -> Any:
+    row = resource_search_sources_repo().get_resource_search_source(db, source_id)
     if row is None or not row.key.startswith(API_KEY_PREFIX):
         raise not_found("SEARCH_API_SOURCE_NOT_FOUND", "搜索源不存在")
     return row
@@ -95,13 +90,12 @@ def get_api_source(db: Session, source_id: int) -> ResourceSearchSource:
 
 def create_api_source(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     config = _clean_config(payload)
-    row = ResourceSearchSource(
+    row = resource_search_sources_repo().create_resource_search_source(
+        db,
         key=f"{API_KEY_PREFIX}{uuid.uuid4().hex[:16]}",
         enabled=bool(payload.get("enabled", True)),
         config_json=json.dumps(config, ensure_ascii=False),
     )
-    db.add(row)
-    db.flush()
     return _out(row)
 
 
@@ -115,8 +109,7 @@ def update_api_source(db: Session, source_id: int, payload: dict[str, Any]) -> d
 
 
 def delete_api_source(db: Session, source_id: int) -> None:
-    db.delete(get_api_source(db, source_id))
-    db.flush()
+    resource_search_sources_repo().delete_resource_search_source(db, get_api_source(db, source_id))
 
 
 def _extract(value: Any, path: str) -> Any:
@@ -217,12 +210,7 @@ def search_api_source(config: dict[str, Any], keyword: str) -> list[dict[str, An
 
 
 def search_enabled_api_sources(db: Session, keyword: str) -> list[dict[str, Any]]:
-    rows = db.execute(
-        select(ResourceSearchSource).where(
-            ResourceSearchSource.key.like(f"{API_KEY_PREFIX}%"),
-            ResourceSearchSource.enabled.is_(True),
-        )
-    ).scalars().all()
+    rows = resource_search_sources_repo().list_enabled_api_sources(db, key_prefix=API_KEY_PREFIX)
     configs = [_config(row) for row in rows]
     results: list[dict[str, Any]] = []
     if not configs:

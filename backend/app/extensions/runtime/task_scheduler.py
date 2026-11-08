@@ -10,6 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
+from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
 from app.core.settings import settings
 from app.db.session import SessionLocal
 from app.models.task import Task
@@ -245,10 +246,11 @@ def run_drama_tasks() -> None:
                         task = db.get(Task, int(task_id))
                         if task is None:
                             break
-                        executor = TaskExecutor(db)
                         execution_started = True
-                        execution = executor.run_task(
+                        # 执行槽仍由上面 reserve 持有；用例只收敛执行参数（见 application/use_cases/run_task.py）。
+                        execution = RunTaskUseCase(db, executor_cls=TaskExecutor).run(
                             task,
+                            RunPolicy.for_trigger('scheduler'),
                             account_manager=account_manager,
                             init_account_for_task=False,
                         )
@@ -297,9 +299,9 @@ def run_tmdb_cache_refresh() -> None:
             if only_linked:
                 # force=False：按各自的 expires_at 判断，没到期的剧不再重拉，
                 # 否则 6 小时一次的定时任务会把所有追剧任务无视 TTL 全部重刷一遍
-                result = refresh_linked_tasks(db, enabled_only=True, max_items=max_items, force=False)
+                result = refresh_linked_tasks(db, enabled_only=True, max_items=max_items, force=False, close_read_tx=True)
             else:
-                result = refresh_expired_cache(db, max_items=max_items, force=True)
+                result = refresh_expired_cache(db, max_items=max_items, force=True, close_read_tx=True)
             deleted = purge_cold_cache(db, retention_days=retention_days)
             db.commit()
         except Exception as e:

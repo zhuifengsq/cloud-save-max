@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.extensions.runtime.adapter_registry import AdapterRegistry
-from app.models.drive_account import DriveAccount
+from app.application.container import drive_accounts_repo
 from app.services.invalid_share_links import list_invalid_shareurls
 
 
@@ -97,13 +97,7 @@ def get_quark_share_author(shareurl: str) -> str | None:
         # 获取夸克账号
         from app.db.session import get_db_session
         with get_db_session() as db:
-            accounts = db.execute(
-                select(DriveAccount).where(
-                    DriveAccount.drive_type == "quark",
-                    DriveAccount.enabled == True,
-                    DriveAccount.runtime_status == "active"
-                )
-            ).scalars().all()
+            accounts = drive_accounts_repo().list_active_by_type(db, drive_type="quark")
             
             if not accounts:
                 return None
@@ -311,14 +305,7 @@ def fetch_task_suggestions(
         link_set.add(url)
         results.append(item)
 
-    enabled_drive_types = set(
-        str(x or "").strip()
-        for x in db.execute(
-            select(DriveAccount.drive_type).where(DriveAccount.enabled.is_(True), DriveAccount.runtime_status == "active")
-        )
-        .scalars()
-        .all()
-    )
+    enabled_drive_types = set(str(x or "").strip() for x in drive_accounts_repo().list_active_drive_types(db))
     enabled_drive_types = {_normalize_drive_type(x) for x in enabled_drive_types}
     enabled_drive_types = {x for x in enabled_drive_types if x}
     if not enabled_drive_types:

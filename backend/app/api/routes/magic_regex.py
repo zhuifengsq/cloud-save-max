@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
-from app.db.session import get_db
+from app.db.session import get_db, transaction
 from app.schemas.magic_regex_rule import MagicRegexRuleListOut, MagicRegexRuleUpsertIn
 from app.services import audit
 from app.services.magic_regex import BUILTIN_VARIABLE_LABELS, delete_rule, list_rules, upsert_rule
@@ -27,18 +27,18 @@ def patch_magic_regex_rule(
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MagicRegexRuleListOut:
-    row = upsert_rule(db, key=key, payload=payload.model_dump(exclude_unset=True))
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="magic_regex.upsert",
-        target_type="magic_regex_rule",
-        target_id=str(row.key),
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-    )
-    db.commit()
+    with transaction(db):
+        row = upsert_rule(db, key=key, payload=payload.model_dump(exclude_unset=True))
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="magic_regex.upsert",
+            target_type="magic_regex_rule",
+            target_id=str(row.key),
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+        )
     return MagicRegexRuleListOut(rules=list_rules(db))
 
 
@@ -46,16 +46,16 @@ def patch_magic_regex_rule(
 def delete_magic_regex_rule(
     request: Request, key: str, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> MagicRegexRuleListOut:
-    delete_rule(db, key=key)
-    audit.write_audit_log(
-        db,
-        actor_user_id=current.user.id,
-        action="magic_regex.delete",
-        target_type="magic_regex_rule",
-        target_id=str(key),
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-    )
-    db.commit()
+    with transaction(db):
+        delete_rule(db, key=key)
+        audit.write_audit_log(
+            db,
+            actor_user_id=current.user.id,
+            action="magic_regex.delete",
+            target_type="magic_regex_rule",
+            target_id=str(key),
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+        )
     return MagicRegexRuleListOut(rules=list_rules(db))

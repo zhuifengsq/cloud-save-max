@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from sqlalchemy.orm import Session
 
-from app.models.audit_log import AuditLog
+from app.application.container import audit_repo
 
 
 def write_audit_log(
@@ -15,15 +17,15 @@ def write_audit_log(
     success: bool = True,
     detail: str | None = None,
 ) -> None:
-    db.add(
-        AuditLog(
-            actor_user_id=actor_user_id,
-            action=action,
-            target_type=target_type,
-            target_id=target_id,
-            ip=ip,
-            user_agent=user_agent,
-            success=success,
-            detail=detail,
-        )
+    """写审计日志（构造与落库细节在 infrastructure 仓储）。"""
+    audit_repo().add_audit_log(
+        db,
+        actor_user_id=actor_user_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        ip=ip,
+        user_agent=user_agent,
+        success=success,
+        detail=detail,
     )

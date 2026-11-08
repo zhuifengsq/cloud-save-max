@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import require_permissions
 from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ
-from app.db.session import get_db
+from app.db.session import commit, get_db
 from app.extensions.adapters.adapter_factory import AdapterFactory
 from app.extensions.runtime.adapter_registry import AdapterRegistry
 from app.extensions.runtime.account_manager import DatabaseAccountManager
@@ -422,7 +422,7 @@ def post_share_preview(payload: SharePreviewIn, db: Session = Depends(get_db)):
 def post_share_preview_batch(payload: SharePreviewBatchIn, db: Session = Depends(get_db)):
     out, changed = preview_share_batch(db, payload)
     if changed:
-        db.commit()
+        commit(db)
     return out
 
 

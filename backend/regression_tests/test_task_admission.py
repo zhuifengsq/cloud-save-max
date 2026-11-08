@@ -70,7 +70,7 @@ def test_sse_disconnect_keeps_shared_slot_and_blocks_other_entries(monkeypatch):
 
     class Executor:
         def __init__(self, db): pass
-        def run_task(self, task, log):
+        def run_task(self, task, log=None, **kwargs):
             effects.append(task.id)
             started.set()
             assert finish.wait(2)
