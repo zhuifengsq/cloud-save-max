@@ -2057,12 +2057,16 @@ onBeforeUnmount(() => {
   background: rgba(245, 158, 11, 0.16);
 }
 
+/* 失败行底色必须是「不透明的卡片色 + 红色薄染」：
+   表格横向滚动时，被固定操作列盖住的「完结」「状态」两列（连载 / 启用 标签）会从半透明底色里透出来。 */
 .task-table-card :deep(.task-row--failed) td.el-table__cell {
-  background: rgba(239, 68, 68, 0.045);
+  background-color: var(--card);
+  background-image: linear-gradient(rgba(239, 68, 68, 0.045), rgba(239, 68, 68, 0.045));
 }
 
 .task-table-card :deep(.task-row--failed:hover) td.el-table__cell {
-  background: rgba(239, 68, 68, 0.08);
+  background-color: var(--card);
+  background-image: linear-gradient(rgba(239, 68, 68, 0.08), rgba(239, 68, 68, 0.08));
 }
 
 .task-table-card :deep(.task-row--failed) td.el-table__cell:first-child {
