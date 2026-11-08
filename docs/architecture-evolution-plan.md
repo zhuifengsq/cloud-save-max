@@ -1226,6 +1226,38 @@ python -c "import app.main; print('import ok')"
 ~~~
 
 `backend/.layering-baseline.json` 已刷新为 `{"violations": 115, "deferred_imports": 63, "cycles": 0}`。
+### 10.17 S5 完成（2026-11-09）：持久化搬迁、违规归零、垫片删除
+
+**S5 收尾与固化全部落地。** 分层门禁从「预算 115」收敛到 **violations=0 / cycles=0**，
+115 个 `Legacy shim` 垫片文件已删除，旧 `app/services` / `app/extensions` / `app/models` /
+`app/db` / `app/thirdparty` / `app/_compat` 目录整体移除。
+
+| 项目 | 结果 |
+| --- | --- |
+| 持久化搬迁 | `app/models/**`、`app/db/**` → `app/infrastructure/persistence/**`；`LAYER_OF_PREFIX` 收敛为 `app.infrastructure.persistence → persistence` |
+| 请求作用域依赖 | `app/application/container.py` 顶部 re-export `SessionLocal/commit/get_db/transaction`，26 个路由改从装配点导入 |
+| 基础设施装配 | container 新增 18 个访问器（adapter_factory/task_executor_cls/task_scheduler/…），替换 48 处 `app.infrastructure.*` 直连 import |
+| 路由持久化下沉 | 8 个路由文件（audit_logs/dashboard/drive_accounts/system_settings/task_templates/tasks/tasks_stream/tmdb_cache）全部改走仓储，删除 model import |
+| 应用层去持久化 | drama_lead_in / resource_search / share_preview_batch 改走仓储与 `db_session`；DTO 下沉 `app/application/dto/` |
+| 认证拆分 | `app/application/auth_context.py` + `app/api/deps.py`，删除 `app/core/deps.py`（platform→persistence 4 条归零） |
+| 分享预览下沉 | `app/application/share_preview.py::preview_share(payload, db)`；`tasks_share.py` 449→77 行 |
+| 显式例外 | `scripts/check_layering.py` 新增 `DOCUMENTED_EXCEPTIONS`：`app.application.tmdb_cache → app.infrastructure.persistence`（读写混合 + writer engine，§10.3 决策 5），单独打印、不计 violations |
+| 环 | `scripts/check_layering.py` 的 SCC 计算排除 composition-root 边（装配点惰性 import 不再被误判成 27 模块环） |
+| 垫片 | 删除 115 个 Legacy shim + `regression_tests/test_compat_shims.py`（该护栏已完成使命） |
+
+**验证（2026-11-09，cwd=backend，PYTHONPATH=.，XXM_TESTING=1）：**
+- `python -m pytest tests regression_tests -q` → **489 passed, 2 skipped**（较 S4 的 493 少 5 项 = 删除的 `test_compat_shims.py`）。
+- `python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json` → `modules=246 internal_imports=709 deferred_imports=84 violations=0 import_cycles=0`，exit 0。
+- `python -c "import app.main"` → ok。
+- 基线已刷新：`backend/.layering-baseline.json` = `{"violations":0,"deferred_imports":84,"cycles":0}`。
+
+**S5-3 遗留（不影响上线，可后续单独推进）：** application/queries 显式拆分（现查询散在服务函数里）、
+前端契约 golden 快照（tasks/tasks_share/tasks_stream 响应模型）、3 篇 ADR（tmdb 专项 / 准入端口化 / 单进程声明）。
+
+**说明：** 本轮改动与用户工作区未提交文件交错，仍**未做任何 git commit**（沿用历史约定）；
+`git add/commit` 仍需用户确认后再执行。
+
+---
 ## 附录 A：现状 → 目标目录映射（可直接当搬迁清单）
 
 | 现状路径 | 目标路径 | 所属阶段 | 备注 |

@@ -3,14 +3,14 @@
 > 适用对象：所有要改 `backend/app/` 的人。主方案见 [架构演进方案](../architecture-evolution-plan.md)（§3.1 分层规则、§3.6 事务模型、§9 阶段计划），
 > 现状 → 目标目录的逐模块映射见其 [附录 A](../architecture-evolution-plan.md#附录-a现状--目标目录映射可直接当搬迁清单)，本文不复述。
 >
-> 当前状态：**S4 全部完成（6/6 批，2026-11-09）**，只剩 S5 收尾。S0–S3 全部完成：路由层 0 处裸 `db.commit()`、22 个仓储经
+> 当前状态：**S5 全部完成（2026-11-09）**。S0–S3 全部完成：路由层 0 处裸 `db.commit()`、22 个仓储经
 > `app/application/container.py` 装配、提交点登记预算 95 处、6 个端口（KeyedLock / SingleFlight / Clock / TaskRunUseCase /
 > DriveGateway / RateLimiter+TokenManager）已进生产路径、schema 漂移门禁已进 CI。S4 完成「查询链路 presenter 下沉 + 响应契约
 > golden」「扫码会话回收」「账号快照缓存 + 按账户限速 + 令牌刷新 single-flight」「网盘网关端口实现与装配（薄语义层）」
 > 「物理搬目录 5 批」（`services/`→`application/`、`extensions/adapters/`→`infrastructure/drive/`、
 > `extensions/search_plugins/`→`infrastructure/search/`，旧路径留 84 个垫片）。回归 **493 绿**、分层违规 115、环 0。
 > 门禁已把 `app.application` / `app.infrastructure` 前缀登记为真实层，装配点（`main` / `container` / `factories`）单独豁免。
-> 未完成：`models/``db/` 仍原地（persistence 内的迁移单列 S5）、`domain/` 实体未建、`application/queries` 未拆、垫片待一个版本后删。
+> 未完成（S5 收尾后的非阻塞项）：`domain/` 实体化、`application/queries` 显式拆分、前端契约 golden 快照、3 篇 ADR（tmdb 专项 / 准入端口化 / 单进程声明）。持久化已迁 `app/infrastructure/persistence/`，115 个旧垫片已删除。
 
 ## 1. 四层 + 横切层（唯一契约）
 
