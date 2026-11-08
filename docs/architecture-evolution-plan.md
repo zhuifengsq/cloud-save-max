@@ -1209,7 +1209,7 @@ shim 形态固定：旧文件只留 docstring（「新路径：…；删除时�
 | --- | --- | --- |
 | `infrastructure/persistence/{models,repositories,session,uow}` | `app/models`、`app/db`、`infrastructure/persistence/repositories` | models/db 仍是旧路径：它们是 26 个 ORM 模型 + 全局 Session 工厂，搬迁影响 alembic/env.py、14 处测试 `create_all`、`db/base.py` 的模型注册；建议单独一批做，且先补 schema 迁移演练 |
 | `domain/{task,drive,drama}` 实体与值对象 | `app/domain/ports/*` 8 个 Protocol 已有，实体仍在各处 dict | 领域模型化属 S5 重构，不是搬目录 |
-| `application/queries` 读模型 | 查询仍在 `application/tasks.py` 等服务函数 | 可等前端契约 golden 建立后再拆 |
+| `application/queries` 读模型 | **已完成（§10.18）**：`application/queries/{task_views,audit_logs}.py` + presenter 纯函数化 | 视图是 frozen dataclass（无 ORM/无 Session），列表查询条数与任务数无关 |
 | `_compat/` 作为 shim 宿主 | `_compat` 只是清点清单，垫片仍在旧路径 | 垫片放旧路径才能让旧 import 直接命中；二次跳转会多一层导入延迟，收益为零 |
 
 #### 10.16.4 验收（2026-11-09 实测）
@@ -1251,11 +1251,135 @@ python -c "import app.main; print('import ok')"
 - `python -c "import app.main"` → ok。
 - 基线已刷新：`backend/.layering-baseline.json` = `{"violations":0,"deferred_imports":84,"cycles":0}`。
 
-**S5-3 遗留（不影响上线，可后续单独推进）：** application/queries 显式拆分（现查询散在服务函数里）、
-前端契约 golden 快照（tasks/tasks_share/tasks_stream 响应模型）、3 篇 ADR（tmdb 专项 / 准入端口化 / 单进程声明）。
+**S5-3 遗留：全部完成（2026-11-09）。** ~~application/queries 显式拆分~~ **§10.18**、
+~~前端契约 golden 快照~~ **§10.19**、~~3 篇 ADR~~ **§10.20**（`docs/architecture/adr/0001-0003`）。
+方案侧到此收口，后续动代码只需守住 §6.1 指标与 §7 风险清单。
 
 **说明：** 本轮改动与用户工作区未提交文件交错，仍**未做任何 git commit**（沿用历史约定）；
 `git add/commit` 仍需用户确认后再执行。
+
+### 10.18 非阻塞小项 ①：`application/queries` 显式拆分（2026-11-09）
+
+**目标（§4.3 验收口径）**：路由只依赖 `application/queries` 的读模型，不再自己编排「查什么、怎么拼」；
+响应模型仍由 `api/presenters/` 负责，响应 JSON 逐字节不变。
+
+| 位置 | 内容 |
+| --- | --- |
+| `backend/app/application/queries/__init__.py` | 出口：视图类型 + 查询函数 |
+| `backend/app/application/queries/task_views.py` | `TaskExecutionView` / `TaskView` / `TaskSchedulerSettingView`（frozen dataclass，纯值，无 ORM 无 Session）；`execution_view()` / `task_view()` / `task_detail_view()` / `list_task_views()` / `list_recent_execution_views()` / `scheduler_view()` |
+| `backend/app/application/queries/audit_logs.py` | `AuditLogView` + `list_audit_log_views(db, page, page_size, q, action, success)` |
+| `backend/app/api/presenters/task.py` | 由「接 Session 的装配函数」改为纯函数 `task_out(view)` / `execution_out(view)` / `scheduler_out(view)`，不再 import Session / tmdb_view / drama_update_progress |
+| `backend/app/api/presenters/audit_log.py` | `audit_log_item(view)` / `audit_log_list(views, page, page_size, total)` |
+| 路由 | `routes/tasks.py::get_tasks` 由 15 行编排变 1 行（`[task_out(v) for v in list_task_views(db)]`）；post/patch/status 用 `task_detail_view()`；`routes/tasks_stream.py` 两处 SSE done 用 `execution_out(execution_view(execution))`；`routes/audit_logs.py::get_audit_logs` 变两行 |
+| 测试改造 | `regression_tests/test_task_presenter_contract.py` 与 `tests/test_drama_lead_in.py` / `test_drama_lead_in_core.py` / `test_drama_lead_in_own_file_e2e.py` 共 6 处调用改为 `task_out(task_view(...))`，断言值一行未改 |
+| 新增护栏 | `regression_tests/test_task_queries.py`（4 项）、`regression_tests/test_audit_log_query.py`（2 项） |
+
+**保持不变（由回归测试逐字锁定）**：`TaskOut` 22 字段及其顺序、executions 固定 3 条、
+`lead_in` 默认 `{"state": "none", "last_added_at": None}`、`addition/extra/adapter_snapshot` 的 JSON 容错、
+SSE `done` 事件里 `execution` 的字段、`AuditLogListOut` 的 `{page,page_size,total,items}`。
+
+**N+1 护栏怎么测**（`test_task_queries.py::test_list_task_views_query_count_is_independent_of_task_count`）：
+在 tmp SQLite 上挂 `before_cursor_execute` 计 SELECT 条数，3 个任务与 6 个任务各跑一次，
+断言两次条数相同且 ≤8。实测两次都是 **6 条**（任务、executions 窗口 ID、executions 行、TMDB status、
+TMDB payload、引流摘要）——以后谁在列表里顺手加一次逐条查询，这条断言当场变红。
+另一条断言锁定「截断归属」：查询层不截断（显式传 6 条就保留 6 条），**只由 presenter 截成 3 条**。
+
+**验证（2026-11-09，cwd=backend，PYTHONPATH=.，XXM_TESTING=1）**
+
+~~~bash
+python -m pytest tests regression_tests -q
+# 495 passed, 2 skipped in 10.13s      （489 → 495，+6 项新护栏）
+
+python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json
+# modules=250 internal_imports=719 deferred_imports=84 violations=0 import_cycles=0   (exit 0)
+
+python -c "import app.main; print('import ok')"
+~~~
+
+- 门禁变化：modules 246→250、internal_imports 709→719（queries 包 + 两个 presenter 的合法依赖边），
+  violations / cycles 保持 **0**，`backend/.layering-baseline.json` 无需调整。
+- 依赖方向：`presentation → application`（presenter 只读视图）与 application 内部自引用，均为 §3.1 允许方向。
+
+**为什么视图放 `application/queries` 而不是 `api/presenters`**：§3.1 规定 application 不得 import presentation，
+所以视图不能直接是 `app.schemas` 里的响应模型；反过来 presenter 依赖 application 是允许方向。
+视图因此与 `application/dto/` 同层（值对象，非 ORM），presenter 只做 1:1 映射。
+
+### 10.19 非阻塞小项 ②：前端契约 golden 快照（2026-11-09）
+
+**为什么做**：重构期真正的破坏往往不报错——字段改名、字段消失、SSE 少一个事件、错误体多包一层，
+后端测试全绿、前端静默显示空白。本项把「契约」变成可 diff 的文件，两侧任一方改动都必须同时改 golden。
+
+| 交付物 | 内容 |
+| --- | --- |
+| `backend/regression_tests/test_frontend_contract_golden.py` | 304 行 / 6 项测试：后端模型契约、前端类型契约、两侧字段对齐、SSE 线格式、`[DONE]` 哨兵、错误体 |
+| `backend/regression_tests/golden/frontend_contract.json` | 8,647 B 快照：10 个后端模型的字段+类型+顺序、`frontend/src/types/tasks.ts` 的 15 个类型字段集合、SSE 逐字节文本、错误体 |
+
+**锁定的四类契约**
+
+1. **后端响应模型**（字段名 + 注解 + 声明顺序）：`TaskOut`（22 字段）、`TaskExecutionOut`、`TaskShareLinkOut`、
+   `TaskSchedulerSettingOut`、`SharePreviewOut` / `SharePreviewItemOut`（20 字段）/ `SharePreviewBatchOut` /
+   `SharePreviewBatchItemOut` / `DriveBrowseOut` / `DriveBrowseItemOut`。
+2. **前端类型**（`frontend/src/types/tasks.ts` 全部 15 个 `export type` 的字段集合）：用括号深度扫描只取顶层字段，
+   嵌套内联对象（`drama_update_progress`、`latest_video`）不误判。
+3. **SSE 线格式**：不是读常量，而是真的跑一遍 `tasks_stream._stream_response()`（假队列 + `asyncio` 收 chunk），
+   逐字节锁死 `event: init|log|stage|done\ndata: {...}\n\n`、`ensure_ascii=False`（中文原样）、空闲 `": ping\n\n"`、
+   `text/event-stream` 与 `Cache-Control/X-Accel-Buffering` 头；`tasks_share` 的 `data: [DONE]` 哨兵单独锁。
+4. **错误体**：`ApiError` → `{code, message, detail}` + 状态码；`RequestValidationError` → 422 + `VALIDATION_ERROR`；
+   未捕获异常 → 500 且**只有** `{code, message}`。校验错误的 `detail` 是 `str(exc)`、随 pydantic 版本变，故意不锁内容只锁键顺序。
+
+**「后端有、前端没有」的差异必须登记理由**（`DRIFT_ALLOWLIST`）：
+
+| 前端类型 | 未消费字段 | 理由 |
+| --- | --- | --- |
+| `SharePreviewItem` | `filtered_by_file_filter` / `filtered_by_file_date` / `filtered_by_folder` / `filtered_by_search` / `priority_match` | 后端过筛/优先级标记，前端预览列表不渲染（按 `name_re` 着色） |
+| `SharePreviewBatchItem` | `share_author_name` | 批量预览不展示分享者名，单条预览才展示 |
+
+白名单是**精确匹配**而非「≥」：前端哪天开始消费某个字段，这条登记立刻失效并变红，逼着删掉僵尸条目。
+
+**负向自测（改坏能被抓到，已实测 3 个场景）**
+
+~~~text
+前端删掉 TaskOut 已有字段  → "TaskItem ↔ TaskOut: 后端多出未登记字段 ['taskname']"
+前端补上白名单里的字段    → "…白名单里已失效的 ['filtered_by_search']"（必须删登记）
+后端删掉前端在用的字段    → "TaskItem ↔ TaskOut: 前端多出未登记字段 ['lead_in']"
+~~~
+
+**更新方式**（只在确认契约变更时）：`UPDATE_CONTRACT_GOLDEN=1 python -m pytest regression_tests/test_frontend_contract_golden.py -q`，
+然后把 golden 的 diff 与后端/前端改动放在同一个提交里审。
+
+**验证（2026-11-09，cwd=backend，PYTHONPATH=.，XXM_TESTING=1）**
+
+~~~bash
+python -m pytest tests regression_tests -q
+# 501 passed, 2 skipped in 10.34s      （495 → 501，+6 项）
+
+python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json
+# modules=250 internal_imports=719 deferred_imports=84 violations=0 import_cycles=0  (exit 0)
+
+python -c "import app.main; print('import ok')"
+~~~
+
+CI 覆盖：`docker-publish` 的 backend job 在仓库根 checkout 后以 `working-directory: backend` 跑
+`pytest regression_tests`，`frontend/` 在同一次 checkout 里，所以这项跨端检查在 CI 中真实生效。
+
+### 10.20 非阻塞小项 ③：3 篇 ADR（2026-11-09）
+
+把「为什么这么做」从方案正文里拆成可单独引用的决策记录，放在 `docs/architecture/adr/`。
+三篇都是**已发生事实的记录**（不是提案），每篇含：背景 / 决策 / 后果 / 已否决的备选 / 重新评估的触发条件 / 代码证据行号。
+
+| ADR | 锁定的决策 | 为什么值得单独记 |
+| --- | --- | --- |
+| [0001 TMDB 写路径例外](architecture/adr/0001-tmdb-cache-writer-isolation.md) | `application/tmdb_cache.py` 保留在 application 层，对 persistence 的 4 条 import 作为 documented exception；不改写为纯 ORM、不整体搬迁 | 这是「分层规则」唯一的显式例外。不写清楚，下一个人会当成遗漏去"修"，而修它会破坏「写连接与读连接分离 + `BoundedSemaphore(2)` 写槽」的稳定性设计 |
+| [0002 准入保留在调用点](architecture/adr/0002-task-admission-stays-at-call-sites.md) | `TaskAdmission.reserve()` 不进 `RunTaskUseCase`；6 个调用点原位保留；用例只归一 `RunPolicy` | 这是对方案 §3.5 原设计的**有意偏离**。理由是可观测契约：收进用例会把同步 409/429 变成 200+failed，破坏前端重试/toast 与 5 项准入回归测试 |
+| [0003 单进程假设](architecture/adr/0003-single-process-deployment-assumption.md) | 只支持 1 个 uvicorn 进程、1 个容器副本；禁止 `--workers`/多副本；扩容走「单写者模式」 | 依赖冻结（禁 Redis/Celery）使跨进程能力不可用，12 处进程内状态因此是**正确性前提**而非缓存优化。这条必须写在部署可见处，否则一次"顺手加 --workers"就是重复转存事故 |
+
+三篇 ADR 的共用结构：**状态 / 背景（含代码证据行号）/ 决策 / 后果（含代价）/ 备选方案与否决原因 / 重新评估的触发条件**。
+「触发条件」一节是让 ADR 可被推翻的唯一入口（例如换 Postgres、执行模型改队列、要求高可用），避免决策变成不可质疑的教条。
+
+**与方案正文的分工**：方案 §3.5 / §10.3 讲「现在长什么样」，ADR 讲「为什么不能那样改，以及什么条件下可以改」；
+CI 与门禁只校验结构（`scripts/check_layering.py` 的 documented exceptions），决策理由靠 ADR 传承。
+
+本项为纯文档改动，无代码变更；验证沿用 §10.19 的同一基线（501 passed / 2 skipped、violations 0、cycles 0、250 模块、`import app.main` ok）。
 
 ---
 ## 附录 A：现状 → 目标目录映射（可直接当搬迁清单）

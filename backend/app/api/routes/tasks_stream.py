@@ -31,6 +31,7 @@ from app.application import audit
 from app.application.notifications.sender import send_runtime
 from app.application.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
 from app.api.presenters.task import execution_out
+from app.application.queries.task_views import execution_view
 from app.application.tasks import get_task
 
 router = APIRouter()
@@ -188,7 +189,7 @@ async def post_run_task_stream(request: Request, task_id: int, current: CurrentU
                         {
                             "status": execution.status,
                             "message": execution.message,
-                            "execution": execution_out(execution).model_dump(mode="json"),
+                            "execution": execution_out(execution_view(execution)).model_dump(mode="json"),
                         },
                     )
                 )
@@ -296,7 +297,7 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
                         {
                             "status": execution.status,
                             "message": execution.message,
-                            "execution": execution_out(execution).model_dump(mode="json"),
+                            "execution": execution_out(execution_view(execution)).model_dump(mode="json"),
                         },
                     )
                 )

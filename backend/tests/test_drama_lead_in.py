@@ -32,6 +32,7 @@ from app.schemas.drama_lead_in import (
 )
 from app.application import drama_lead_in as svc
 from app.api.presenters.task import task_out
+from app.application.queries.task_views import task_view
 
 QUARK_DIR = "/追剧/夸克测试剧"
 BAIDU_DIR = "/追剧/百度测试剧"
@@ -759,7 +760,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         self.assertEqual(confirm_result["status"], "added")
 
         summary_map = svc.load_lead_in_summary_map(self.db, [self.quark_task.id])
-        task_payload = task_out(self.db, self.quark_task, lead_in_map=summary_map)
+        task_payload = task_out(task_view(self.db, self.quark_task, lead_in_map=summary_map))
         dumped = task_payload.model_dump()
         lead_in = dumped["lead_in"]
         self.assertEqual(set(lead_in), {"state", "last_added_at"})

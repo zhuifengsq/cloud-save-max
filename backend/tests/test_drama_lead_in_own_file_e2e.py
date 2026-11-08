@@ -39,6 +39,7 @@ from app.schemas.drama_lead_in import (
 )
 from app.application import drama_lead_in as svc
 from app.api.presenters.task import task_out
+from app.application.queries.task_views import task_view
 
 DRIVE_TYPE = "mockown"
 MATERIAL_ACCOUNT = "own-account"
@@ -477,7 +478,7 @@ class DramaLeadInOwnFileE2ETests(unittest.TestCase):
         self._confirm(self.task, token)
 
         summary_map = svc.load_lead_in_summary_map(self.db, [self.task.id])
-        task_dump = task_out(self.db, self.task, lead_in_map=summary_map).model_dump()
+        task_dump = task_out(task_view(self.db, self.task, lead_in_map=summary_map)).model_dump()
         self.assertEqual(set(task_dump["lead_in"].keys()), {"state", "last_added_at"})
         self.assertEqual(task_dump["lead_in"]["state"], "added")
         self.assertIsNotNone(task_dump["lead_in"]["last_added_at"])

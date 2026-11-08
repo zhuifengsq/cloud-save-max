@@ -8,8 +8,9 @@ from app.api.deps import require_permissions
 from app.core.permissions import AUDIT_READ, AUDIT_WRITE
 from app.application.container import get_db, transaction
 from app.application.container import audit_repo
-from app.schemas.audit_log import AuditLogItemOut, AuditLogListOut
-from app.application.audit_logs import list_audit_logs
+from app.schemas.audit_log import AuditLogListOut
+from app.api.presenters.audit_log import audit_log_list
+from app.application.queries.audit_logs import list_audit_log_views
 
 
 router = APIRouter()
@@ -46,24 +47,9 @@ def get_audit_logs(
     success: bool | None = None,
     db: Session = Depends(get_db),
 ):
-    rows, total = list_audit_logs(db, page=page, page_size=page_size, q=q, action=action, success=success)
-    items = [
-        AuditLogItemOut(
-            id=row.id,
-            actor_user_id=row.actor_user_id,
-            actor_username=username,
-            action=row.action,
-            target_type=row.target_type,
-            target_id=row.target_id,
-            ip=row.ip,
-            user_agent=row.user_agent,
-            success=bool(row.success),
-            detail=row.detail,
-            created_at=row.created_at,
-        )
-        for row, username in rows
-    ]
-    return AuditLogListOut(page=page, page_size=page_size, total=total, items=items)
+    # 查询口径收在 application/queries，路由只做视图 → 响应模型（presenter）。
+    views, total = list_audit_log_views(db, page=page, page_size=page_size, q=q, action=action, success=success)
+    return audit_log_list(views, page=page, page_size=page_size, total=total)
 
 
 @router.delete("", dependencies=[Depends(require_permissions(AUDIT_WRITE))])

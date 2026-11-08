@@ -13,6 +13,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from app.api.presenters.task import execution_out, scheduler_out, task_out
+from app.application.queries.task_views import execution_view, scheduler_view, task_view
 
 
 def _execution(pid: int, started_at: datetime, *, adapter_snapshot: str | None = None):
@@ -63,7 +64,8 @@ def test_task_out_contract_is_frozen():
         _execution(3, datetime(2026, 11, 1, 12, 0)),
         _execution(4, datetime(2026, 11, 1, 13, 0), adapter_snapshot='{"drive": "quark"}'),
     ]
-    out = task_out(None, item, executions=executions, lead_in_map={7: {"state": "added", "last_added_at": "2026-11-01T00:00:00"}})
+    view = task_view(None, item, executions=executions, lead_in_map={7: {"state": "added", "last_added_at": "2026-11-01T00:00:00"}})
+    out = task_out(view)
 
     # 字段顺序本身是 OpenAPI/前端快照的一部分，锁死。
     assert list(out.model_dump(mode="json").keys()) == [
@@ -141,7 +143,7 @@ def test_task_out_contract_is_frozen():
 def test_task_out_truncates_executions_to_three():
     """前端固定只渲染最近 3 条（历史契约），多出来的必须被截断而不是分页。"""
     executions = [_execution(i, datetime(2026, 11, 1, 10 + i, 0)) for i in range(6)]
-    out = task_out(None, _task(), executions=executions)
+    out = task_out(task_view(None, _task(), executions=executions))
     assert [e.id for e in out.executions] == [5, 4, 3]
 
 
@@ -149,7 +151,7 @@ def test_task_out_defaults_when_lead_in_and_extras_missing():
     item = _task()
     item.addition_json = None
     item.extra_json = None
-    out = task_out(None, item, executions=[])
+    out = task_out(task_view(None, item, executions=[]))
     payload = out.model_dump(mode="json")
     assert payload["addition"] == {}
     assert payload["extra"] == {}
@@ -159,7 +161,7 @@ def test_task_out_defaults_when_lead_in_and_extras_missing():
 
 def test_execution_out_and_scheduler_out_contract():
     e = _execution(1, datetime(2026, 11, 1, 10, 0))
-    assert execution_out(e).model_dump(mode="json") == {
+    assert execution_out(execution_view(e)).model_dump(mode="json") == {
         "id": 1,
         "task_id": 7,
         "status": "failed",
@@ -171,5 +173,5 @@ def test_execution_out_and_scheduler_out_contract():
         "run_log": "line1\nline2",
         "adapter_snapshot": {},
     }
-    sched = scheduler_out(SimpleNamespace(enabled=True, crontab="0 8 * * *", timezone="Asia/Shanghai"))
+    sched = scheduler_out(scheduler_view(SimpleNamespace(enabled=True, crontab="0 8 * * *", timezone="Asia/Shanghai")))
     assert sched.model_dump(mode="json") == {"enabled": True, "crontab": "0 8 * * *", "timezone": "Asia/Shanghai"}

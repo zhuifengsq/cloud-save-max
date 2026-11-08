@@ -1,0 +1,319 @@
+{
+  "_comment": "由 regression_tests/test_frontend_contract_golden.py 生成；改动请连同 diff 一起提交",
+  "backend_models": {
+    "TaskOut": {
+      "id": "<class 'int'>",
+      "task_uid": "<class 'str'>",
+      "task_type": "<class 'str'>",
+      "taskname": "<class 'str'>",
+      "shareurl": "<class 'str'>",
+      "savepath": "<class 'str'>",
+      "pattern": "str | None",
+      "replace": "str | None",
+      "ignore_extension": "<class 'bool'>",
+      "account_name": "str | None",
+      "tmdb_id": "int | None",
+      "tmdb_media_type": "str | None",
+      "tmdb_status": "str | None",
+      "tmdb_is_ended": "bool | None",
+      "drama_update_progress": "app.application.dto.task.DramaUpdateProgressOut | None",
+      "lead_in": "<class 'app.schemas.drama_lead_in.TaskLeadInSummaryOut'>",
+      "enabled": "<class 'bool'>",
+      "addition": "dict[str, typing.Any]",
+      "extra": "dict[str, typing.Any]",
+      "executions": "list[app.schemas.task.TaskExecutionOut]",
+      "created_at": "<class 'datetime.datetime'>",
+      "updated_at": "<class 'datetime.datetime'>"
+    },
+    "TaskExecutionOut": {
+      "id": "<class 'int'>",
+      "task_id": "<class 'int'>",
+      "status": "<class 'str'>",
+      "started_at": "<class 'datetime.datetime'>",
+      "finished_at": "datetime.datetime | None",
+      "tree_summary": "str | None",
+      "message": "str | None",
+      "stage": "str | None",
+      "run_log": "str | None",
+      "adapter_snapshot": "dict[str, typing.Any]"
+    },
+    "TaskShareLinkOut": {
+      "share_url": "<class 'str'>",
+      "share_id": "<class 'str'>",
+      "title": "<class 'str'>",
+      "drive_type": "<class 'str'>",
+      "account_name": "<class 'str'>",
+      "passcode": "str | None",
+      "expires_in_days": "int | None",
+      "saved_at": "str | None"
+    },
+    "TaskSchedulerSettingOut": {
+      "enabled": "<class 'bool'>",
+      "crontab": "<class 'str'>",
+      "timezone": "<class 'str'>"
+    },
+    "SharePreviewItemOut": {
+      "fid": "<class 'str'>",
+      "fid_token": "str | None",
+      "name": "<class 'str'>",
+      "name_re": "str | None",
+      "is_dir": "<class 'bool'>",
+      "updated_at": "typing.Any | None",
+      "size": "int | None",
+      "children_count": "int | None",
+      "file_name": "str | None",
+      "file_name_re": "str | None",
+      "file_name_saved": "str | None",
+      "filtered_by_size": "bool | None",
+      "filtered_by_keyword": "bool | None",
+      "filtered_by_file_filter": "bool | None",
+      "filtered_by_file_date": "bool | None",
+      "filtered_by_folder": "str | None",
+      "filtered_by_search": "bool | None",
+      "priority_match": "bool | None",
+      "dir": "bool | None",
+      "include_items": "int | None"
+    },
+    "SharePreviewOut": {
+      "drive_type": "<class 'str'>",
+      "suggested_account_name": "str | None",
+      "pwd_id": "str | None",
+      "pdir_fid": "str | None",
+      "share_author_name": "str | None",
+      "items": "list[app.application.dto.task_browse.SharePreviewItemOut]"
+    },
+    "SharePreviewBatchItemOut": {
+      "shareurl": "<class 'str'>",
+      "drive_type": "str | None",
+      "ok": "<class 'bool'>",
+      "message": "str | None",
+      "suggested_account_name": "str | None",
+      "pdir_fid": "str | None",
+      "resolved_pdir_fid": "str | None",
+      "latest_video": "app.application.dto.task_browse.SharePreviewBatchLatestOut | None",
+      "share_author_name": "str | None"
+    },
+    "SharePreviewBatchOut": {
+      "items": "list[app.application.dto.task_browse.SharePreviewBatchItemOut]"
+    },
+    "DriveBrowseItemOut": {
+      "fid": "<class 'str'>",
+      "name": "<class 'str'>",
+      "is_dir": "<class 'bool'>",
+      "updated_at": "typing.Any | None",
+      "size": "int | None",
+      "include_items": "int | None",
+      "file_name": "str | None",
+      "dir": "bool | None"
+    },
+    "DriveBrowseOut": {
+      "account_name": "<class 'str'>",
+      "drive_type": "str | None",
+      "dir_path": "<class 'str'>",
+      "exists": "<class 'bool'>",
+      "pdir_fid": "str | None",
+      "items": "list[app.application.dto.task_browse.DriveBrowseItemOut]",
+      "paths": "list[app.application.dto.task_browse.DriveBrowsePathOut]"
+    }
+  },
+  "frontend_types": {
+    "ShareurlUpdateLog": [
+      "at",
+      "id",
+      "message",
+      "new_shareurl",
+      "old_shareurl",
+      "round",
+      "source",
+      "status"
+    ],
+    "TaskExecutionItem": [
+      "adapter_snapshot",
+      "finished_at",
+      "id",
+      "message",
+      "run_log",
+      "stage",
+      "started_at",
+      "status",
+      "task_id",
+      "tree_summary"
+    ],
+    "TaskShareLink": [
+      "account_name",
+      "drive_type",
+      "expires_in_days",
+      "passcode",
+      "saved_at",
+      "share_id",
+      "share_url",
+      "title"
+    ],
+    "TaskItem": [
+      "account_name",
+      "addition",
+      "created_at",
+      "drama_update_progress",
+      "enabled",
+      "executions",
+      "extra",
+      "id",
+      "ignore_extension",
+      "lead_in",
+      "pattern",
+      "replace",
+      "savepath",
+      "shareurl",
+      "task_type",
+      "task_uid",
+      "taskname",
+      "tmdb_id",
+      "tmdb_is_ended",
+      "tmdb_media_type",
+      "tmdb_status",
+      "updated_at"
+    ],
+    "TaskSchedulerSetting": [
+      "crontab",
+      "enabled",
+      "timezone"
+    ],
+    "StopCompletedDramaTasksResponse": [
+      "checked",
+      "matched",
+      "stopped",
+      "task_ids"
+    ],
+    "SharePreviewItem": [
+      "children_count",
+      "dir",
+      "fid",
+      "fid_token",
+      "file_name",
+      "file_name_re",
+      "file_name_saved",
+      "filtered_by_keyword",
+      "filtered_by_size",
+      "include_items",
+      "is_dir",
+      "name",
+      "name_re",
+      "size",
+      "updated_at"
+    ],
+    "SharePreviewResponse": [
+      "drive_type",
+      "items",
+      "pdir_fid",
+      "pwd_id",
+      "share_author_name",
+      "suggested_account_name"
+    ],
+    "SharePreviewBatchItem": [
+      "drive_type",
+      "latest_video",
+      "message",
+      "ok",
+      "pdir_fid",
+      "resolved_pdir_fid",
+      "shareurl",
+      "suggested_account_name"
+    ],
+    "SharePreviewBatchResponse": [
+      "items"
+    ],
+    "DriveBrowseItem": [
+      "dir",
+      "fid",
+      "file_name",
+      "include_items",
+      "is_dir",
+      "name",
+      "size",
+      "updated_at"
+    ],
+    "DriveBrowsePath": [
+      "fid",
+      "name"
+    ],
+    "DriveBrowseResponse": [
+      "account_name",
+      "dir_path",
+      "drive_type",
+      "exists",
+      "items",
+      "paths",
+      "pdir_fid"
+    ],
+    "MagicRegexRule": [
+      "key",
+      "label",
+      "pattern",
+      "replace"
+    ],
+    "MagicRegexResponse": [
+      "rules"
+    ]
+  },
+  "sse": {
+    "run_stream": {
+      "media_type": "text/event-stream",
+      "headers": {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no"
+      },
+      "events": [
+        "done",
+        "init",
+        "log",
+        "stage"
+      ],
+      "chunks": [
+        "event: init\ndata: {\"task_id\": 7, \"taskname\": \"测试任务\", \"started_at\": \"2026-11-09T00:00:00\"}\n\n",
+        "event: log\ndata: {\"line\": \"开始执行\"}\n\n",
+        "event: stage\ndata: {\"stage\": \"transfer\"}\n\n",
+        "event: done\ndata: {\"status\": \"success\", \"execution_id\": 11}\n\n"
+      ],
+      "ping_chunks": [
+        "event: init\ndata: {\"task_id\": 7, \"taskname\": \"测试任务\", \"started_at\": \"2026-11-09T00:00:00\"}\n\n",
+        ": ping\n\n"
+      ],
+      "sse_bytes": "event: stage\ndata: {\"stage\": \"transfer\"}\n\n"
+    },
+    "validate_stream": {
+      "done_sentinel": "data: [DONE]\n\n"
+    }
+  },
+  "error_bodies": {
+    "ApiError": {
+      "status": 404,
+      "keys": [
+        "code",
+        "message",
+        "detail"
+      ],
+      "code": "TASK_NOT_FOUND",
+      "message": "任务不存在",
+      "detail": "id=7"
+    },
+    "RequestValidationError": {
+      "status": 422,
+      "keys": [
+        "code",
+        "message",
+        "detail"
+      ],
+      "code": "VALIDATION_ERROR",
+      "message": "请求参数错误"
+    },
+    "UnhandledException": {
+      "status": 500,
+      "keys": [
+        "code",
+        "message"
+      ],
+      "code": "INTERNAL_ERROR",
+      "message": "服务器内部错误"
+    }
+  }
+}

@@ -27,6 +27,7 @@ from app.infrastructure.persistence.models.task_lead_in import TaskLeadInRecord
 from app.schemas.drama_lead_in import DramaLeadInConfirmIn
 from app.application import drama_lead_in as svc
 from app.api.presenters.task import task_out
+from app.application.queries.task_views import task_view
 
 DIR_PATH = "/追剧/测试剧"
 MATERIAL_NAME = "第01集.mp4"
@@ -535,14 +536,14 @@ class DramaLeadInCoreTests(unittest.TestCase):
         self.assertIsNone(summary[int(second.id)]["last_added_at"])
 
     def test_task_out_includes_lead_in_summary(self) -> None:
-        empty = task_out(self.db, self.task, executions=[])
+        empty = task_out(task_view(self.db, self.task, executions=[]))
         self.assertEqual(empty.lead_in.state, "none")
         self.assertIsNone(empty.lead_in.last_added_at)
 
         token = self._preview_token()
         svc.confirm_task_lead_in(self.db, self.task, token)
         summary = svc.load_lead_in_summary_map(self.db, [int(self.task.id)])
-        serialized = task_out(self.db, self.task, executions=[], lead_in_map=summary)
+        serialized = task_out(task_view(self.db, self.task, executions=[], lead_in_map=summary))
         self.assertEqual(serialized.lead_in.state, "added")
         self.assertIsNotNone(serialized.lead_in.last_added_at)
 

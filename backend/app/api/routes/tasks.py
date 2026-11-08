@@ -39,15 +39,20 @@ from app.application.notifications.sender import send_runtime
 from app.application.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
 from app.application.task_scheduler import get_or_create_task_scheduler_setting, load_task_scheduler_setting, update_task_scheduler_setting
 from app.application.resource_search import fetch_task_suggestions
-from app.application.tasks import create_task, delete_task, get_task, list_recent_executions, list_tasks_recent_executions, set_task_enabled, update_task
+from app.application.tasks import create_task, delete_task, get_task, set_task_enabled, update_task
 from app.application.task_share_links import save_task_share_link
 from app.application.tmdb_settings import get_tmdb_lang_pair
 
 from app.api.routes import tasks_drive, tasks_share, tasks_stream
-from app.application.drama_lead_in import load_lead_in_summary_map
 from app.application.drive_accounts import get_active_account, pick_default_account_name
 from app.api.presenters.task import execution_out, scheduler_out, task_out
-from app.application.tmdb_view import load_tmdb_payload_map, load_tmdb_status_map
+from app.application.queries.task_views import (
+    execution_view,
+    list_task_views,
+    scheduler_view,
+    task_detail_view,
+    task_view,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -95,21 +100,8 @@ def get_task_suggestions(q: str = "", d: int = 0, drive_type: str = "", sf: str 
 
 @router.get('', response_model=list[TaskOut], dependencies=[Depends(require_permissions(TASK_READ))])
 def get_tasks(db: Session = Depends(get_db)):
-    items = list_tasks_recent_executions(db, limit=3)
-    tmdb_status_map = load_tmdb_status_map(db, items)
-    tmdb_payload_map = load_tmdb_payload_map(db, items)
-    # 一次 IN 查询取全部任务的引流摘要，避免列表 N+1。
-    lead_in_map = load_lead_in_summary_map(db, [item.id for item in items])
-    return [
-        task_out(
-            db,
-            item,
-            tmdb_status_map=tmdb_status_map,
-            tmdb_payload_map=tmdb_payload_map,
-            lead_in_map=lead_in_map,
-        )
-        for item in items
-    ]
+    # 查询口径（执行记录 3 条 + TMDB/引流批量装配）收在 application/queries，路由只做映射。
+    return [task_out(view) for view in list_task_views(db, executions_per_task=3)]
 
 
 @router.post("/drama/stop-completed", response_model=StopCompletedDramaTasksOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -146,7 +138,7 @@ def post_task(request: Request, payload: TaskCreateIn, current: CurrentUser = De
         audit.write_audit_log(db, actor_user_id=current.user.id, action='task.create', target_type='task', target_id=str(task.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(task)
     # 新建任务必然没有执行记录，显式传空列表避免一次多余查询。
-    return task_out(db, task, executions=[])
+    return task_out(task_view(db, task, executions=[]))
 
 
 @router.patch('/{task_id:int}', response_model=TaskOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -155,7 +147,7 @@ def patch_task(request: Request, task_id: int, payload: TaskUpdateIn, current: C
         task = update_task(db, task_id, **payload.model_dump(exclude_unset=True))
         audit.write_audit_log(db, actor_user_id=current.user.id, action='task.update', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(task)
-    return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3), lead_in_map=load_lead_in_summary_map(db, [task.id]))
+    return task_out(task_detail_view(db, task))
 
 
 @router.patch('/{task_id:int}/status', response_model=TaskOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -164,7 +156,7 @@ def patch_task_status(request: Request, task_id: int, payload: TaskStatusIn, cur
         task = set_task_enabled(db, task_id, payload.enabled)
         audit.write_audit_log(db, actor_user_id=current.user.id, action='task.status', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True, detail=f'enabled={payload.enabled}')
     db.refresh(task)
-    return task_out(db, task, executions=list_recent_executions(db, task_id, limit=3), lead_in_map=load_lead_in_summary_map(db, [task.id]))
+    return task_out(task_detail_view(db, task))
 
 
 @router.delete('/{task_id:int}', dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -190,7 +182,7 @@ def post_run_task(request: Request, task_id: int, current: CurrentUser = Depends
                     send_runtime(db, DRAMA_NOTIFY_TITLE, section)
             except Exception:
                 pass
-        return execution_out(execution)
+        return execution_out(execution_view(execution))
 
 
 @router.post('/{task_id:int}/share', response_model=TaskShareLinkOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
@@ -270,10 +262,10 @@ def get_task_scheduler_setting(db: Session = Depends(get_db)):
     setting = load_task_scheduler_setting(db)
     if setting is not None:
         # 纯读请求不提交、不 refresh：只回滚只读事务，省掉一次全行查询
-        return scheduler_out(setting)
+        return scheduler_out(scheduler_view(setting))
     with transaction(db):
         setting = get_or_create_task_scheduler_setting(db)
-        payload = scheduler_out(setting)
+        payload = scheduler_out(scheduler_view(setting))
     return payload
 
 
@@ -284,7 +276,7 @@ def patch_task_scheduler_setting(request: Request, payload: TaskSchedulerSetting
         audit.write_audit_log(db, actor_user_id=current.user.id, action='task.scheduler.update', target_type='task_scheduler_setting', target_id=str(setting.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(setting)
     task_scheduler_manager.reload()
-    return scheduler_out(setting)
+    return scheduler_out(scheduler_view(setting))
 
 
 # 拆出去的子路由：分享预览/验证、网盘浏览/建目录/删除（路径与响应保持不变）
