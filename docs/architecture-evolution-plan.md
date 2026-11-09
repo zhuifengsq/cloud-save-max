@@ -1644,6 +1644,62 @@ AFTER : recent_failures=1（stage=generated_share_check）; summary total=19 suc
 
 **用户侧动作**：改动只在工作区，**正在运行的后端需要重启（本地 uvicorn）或重建镜像（Docker）才生效**；生效后点「清理失败日志」，卡片里的历史检测失败会一起消失，但任务列表的「已失效」徽章仍如实保留。
 
+## 10.26 TMDB「后面几集没数据，刷新也刷不出来」：中文记录缺排期，只有 en-US 记录带排期
+
+**现象**（2026-11-09，用户 m05949）：两部在播剧在 TMDB 网站（zh-CN）的第 12 / 13 集卡片上能看到播出日期，但本站刷新后这些集依然没有播出日期、名称只有「第 12 集」这种占位名，于是判断「刷新没有用」。
+
+**先证明刷新到底写没写**：库副本只读 + audit 双证据——`tmdb_media_cache` 的 `fetched_at` 与用户点击时间一致（18:00:28），`audit_logs` 有对应 `tmdb.cache.refresh / force=True async=False` 记录，`fail_count=0`、`last_error` 空。**刷新链路是通的**，问题在上游数据或我们的取数方式。
+
+**再证明上游到底有没有**（2026-11-09 18:0x 直接打真实 TMDB API，剧 279155 谷雨，第 1 季 30 集）：
+
+| 请求 | 第 11 集 | 第 12 集 | 第 13 集 | 第 14 集 |
+| --- | --- | --- | --- | --- |
+| `/tv/279155/season/1?language=zh-CN` | air_date=None | None | None | None |
+| `/tv/279155/season/1?language=xx`（现有 `BASE_LANGUAGE`） | None | None | None | None |
+| `/tv/279155/season/1?language=en-US` | 2026-11-09 | 2026-11-09 | 2026-11-10 | 2026-11-10 |
+| TMDB 网站 zh-CN 页面 HTML | — | 2026 年 11 月 09 日 | 2026 年 11 月 10 日 | 2026 年 11 月 10 日 |
+
+对照组（在播剧 307853，24 集）：`language=xx` 与 `language=en-US` 的 air_date **完全一致**（ep4 均为 11-07、ep9-10 均为 11-10），说明「基础记录 xx」并不总是等于 en-US；**谷雨这类中文剧的基础记录同样缺排期，排期只存在于 en-US 记录里**。
+
+**根因**：`_fetch_tmdb_detail` 只拉 `zh-CN` + `language=xx` 两份季记录，两份对未播出的集都是空 `air_date` → 本站永远拿不到 TMDB 网站展示的那份排期。刷新每次都真的重新拉了，只是拉回来的还是空的。
+
+**修复**（`backend/app/application/tmdb_cache.py`，3 个函数 + 1 个常量）：
+
+| 位置 | 改动 |
+| --- | --- |
+| 模块常量 | 新增 `TMDB_SCHEDULE_LANGUAGE = "en-US"`（只用于补排期） |
+| `_season_missing_air_dates(season)` | 判断这一季里是否还有集缺 `air_date` |
+| `_fill_missing_air_dates(season, schedule)` | 用 en-US 季记录**只补空值**，返回补齐条数；不动名称/简介/其它事实字段 |
+| `_fetch_tmdb_detail` 季循环 | xx 合并后若仍缺日期 → 再拉一次 en-US 季记录并只补空值；日期已完整的季不发这次请求 |
+
+**为什么只补 air_date，不做整份 en-US 替代**：
+
+- en-US 不是「更全的那份」：307853 的 en-US **详情**记录 `next_episode_to_air` 为空、`last_air_date` 还是旧值 11-07，而 zh-CN/xx 是 11-08 ——整份替换会把详情层弄坏；季级只补空值则两边都对。
+- 中文名称/简介不能被 en-US 的「Episode 11」覆盖。
+- 请求预算：只有「仍缺日期」的季才多 1 次请求（已完整排期的 285625 / 292307 不多打），`TMDBClient` 自身还有 600s 请求缓存。
+
+**护栏**（`backend/tests/test_tmdb_locale_merge.py`，3 项）：
+
+| 测试 | 断言 |
+| --- | --- |
+| `test_fetch_tv_detail_fills_missing_air_dates_from_en_us_schedule` | ep11/ep12 补成 2026-11-09；ep10 已播日期不被覆盖；名称仍是「第 11 集」；en-US 季请求只发 1 次 |
+| `test_fill_missing_air_dates_only_fills_blank_values` | 只补 `None`/缺字段；`schedule=None` 不抛错 |
+| `test_no_en_us_season_request_when_dates_are_complete` | 日期完整时不发 en-US 季请求 |
+
+**端到端验证**（真 37 表库副本 + 真实 TMDB API，2026-11-09 18:13）：`get_tmdb_detail_cached(..., force_refresh=True)` → `ok=True`，`seasons_full[0]` 的 ep11=2026-11-09、ep12=2026-11-09、ep13=2026-11-10、ep14=2026-11-10，名称仍是中文「第 11 集」，payload 12,155 → 12,267 B，`update_weekdays` 由残缺样本恢复为 7 天。全量回归 **520 passed / 2 skipped**；门禁 `violations=0 / cycles=0 / 250 模块`。
+
+**顺带的正向效果**：`infer_tv_update_weekdays` 与前端 `frontend/src/utils/dramaSchedule.ts` 都以 `seasons_full` 的 `air_date` 为准 → 追剧日历/「下次更新」的预测同时变准。
+
+**三条教训**：
+
+1. **「刷新没用」要分成两问**：先证明刷新**写没写**（`fetched_at`/audit），再证明**上游有没有**（直接打 API 三种语言）；两者都正常才是产品问题，否则是上游缺数据。
+2. **TMDB 同一集有三份记录（翻译 / 基础 xx / en-US），是字段级互补而非包含关系**：合并策略必须「字段级只补空值」，任何整份择一都会在别的剧上翻车。
+3. **「网站有、API 没有」不等于我们错了**：截图里的日期是 TMDB 网站侧渲染，占位句「暂无英文版的简介…」本身就是 TMDB 在说没数据；但网站能显示的排期有时只在 en-US 记录里，所以要先查三种语言再下结论。
+
+**用户侧动作**：重启后端（本地 uvicorn 重启 / Docker 重建镜像）后再点刷新，第 11 集起就有播出日期与「下次更新」排期；**名称仍是「第 N 集」、没有简介/剧照**是 TMDB 真的没发布这些字段（en-US 也只有 "Episode 11" 占位名），不是本站在丢数据。
+
+---
+
 ---
 
 ## 附录 A：现状 → 目标目录映射（可直接当搬迁清单）

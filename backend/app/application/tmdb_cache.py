@@ -28,6 +28,9 @@ from app.application.container import tmdb_client_cls as _acc_TMDBClient; TMDBCl
 
 MediaType = Literal["movie", "tv"]
 
+# 中文/基础记录里未播出的集常常没有 air_date，en-US 记录才有 TMDB 网站展示的排期，用它只补空值
+TMDB_SCHEDULE_LANGUAGE = "en-US"
+
 _executor = ThreadPoolExecutor(max_workers=4)
 _lock_timeout = timedelta(minutes=10)
 _refresh_jobs: set[tuple] = set()
@@ -473,6 +476,51 @@ def _season_needs_base(season: Any, *, is_latest: bool, cutoff: date) -> bool:
     return False
 
 
+def _season_missing_air_dates(season: Any) -> bool:
+    """季记录里是否存在缺 air_date 的集（未播出的集在中文本地化记录/基础记录里常常整段为空）。"""
+    if not isinstance(season, dict):
+        return False
+    for ep in season.get("episodes") or []:
+        if isinstance(ep, dict) and not str(ep.get("air_date") or "").strip():
+            return True
+    return False
+
+
+def _fill_missing_air_dates(season: dict[str, Any], schedule: Any) -> int:
+    """用 en-US 记录的排期补齐缺失的 air_date，只填空值，不动名称/简介/其它事实字段。
+
+    TMDB 的中文记录（乃至 language=xx 的基础记录）对未播出的集常常没有 air_date，但 en-US 记录
+    带着 TMDB 网站展示的那份排期。已播出的集中文记录自己有日期，这里绝不覆盖。
+    """
+    if not isinstance(schedule, dict):
+        return 0
+    by_number: dict[int, str] = {}
+    for ep in schedule.get("episodes") or []:
+        if not isinstance(ep, dict):
+            continue
+        air = str(ep.get("air_date") or "").strip()
+        if not air:
+            continue
+        try:
+            by_number[int(ep.get("episode_number") or 0)] = air
+        except (TypeError, ValueError):
+            continue
+    filled = 0
+    for ep in season.get("episodes") or []:
+        if not isinstance(ep, dict):
+            continue
+        if str(ep.get("air_date") or "").strip():
+            continue
+        try:
+            number = int(ep.get("episode_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        air = by_number.get(number)
+        if air:
+            ep["air_date"] = air
+            filled += 1
+    return filled
+
 def _get_runtime_tmdb_config(db: Session) -> tuple[bool, str, str, str]:
     with db.no_autoflush:
         setting = db.get(TMDBSetting, DEFAULT_TMDB_SETTING_ID)
@@ -545,6 +593,10 @@ def _fetch_tmdb_detail(
                 base_season = client.get_tv_season(tmdb_id, int(sn), language=TMDB_BASE_LANGUAGE)
                 season = _merge_tv_season_with_base(season, base_season)
             if isinstance(season, dict) and season:
+                # 中文/基础记录里未播出的集没有 air_date，en-US 记录才有排期；只补空值
+                if _season_missing_air_dates(season):
+                    schedule = client.get_tv_season(tmdb_id, int(sn), language=TMDB_SCHEDULE_LANGUAGE)
+                    _fill_missing_air_dates(season, schedule)
                 seasons_full.append(season)
             else:
                 failed.append(int(sn))
