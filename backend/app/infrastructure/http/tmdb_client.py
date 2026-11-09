@@ -146,6 +146,19 @@ class TMDBClient:
             return self._make_request(f"/tv/{tv_id}/season/{season_number}", {"language": language})
         return self._make_request(f"/tv/{tv_id}/season/{season_number}")
 
+    def get_tv_episode(
+        self,
+        tv_id: int,
+        season_number: int,
+        episode_number: int,
+        *,
+        language: str | None = None,
+    ) -> Optional[dict[str, Any]]:
+        path = f"/tv/{tv_id}/season/{season_number}/episode/{episode_number}"
+        if language:
+            return self._make_request(path, {"language": language})
+        return self._make_request(path)
+
     def get_movie_details(self, movie_id: int, *, language: str | None = None) -> Optional[dict[str, Any]]:
         if language:
             return self._make_request(f"/movie/{movie_id}", {"language": language})

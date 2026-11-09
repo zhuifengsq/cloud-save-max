@@ -1698,6 +1698,90 @@ AFTER : recent_failures=1（stage=generated_share_check）; summary total=19 suc
 
 **用户侧动作**：重启后端（本地 uvicorn 重启 / Docker 重建镜像）后再点刷新，第 11 集起就有播出日期与「下次更新」排期；**名称仍是「第 N 集」、没有简介/剧照**是 TMDB 真的没发布这些字段（en-US 也只有 "Episode 11" 占位名），不是本站在丢数据。
 
+## 10.27 TMDB「刷新不同步官网日期」：季列表整季停在旧排期，单集记录才是事实源
+
+**现象**（2026-11-09，用户 m06129）：「今天是太阳雨」在本站第 9 集的播出日期是 11-10，而 TMDB 官网显示 11-09；点刷新也不会变。缓存证据：`tmdb_media_cache` id=31（tv:307853 / zh-CN）`fetched_at=2026-11-09 17:59:32`、`fail_count=0`、`last_error` 空——**刷新确实写了库**，写进去的值和官网不一致。
+
+**证据链一：官网到底显示什么**（`tools.web_fetch https://www.themoviedb.org/tv/307853/season/1?language=zh-CN`，HTTP 200；卡片用 `data-episode-number` + 「2026 年 11 月 09 日」文本提取）：
+
+| 集 | 官网 | 季列表（xx / en-US / zh-TW） | zh-CN 季列表 |
+| --- | --- | --- | --- |
+| 1–3 | 11-06 | 11-06 | 11-06 |
+| 4–5 | 11-07 | 11-07 | 11-06 / 11-07 |
+| 6–7 | 11-08 | 11-08 | 11-07 / 11-08 |
+| 8 | 11-09 | 11-09 | 11-08 |
+| **9** | **11-09** | **11-10** | None |
+| 10–11 | 11-10 | 11-10 | None |
+| 12–13 | 11-11 | 11-11 | None |
+| 14–15 | 11-12 | 11-12 | None |
+| 16 | 11-13 | 11-13 | None |
+| 17 | 11-14 | 11-14 | None |
+| 18–19 | 11-15 | 11-14 / 11-15 | None |
+| 20–22 | 11-16 | 11-15 / 11-15 / 11-16 | None |
+| 23 | 11-17 | 11-17 | None |
+
+**证据链二：单集端点与官网逐集一致**。`/tv/307853/season/1/episode/{n}?language=xx` 拉 1..24 集，**没有一处与官网不同**；同一批请求改用 `language=zh-CN`，出现多个 None（ep9/13/15/16/18/21/23）与 ±1 天偏差（ep4=11-06 而官网 11-07、ep11=11-11 而官网 11-10、ep20=11-15 而官网 11-16）。→ **官网集卡片是按单集记录渲染的，季列表只是聚合快照，会整份过期**。
+
+**对照组（防止回退 §10.26）**：279155「谷雨」的 xx 季列表 ep9–16 = 11-08 / 11-08 / 11-09 / 11-09 / 11-10 / 11-10 / 11-11 / 11-11，与单集端点、与官网**完全一致** → 单集校正对它是 no-op。
+
+**根因**：`_fetch_tmdb_detail` 的事实源是「xx 季列表（再经 en-US 补空值）」。当 TMDB 的季列表整季停在旧排期时，本站把旧值当成事实写进 `seasons_full`，而官网按单集记录渲染 → 用户看到「刷了也没变」。`backend/app/application/tmdb_cache.py:375-389` 的 `_merge_episode_with_base` docstring 里「基础记录才是 TMDB 网站显示的那份」这个假设，对 307853 不成立。
+
+**修复**（2 个文件 + 3 个常量）
+
+| 位置 | 改动 |
+| --- | --- |
+| `backend/app/infrastructure/http/tmdb_client.py` | 新增 `get_tv_episode(tv_id, season_number, episode_number, *, language=None)` → `/tv/{id}/season/{n}/episode/{m}`，沿用既有 language 分支写法 |
+| `backend/app/application/tmdb_cache.py` 常量 | `_EPISODE_DATE_VERIFY_LIMIT = 20`（每次刷新最多 20 次单集请求）、`_EPISODE_DATE_VERIFY_WINDOW_DAYS = 45`、`_EPISODE_DATE_VERIFY_STOP_AFTER = 6` |
+| `backend/app/application/tmdb_cache.py` | 新增 `_correct_episode_air_dates(season, client, tmdb_id, season_number, *, budget=20, stop_after_no_change=6, today=None) -> int`：候选 = 缺 `air_date` 或落在今天 ±45 天内的集，按距今天数由近到远取前 budget 个，用 `language=TMDB_BASE_LANGUAGE` 拉单集记录，**只覆盖 `air_date`** |
+| `_fetch_tmdb_detail` 季循环 | en-US 补空值之后调用校正；`season` 为空/无 episodes 时跳过 |
+
+**关键取舍**
+
+1. **只改 `air_date`**：名称/简介/剧照仍用本地化记录——单集记录同样只有「Episode 9」占位名，整份替换会把中文标题冲掉。
+2. **固定 `language=xx` 拉单集**：zh-CN 单集端点有 None 与 ±1 天偏差（见证据链二），基础记录才是干净的那份。
+3. **窗口 ±45 天 + 预算 20**：已播很久的季（如完结剧）没有候选集 → 一次请求都不发；老剧刷新成本不增加。
+4. **连续 6 集一致就收手**：季列表没跑偏的剧（谷雨这类）只打 6 次请求，而不是把整季翻一遍；实测谷雨刷新耗时 11.59s → 4.26s。
+5. **单集请求异常只跳过该集**：个别集失败不能让整次刷新失败（否则一个 404 就让缓存整体过期不了、或把 `fail_count` 打满）。
+6. **不改 `_merge_episode_with_base` 的历史注释**：它描述的是「详情层 last/next_episode_to_air」的合并策略，仍然正确；季级排期由新函数兜底，两者分工写进新函数 docstring。
+
+**护栏**（`backend/tests/test_tmdb_locale_merge.py`，新增 5 项；`FakeLocaleClient` 补 `get_tv_episode` 返回与基础记录一致的值）
+
+| 测试 | 断言 |
+| --- | --- |
+| `test_stale_season_listing_air_dates_are_corrected_from_episode_records` | 季列表按「每晚 2 集」的旧排期、单集记录是「每晚 1 集」→ `seasons_full` 采信单集记录；名称仍是本地化「第 2 集」；校正只请求 `language=xx` |
+| `test_episode_verify_skips_seasons_that_aired_long_ago` | 全季在 45 天窗口外 → `episode_calls == []` |
+| `test_episode_verify_failure_does_not_break_refresh` | 单集端点全抛错 → 保留季列表原值，整体刷新照常成功 |
+| `test_episode_verify_budget_and_window_limit_requests` | `budget=2` 时只校验第 5（缺日期，最优先）、第 4 集；窗口外的第 99 集不请求、值不被改 |
+| `test_episode_verify_stops_after_repeated_matches` | 连续 6 集一致即收手：20 集的季只打 6 次请求 |
+
+**端到端验证**（真 37 表库副本 + 真实 TMDB API，2026-11-09 20:2x）
+
+~~~text
+=== tmdb_id 307853 ok True spent 8.65 s
+  returned:  {6: '2026-11-08', 7: '2026-11-08', 8: '2026-11-09', 9: '2026-11-09',
+              10: '2026-11-10', 11: '2026-11-10', 12: '2026-11-11', 13: '2026-11-11',
+              14: '2026-11-12', 15: '2026-11-12', 16: '2026-11-13', 17: '2026-11-14',
+              18: '2026-11-15', 19: '2026-11-15'}
+  persisted: 同上（payload_json 与返回值一致）
+=== tmdb_id 279155 ok True spent 4.26 s
+  returned:  {10: '2026-11-08', 11: '2026-11-09', 12: '2026-11-09', 13: '2026-11-10',
+              14: '2026-11-10', 15: '2026-11-11'}   ← 与 §10.26 修复后一致，未回退
+~~~
+
+- 307853 的 ep8/ep9 = 11-09、ep10/11 = 11-10、ep18/19 = 11-15，与官网 HTML 逐集对齐；返回值和落库 payload 一致（写回没丢）。
+- 全量回归 **525 passed / 2 skipped**（520 + 5 项新护栏）；门禁 `modules=250 internal_imports=721 deferred_imports=84 violations=0 import_cycles=0`，exit 0；`import app.main` ok。
+
+**四条教训**
+
+1. **同一集有四份记录，不是三份**：翻译记录、基础记录（xx）、en-US 记录、**单集记录**。前三个是「季级聚合」，会整份过期；单集记录最细，网站按它渲染 → 需要精确排期时只能问单集端点。
+2. **「季列表说 A、官网说 B」要先怀疑聚合层**：本次两侧都没有报错、`fetched_at`/`fail_count` 全部正常，坏的是「我们选了哪个事实源」。
+3. **上游数据不可信要用成本三件套兜住**：窗口（只查近 45 天）+ 预算（≤20 次请求）+ 早收手（连续 6 集一致即停），否则日常刷新会被 30 集×多次的请求拖慢。
+4. **对照组是回归保险**：改数据源前先找一部「排期本来就对」的在播剧（谷雨），修完立刻验证它没被改坏；§10.26 的 en-US 补空值仍然有效，两者是叠加关系不是替代。
+
+**用户侧动作**：重启后端（本地 uvicorn 重启 / Docker 重建镜像）后，点「强制刷新」即可看到与官网一致的逐集日期。代价：正在连载、近 45 天内多集待播的剧，手动强制刷新会多花几秒（最多 20 次单集请求；季列表没跑偏时 6 次就收手），后台定时刷新不受影响。
+
+---
+
 ---
 
 ---

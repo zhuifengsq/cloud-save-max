@@ -65,6 +65,13 @@ class FakeLocaleClient:
             ],
         }
 
+    def get_tv_episode(
+        self, tv_id: int, season_number: int, episode_number: int, *, language: str | None = None,
+    ) -> dict:
+        self.calls.append(("episode", episode_number, language))
+        # 单集记录与基础记录一致（11-07），校验后不该有任何变化
+        return {"episode_number": episode_number, "air_date": "2026-11-07"}
+
 
 @pytest.fixture()
 def db(tmp_path):
@@ -289,3 +296,165 @@ def test_no_en_us_season_request_when_dates_are_complete():
     _fetch_tmdb_detail(client, media_type="tv", tmdb_id=307853, language="zh-CN", poster_language="zh-CN")
 
     assert [call for call in client.calls if call[0] == "season" and call[2] == "en-US"] == []
+
+# ---- 单集记录校正季列表排期（「今天是太阳雨」：季列表整季停在旧排期）----
+
+
+def _iso(days: int) -> str:
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
+class FakeStaleSeasonClient:
+    """季列表整季停在一版旧排期（每晚 2 集），单集记录才是 TMDB 网站显示的那份（每晚 1 集）。"""
+
+    def __init__(self) -> None:
+        self.episode_calls: list[tuple[int, int, str | None]] = []
+        self.fail_episodes = False
+        self.listing = [
+            {"episode_number": 1, "name": "第 1 集", "air_date": _iso(-2)},
+            {"episode_number": 2, "name": "第 2 集", "air_date": _iso(-2)},
+            {"episode_number": 3, "name": "第 3 集", "air_date": _iso(-1)},
+            {"episode_number": 4, "name": "第 4 集", "air_date": _iso(-1)},
+        ]
+        self.records = {1: _iso(-4), 2: _iso(-3), 3: _iso(-2), 4: _iso(-1)}
+
+    def get_tv_details(self, tv_id: int, *, language: str | None = None) -> dict:
+        return {
+            "id": tv_id,
+            "name": "今天是太阳雨",
+            "status": "Returning Series",
+            "number_of_seasons": 1,
+            "number_of_episodes": 4,
+            "seasons": [{"season_number": 1, "episode_count": 4}],
+        }
+
+    def get_tv_season(self, tv_id: int, season_number: int, *, language: str | None = None) -> dict:
+        return {"season_number": season_number, "episodes": [dict(ep) for ep in self.listing]}
+
+    def get_tv_episode(
+        self, tv_id: int, season_number: int, episode_number: int, *, language: str | None = None,
+    ) -> dict:
+        self.episode_calls.append((season_number, episode_number, language))
+        if self.fail_episodes:
+            raise RuntimeError("tmdb episode boom")
+        return {"episode_number": episode_number, "air_date": self.records.get(episode_number)}
+
+
+def test_stale_season_listing_air_dates_are_corrected_from_episode_records():
+    client = FakeStaleSeasonClient()
+
+    details, _, _ = _fetch_tmdb_detail(
+        client, media_type="tv", tmdb_id=307853, language="zh-CN", poster_language="zh-CN"
+    )
+
+    assert details is not None
+    episodes = {int(ep["episode_number"]): ep for ep in details["seasons_full"][0]["episodes"]}
+    # 季列表按「每晚 2 集」的旧排期记录，单集记录才是网站显示的「每晚 1 集」
+    assert [episodes[n]["air_date"] for n in (1, 2, 3, 4)] == [_iso(-4), _iso(-3), _iso(-2), _iso(-1)]
+    # 文字字段仍然来自本地化记录
+    assert episodes[2]["name"] == "第 2 集"
+    # 校正只用基础记录(language=xx)的单集端点
+    assert client.episode_calls
+    assert {call[2] for call in client.episode_calls} == {BASE_LANGUAGE}
+
+
+def test_episode_verify_skips_seasons_that_aired_long_ago():
+    class OldSeasonClient(FakeStaleSeasonClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.listing = [
+                {"episode_number": 1, "name": "第 1 集", "air_date": _iso(-800)},
+                {"episode_number": 2, "name": "第 2 集", "air_date": _iso(-793)},
+            ]
+
+        def get_tv_details(self, tv_id: int, *, language: str | None = None) -> dict:
+            return {
+                "id": tv_id,
+                "name": "很早就完结的剧",
+                "status": "Ended",
+                "number_of_seasons": 2,
+                "number_of_episodes": 2,
+                "seasons": [{"season_number": 1, "episode_count": 2}, {"season_number": 2, "episode_count": 0}],
+            }
+
+        def get_tv_season(self, tv_id: int, season_number: int, *, language: str | None = None) -> dict:
+            if season_number == 2:
+                return {"season_number": 2, "episodes": []}
+            return {"season_number": 1, "episodes": [dict(ep) for ep in self.listing]}
+
+    client = OldSeasonClient()
+
+    _fetch_tmdb_detail(client, media_type="tv", tmdb_id=1, language="zh-CN", poster_language="zh-CN")
+
+    # 全季都在 45 天窗口外：一次单集请求都不发
+    assert client.episode_calls == []
+
+
+def test_episode_verify_failure_does_not_break_refresh():
+    client = FakeStaleSeasonClient()
+    client.fail_episodes = True
+
+    details, _, _ = _fetch_tmdb_detail(
+        client, media_type="tv", tmdb_id=307853, language="zh-CN", poster_language="zh-CN"
+    )
+
+    assert details is not None
+    episodes = {int(ep["episode_number"]): ep for ep in details["seasons_full"][0]["episodes"]}
+    # 单集端点全挂：保留季列表原值，整体刷新照常成功
+    assert [episodes[n]["air_date"] for n in (1, 2, 3, 4)] == [_iso(-2), _iso(-2), _iso(-1), _iso(-1)]
+
+
+def test_episode_verify_budget_and_window_limit_requests():
+    class Recorder:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, int, str | None]] = []
+
+        def get_tv_episode(
+            self, tv_id: int, season_number: int, episode_number: int, *, language: str | None = None,
+        ) -> dict:
+            self.calls.append((season_number, episode_number, language))
+            return {"air_date": _iso(-1)}
+
+    season = {
+        "episodes": [
+            {"episode_number": 1, "air_date": _iso(-2)},
+            {"episode_number": 2, "air_date": _iso(-2)},
+            {"episode_number": 3, "air_date": _iso(-3)},
+            {"episode_number": 4, "air_date": _iso(-1)},
+            {"episode_number": 5, "air_date": None},
+            {"episode_number": 99, "air_date": _iso(-400)},
+        ]
+    }
+    recorder = Recorder()
+
+    corrected = tmdb_cache._correct_episode_air_dates(season, recorder, 1, 1, budget=2)
+
+    numbers = [call[1] for call in recorder.calls]
+    # 缺日期的集最优先，其次按距今天数：预算 2 只够校验第 5、4 集
+    assert numbers == [5, 4]
+    # 第 5 集补到了日期，第 4 集单集记录与季列表一致，无需改动
+    assert corrected == 1
+    assert 99 not in numbers
+    assert {call[2] for call in recorder.calls} == {BASE_LANGUAGE}
+    by_number = {int(ep["episode_number"]): ep for ep in season["episodes"]}
+    assert by_number[99]["air_date"] == _iso(-400)
+
+def test_episode_verify_stops_after_repeated_matches():
+    class Matcher:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def get_tv_episode(
+            self, tv_id: int, season_number: int, episode_number: int, *, language: str | None = None,
+        ) -> dict:
+            self.calls.append(episode_number)
+            return {"air_date": _iso(-1)}
+
+    season = {"episodes": [{"episode_number": n, "air_date": _iso(-1)} for n in range(1, 21)]}
+    matcher = Matcher()
+
+    corrected = tmdb_cache._correct_episode_air_dates(season, matcher, 1, 1)
+
+    # 季列表没跑偏：连续若干集一致后提前收手，不把整季翻一遍
+    assert corrected == 0
+    assert len(matcher.calls) == tmdb_cache._EPISODE_DATE_VERIFY_STOP_AFTER

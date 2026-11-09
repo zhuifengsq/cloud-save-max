@@ -30,6 +30,11 @@ MediaType = Literal["movie", "tv"]
 
 # 中文/基础记录里未播出的集常常没有 air_date，en-US 记录才有 TMDB 网站展示的排期，用它只补空值
 TMDB_SCHEDULE_LANGUAGE = "en-US"
+# 季列表的 air_date 偶尔整季停在旧排期，TMDB 网站按单集记录渲染，只能用单集记录校正
+_EPISODE_DATE_VERIFY_LIMIT = 20
+_EPISODE_DATE_VERIFY_WINDOW_DAYS = 45
+# 连续这么多集都和季列表一致就认定季列表没跑偏，提前收手（否则每次刷新都要把整季翻一遍）
+_EPISODE_DATE_VERIFY_STOP_AFTER = 6
 
 _executor = ThreadPoolExecutor(max_workers=4)
 _lock_timeout = timedelta(minutes=10)
@@ -521,6 +526,74 @@ def _fill_missing_air_dates(season: dict[str, Any], schedule: Any) -> int:
             filled += 1
     return filled
 
+def _correct_episode_air_dates(
+    season: Any,
+    client: Any,
+    tmdb_id: int,
+    season_number: int,
+    *,
+    budget: int = _EPISODE_DATE_VERIFY_LIMIT,
+    stop_after_no_change: int = _EPISODE_DATE_VERIFY_STOP_AFTER,
+    today: date | None = None,
+) -> int:
+    """用单集记录校正季列表里错误的 air_date，返回被改正的集数。
+
+    TMDB 的季列表记录对某些剧会整季停在建条目时的旧排期（例：「今天是太阳雨」季列表把第 9 集
+    记成 11-10，而 TMDB 网站显示 11-09）；网站集卡片按单集记录
+    (/tv/{id}/season/{n}/episode/{m}) 渲染，所以单集记录才是事实源。
+
+    为了不把整季翻一遍：只校正「缺日期」或「播出日期落在今天 ±45 天内」的集，按距今天数由近到远
+    取前 budget 个；已播很久的季没有候选集，一次请求都不发。单集请求失败只跳过该集，不影响整次刷新。
+    连续 stop_after_no_change 集都和季列表一致时提前收手：季列表没跑偏的剧不用把整季翻一遍。
+    """
+    if not isinstance(season, dict):
+        return 0
+    today = today or date.today()
+    candidates: list[tuple[int, int, dict[str, Any], str]] = []
+    for ep in season.get("episodes") or []:
+        if not isinstance(ep, dict):
+            continue
+        try:
+            number = int(ep.get("episode_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if number <= 0:
+            continue
+        air = str(ep.get("air_date") or "").strip()[:10]
+        distance = 0
+        if air:
+            try:
+                aired: date | None = date.fromisoformat(air)
+            except ValueError:
+                aired = None
+            if aired is not None:
+                distance = abs((aired - today).days)
+                if distance > _EPISODE_DATE_VERIFY_WINDOW_DAYS:
+                    continue
+        candidates.append((distance, number, ep, air))
+    if not candidates:
+        return 0
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    corrected = 0
+    unchanged_streak = 0
+    for _distance, number, ep, listed in candidates[: max(0, int(budget))]:
+        try:
+            detail = client.get_tv_episode(int(tmdb_id), int(season_number), number, language=TMDB_BASE_LANGUAGE)
+        except Exception:
+            continue
+        if not isinstance(detail, dict):
+            continue
+        actual = str(detail.get("air_date") or "").strip()[:10]
+        if not actual or actual == listed:
+            unchanged_streak += 1
+            if stop_after_no_change > 0 and unchanged_streak >= stop_after_no_change:
+                break
+            continue
+        ep["air_date"] = actual
+        corrected += 1
+        unchanged_streak = 0
+    return corrected
+
 def _get_runtime_tmdb_config(db: Session) -> tuple[bool, str, str, str]:
     with db.no_autoflush:
         setting = db.get(TMDBSetting, DEFAULT_TMDB_SETTING_ID)
@@ -597,6 +670,9 @@ def _fetch_tmdb_detail(
                 if _season_missing_air_dates(season):
                     schedule = client.get_tv_season(tmdb_id, int(sn), language=TMDB_SCHEDULE_LANGUAGE)
                     _fill_missing_air_dates(season, schedule)
+                # 季列表可能整季停在旧排期（网站按单集记录渲染），近窗口内的集用单集记录校正
+                if isinstance(season, dict) and season.get("episodes"):
+                    _correct_episode_air_dates(season, client, tmdb_id, int(sn))
                 seasons_full.append(season)
             else:
                 failed.append(int(sn))
