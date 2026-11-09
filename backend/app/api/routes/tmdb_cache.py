@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo
 
 from app.api.deps import CurrentUser, get_current_user, require_permissions
+from app.core.errors import ApiError
 from app.core.permissions import TASK_READ, TASK_WRITE
 from app.application.container import commit, get_db, tmdb_media_cache_repo, transaction
 from app.schemas.tmdb_cache import (
@@ -29,6 +30,7 @@ from app.schemas.tmdb_cache import (
 )
 from app.application import audit
 from app.application.tmdb_cache import (
+    TMDBCacheBusy,
     delete_cache_item,
     get_tmdb_detail_cached,
     list_cache,
@@ -249,13 +251,18 @@ def post_tmdb_cache_refresh(
     )
 
     queued = False
-    if payload.async_refresh and row is not None:
-        queued = trigger_refresh_async(db, media_type=mt, tmdb_id=payload.tmdb_id, language=language, poster_language=poster_language)  # type: ignore[arg-type]
-    else:
-        get_tmdb_detail_cached(
-            db, media_type=mt, tmdb_id=payload.tmdb_id, force_refresh=bool(payload.force),  # type: ignore[arg-type]
-            close_read_tx=True,
-        )
+    try:
+        if payload.async_refresh and row is not None:
+            queued = trigger_refresh_async(db, media_type=mt, tmdb_id=payload.tmdb_id, language=language, poster_language=poster_language)  # type: ignore[arg-type]
+        else:
+            get_tmdb_detail_cached(
+                db, media_type=mt, tmdb_id=payload.tmdb_id, force_refresh=bool(payload.force),  # type: ignore[arg-type]
+                close_read_tx=True,
+                raise_on_busy=True,
+            )
+    except TMDBCacheBusy as exc:
+        # 数据库写锁被占用时不能假装成功：前端必须看到失败，否则会出现「提示已刷新但数据没变」。
+        raise ApiError(code="TMDB_CACHE_BUSY", message=str(exc), http_status=503) from exc
 
     audit.write_audit_log(
         db,

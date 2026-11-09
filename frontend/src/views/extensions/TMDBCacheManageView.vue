@@ -396,16 +396,29 @@ async function submitTTL() {
 
 async function refreshRow(row: TMDBCacheListItem) {
   if (!canWrite.value) return
-  const { status } = await refreshTMDBCache({ media_type: row.media_type, tmdb_id: row.tmdb_id, force: true, async_refresh: false })
-  ElMessage.success('已刷新')
-  if (drawer.visible && drawer.row && drawer.row.tmdb_id === row.tmdb_id && drawer.row.media_type === row.media_type) {
-    drawer.status = status
-    drawerPayloadRequest += 1
-    drawer.payloadItem = null
-    drawer.payloadLoading = false
-    if (drawer.tab === 'payload') await loadDrawerPayload()
+  try {
+    const { status } = await refreshTMDBCache({ media_type: row.media_type, tmdb_id: row.tmdb_id, force: true, async_refresh: false })
+    // 后端在写锁争用/拉取失败时仍可能返回 200 + 旧 status：必须检查 last_error / refresh_in_progress，
+    // 否则会出现「提示已刷新但数据没变」的假成功。
+    if (status.last_error) {
+      openActionDialog({ icon: 'warning', title: '刷新失败', subTitle: status.last_error })
+    } else if (status.refresh_in_progress) {
+      openActionDialog({ icon: 'warning', title: '刷新未完成', subTitle: '该条目正在刷新中（或上次刷新没有正常收尾），请稍后重试' })
+    } else {
+      ElMessage.success('已刷新')
+    }
+    if (drawer.visible && drawer.row && drawer.row.tmdb_id === row.tmdb_id && drawer.row.media_type === row.media_type) {
+      drawer.status = status
+      drawerPayloadRequest += 1
+      drawer.payloadItem = null
+      drawer.payloadLoading = false
+      if (drawer.tab === 'payload') await loadDrawerPayload()
+    }
+    await loadList()
+  } catch (e: any) {
+    openActionDialog({ icon: 'error', title: '刷新失败', subTitle: e?.message || '执行失败' })
+    await loadList()
   }
-  await loadList()
 }
 
 function openDeleteDialog(row: TMDBCacheListItem) {
@@ -457,8 +470,16 @@ async function quickRefresh() {
   try {
     const out = await refreshTMDBCache({ media_type: quick.mediaType, tmdb_id: quick.tmdbId, force: true, async_refresh: false })
     quick.status = out.status
-    ElMessage.success('已刷新')
+    if (out.status?.last_error) {
+      openActionDialog({ icon: 'warning', title: '刷新失败', subTitle: out.status.last_error })
+    } else if (out.status?.refresh_in_progress) {
+      openActionDialog({ icon: 'warning', title: '刷新未完成', subTitle: '该条目正在刷新中（或上次刷新没有正常收尾），请稍后重试' })
+    } else {
+      ElMessage.success('已刷新')
+    }
     await loadList()
+  } catch (e: any) {
+    openActionDialog({ icon: 'error', title: '刷新失败', subTitle: e?.message || '执行失败' })
   } finally {
     quick.loading = false
   }

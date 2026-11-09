@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
@@ -35,6 +36,22 @@ _writer_engines: WeakKeyDictionary[Engine, Engine] = WeakKeyDictionary()
 _writer_engines_lock = Lock()
 _write_slots = BoundedSemaphore(2)
 
+# 写锁争用时的等待上限与重试次数：SQLite 写锁被占时，旧实现 0.5s 就放弃并「静默返回旧缓存」；
+# 用户点刷新会看到成功提示但数据没变。现在放宽等待 + 有限重试，仍失败则抛 TMDBCacheBusy 让调用方明确报错。
+_WRITER_CONNECT_TIMEOUT_SECONDS = 2.0
+_WRITE_SLOTS_TIMEOUT_SECONDS = 3.0
+_CLAIM_ATTEMPTS = 2
+_CLAIM_RETRY_DELAY_SECONDS = 0.2
+
+
+class TMDBCacheBusy(RuntimeError):
+    """TMDB 缓存写不进去：数据库写锁被占用，或另一条刷新正持有该条目的刷新标记。
+
+    后台刷新/任务执行等调用方使用默认 raise_on_busy=False 保持「静默跳过、下次再刷」的旧语义；
+    用户主动点刷新的路由传 raise_on_busy=True，把本异常映射成 503，避免「假成功」。
+    """
+
+
 
 def _now() -> datetime:
     return datetime.now()
@@ -50,11 +67,15 @@ def _cache_writer(db: Session):
         with _writer_engines_lock:
             writer_engine = _writer_engines.get(engine)
             if writer_engine is None:
-                writer_engine = create_engine(engine.url, poolclass=NullPool, connect_args={"timeout": 0.5})
+                writer_engine = create_engine(
+                    engine.url,
+                    poolclass=NullPool,
+                    connect_args={"timeout": _WRITER_CONNECT_TIMEOUT_SECONDS},
+                )
                 _writer_engines[engine] = writer_engine
         bind = writer_engine
 
-    if not _write_slots.acquire(timeout=1):
+    if not _write_slots.acquire(timeout=_WRITE_SLOTS_TIMEOUT_SECONDS):
         raise PoolTimeout("TMDB cache writer busy")
     try:
         with Session(bind=bind) as writer, writer.begin():
@@ -65,20 +86,6 @@ def _cache_writer(db: Session):
 
 def _cache_write_busy(exc: Exception) -> bool:
     return isinstance(exc, PoolTimeout) or "database is locked" in str(exc).lower()
-
-
-def _close_read_transaction(db: Session) -> None:
-    """结束调用方会话的读事务，供长批量刷新在两次外部 IO 之间让出 WAL checkpoint。
-
-    只允许在「调用方确认当前没有未提交写入」的只读上下文里使用（只读路由、后台刷新
-    任务）。SQLite WAL 的 checkpoint 需要所有读事务结束才能推进，否则 -wal 会随批量
-    刷新持续增长（见方案 §7 R14）。
-    """
-    try:
-        end_read_tx(db)
-    except Exception:
-        db.rollback()
-        raise
 
 
 def _close_read_transaction(db: Session) -> None:
@@ -592,6 +599,27 @@ def _claim_refresh(
         return False
 
 
+def _claim_refresh_with_retry(
+    db: Session, key: dict[str, Any], now: datetime, *,
+    credits: bool, force: bool = False, existing_only: bool = False, attempts: int = _CLAIM_ATTEMPTS,
+) -> bool:
+    """领刷新标记；写锁瞬时争用时重试有限次数，仍失败返回 False（调用方决定是否报错）。"""
+    for attempt in range(1, attempts + 1):
+        if _claim_refresh(db, key, now, credits=credits, force=force, existing_only=existing_only):
+            return True
+        if attempt < attempts:
+            time.sleep(_CLAIM_RETRY_DELAY_SECONDS)
+            now = _now()
+    return False
+
+
+def _busy_message(row: TMDBMediaCache | None) -> str:
+    if row is not None and bool(getattr(row, "refresh_in_progress", False)):
+        return "这个条目正在刷新中（或上次刷新没有正常收尾），请稍后重试。"
+    return "数据库写入被占用，刷新没有执行，请稍后重试。"
+
+
+
 def _complete_refresh(
     db: Session, key: dict[str, Any], started_at: datetime, values: dict[str, Any], *, credits: bool,
 ) -> bool:
@@ -607,6 +635,7 @@ def _complete_refresh(
         except (OperationalError, PoolTimeout) as exc:
             if not _cache_write_busy(exc):
                 raise
+        time.sleep(_CLAIM_RETRY_DELAY_SECONDS)
     return False
 
 
@@ -633,6 +662,7 @@ def refresh_tmdb_detail_sync(
     force: bool = False,
     existing_only: bool = False,
     close_read_tx: bool = False,
+    raise_on_busy: bool = False,
 ) -> tuple[TMDBMediaCache | None, dict[str, Any] | None, list[int], list[int]]:
     now = _now()
     key = _cache_key(media_type, tmdb_id, language, poster_language)
@@ -643,8 +673,10 @@ def refresh_tmdb_detail_sync(
         # 领标记/写回都走独立 writer 引擎；这里先结束调用方读事务，
         # 让 writer 提交时的 WAL checkpoint 不被长读事务挡住。
         _close_read_transaction(db)
-    if not _claim_refresh(db, key, now, credits=False, force=force, existing_only=existing_only):
+    if not _claim_refresh_with_retry(db, key, now, credits=False, force=force, existing_only=existing_only):
         row = _read_cache_row(db, key, reload=True)
+        if raise_on_busy:
+            raise TMDBCacheBusy(_busy_message(row))
         return row, *_cached_details(row, media_type)
 
     try:
@@ -670,6 +702,8 @@ def refresh_tmdb_detail_sync(
     written = _complete_refresh(db, key, now, values, credits=False)
     row = _read_cache_row(db, key, reload=True)
     if not written:
+        if raise_on_busy:
+            raise TMDBCacheBusy("TMDB 数据已拉到，但写回缓存失败（数据库写入被占用），请稍后重试。")
         return row, *_cached_details(row, media_type)
     return row, details, update_weekdays, episode_weekdays
 
@@ -718,6 +752,7 @@ def get_tmdb_detail_cached(
     tmdb_id: int,
     force_refresh: bool = False,
     close_read_tx: bool = False,
+    raise_on_busy: bool = False,
 ) -> tuple[bool, dict[str, Any] | None, list[int], list[int], TMDBMediaCache | None]:
     configured, _, language, poster_language = _get_runtime_tmdb_config(db)
     if not configured:
@@ -736,6 +771,7 @@ def get_tmdb_detail_cached(
                 poster_language=poster_language,
                 force=True,
                 close_read_tx=close_read_tx,
+                raise_on_busy=raise_on_busy,
             )
             return True, details, update_weekdays, episode_weekdays, row2
         if row.expires_at is not None and row.expires_at > now and row.payload_json:
@@ -764,6 +800,7 @@ def get_tmdb_detail_cached(
         poster_language=poster_language,
         force=force_refresh,
         close_read_tx=close_read_tx,
+        raise_on_busy=raise_on_busy,
     )
     return True, details, update_weekdays, episode_weekdays, row2
 

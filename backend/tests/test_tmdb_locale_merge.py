@@ -140,9 +140,10 @@ def test_explicit_language_is_not_overridden_by_client_default(monkeypatch):
 def test_force_refresh_passes_force_to_sync_refresh(monkeypatch, db):
     calls: list[bool] = []
 
-    def fake_refresh(db, *, media_type, tmdb_id, language, poster_language, force=False, existing_only=False, close_read_tx=False):
+    def fake_refresh(db, *, media_type, tmdb_id, language, poster_language, force=False, existing_only=False, close_read_tx=False, raise_on_busy=False):
         calls.append(force)
         assert close_read_tx is False  # 默认调用方（执行器路径）不得结束调用方事务
+        assert raise_on_busy is False  # 后台/执行器路径不得因写锁争用而抛错
         return None, {"forced": force}, [], []
 
     monkeypatch.setattr(tmdb_cache, "refresh_tmdb_detail_sync", fake_refresh)

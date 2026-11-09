@@ -1499,7 +1499,153 @@ row = db.scalar(lookup)
 
 **验证**：`python -m pytest tests regression_tests -q` → **509 passed, 2 skipped**；`check_layering.py --fail-on 0` → `violations=0 cycles=0`；前端用 `@vue/compiler-sfc` 编译该 SFC（template + scoped style）通过——本机只有 Node 18，`vite build`（vite 8 需 Node 20+ 的全局 `CustomEvent`）无法在此环境跑通，需在 Node 20+ 环境或 `pnpm dev` 下确认。
 
+### §10.24 TMDB 刷新「假成功」：写锁争用被当成「别人正在刷」（2026-11-09）
+
+**现象**（用户原话 m05511：「刚才我点刷新没有更新，但是现在好了，什么也没有更改」）
+
+在「TMDB 缓存」页面点刷新：有时点完数据没有变化，但页面弹绿色「已刷新」；过一会儿什么都没改再点一次又正常了。间歇性、自愈、无代码变更 —— 典型的**写锁争用被静默吞掉**。
+
+**复现（真库副本 + 外部写锁，判定「一次都没拉」）**
+
+复制 `backend/data/app.db` 到 `backend/.tmp`，用第二个连接 `BEGIN IMMEDIATE` 占住写锁（并 `UPDATE tmdb_media_cache SET fail_count = fail_count`），然后调 `refresh_tmdb_detail_sync(db, media_type="tv", tmdb_id=279923, ..., force=True)`：
+
+- 耗时 0.63s，**没有抛错**；
+- `_fetch_tmdb_detail` **一次都没有被调用**（网络根本没出去）；
+- 库内 `fetched_at` / `fail_count` / `last_error` 全部不变；
+- 函数**静默返回旧缓存**。
+
+**根因链（三处「吞掉」叠加）**
+
+1. `backend/app/application/tmdb_cache.py` 的 `_cache_writer()` 用独立 writer 引擎，`connect_args={"timeout": 0.5}` —— 写锁被占超过 0.5s 时 `_claim_refresh` 抛 `OperationalError`。
+2. `_cache_write_busy()` 把它判成 `True`，于是 `_claim_refresh` **`return False`**，语义是「别人正在刷，我不刷了」—— 但真实原因是**没人刷、只是写锁被占**，于是这一轮刷新被无声丢弃。
+3. `refresh_tmdb_detail_sync` 看到 claim 失败直接返回旧缓存 → 路由 200 + 旧 status → 前端 `TMDBCacheManageView.vue` 只看 HTTP 成功就 `ElMessage.success('已刷新')`。同理 `_complete_refresh` 写回失败也 `return False`：**网络已经拉了数据，但库里没更新，也没人知道**。
+
+空闲时没有别的写入 → 一切正常，所以表现为「刚才不行、现在好了」。
+
+**修复（区分「用户触发」与「后台触发」两套语义）**
+
+| 位置 | 改动 |
+| --- | --- |
+| `backend/app/application/tmdb_cache.py` | 新增 `_WRITER_CONNECT_TIMEOUT_SECONDS=2.0`、`_WRITE_SLOTS_TIMEOUT_SECONDS=3.0`、`_CLAIM_ATTEMPTS=2`、`_CLAIM_RETRY_DELAY_SECONDS=0.2`；writer 连接 `timeout` 0.5→2.0、写槽 `acquire` 1→3.0；新增 `_claim_refresh_with_retry()`（失败 sleep 后重试，重试时刷新 `now`）；新增 `class TMDBCacheBusy(RuntimeError)` 与 `_busy_message(row)`；`_complete_refresh` 的重试之间加 sleep；`refresh_tmdb_detail_sync` / `get_tmdb_detail_cached` 新增 `raise_on_busy: bool = False` |
+| `backend/app/api/routes/tmdb_cache.py` | 刷新端点的同步分支传 `raise_on_busy=True`；`except TMDBCacheBusy` → `ApiError(code="TMDB_CACHE_BUSY", http_status=503, message=_busy_message)`；**失败时不写 audit、不 commit** |
+| `backend/app/application/media_discovery.py` + `backend/app/api/routes/media_discovery.py` | `tmdb_detail(..., raise_on_busy=False)` 透传；路由按 `raise_on_busy=bool(force)` 调用，强制刷新撞锁 → 503（不能把旧缓存当「已刷新」返回） |
+| `frontend/src/views/extensions/TMDBCacheManageView.vue` | `refreshRow` / `quickRefresh` 包 try/catch；`status.last_error` 存在 → 失败弹窗并显示后端错误；`status.refresh_in_progress` → 「刷新未完成，请稍后重试」；仅真正成功才 `ElMessage.success('已刷新')` |
+
+**关键取舍：默认 `raise_on_busy=False`**
+
+后台定时刷新（`refresh_expired_cache`）、追剧自动更新、任务执行器都必须保持「锁争用就跳过、下轮再来」，**不能因为一次写锁冲突让整条转存任务失败**。所以「抛错」的开关只由**用户显式触发的请求**打开（刷新按钮、强制刷新详情页）。这条规则已写进代码注释与测试断言。
+
+**护栏：`backend/regression_tests/test_tmdb_refresh_busy.py`（4 项，4.7s）**
+
+| 用例 | 断言 |
+| --- | --- |
+| `test_busy_write_lock_raises_instead_of_silently_skipping` | 持锁 + `raise_on_busy=True` → 抛 `TMDBCacheBusy`，且 `_fetch_tmdb_detail` **未被调用**（不白发网络请求）、行未变 |
+| `test_user_retry_succeeds_after_lock_released` | 释放锁后同一调用成功：fetch 调 1 次、`display_title` 更新、`refresh_in_progress=False` |
+| `test_background_callers_keep_silent_legacy_behaviour` | `raise_on_busy=False`（后台路径）不抛、静默返回旧缓存 —— 锁死「不许把后台路径改坏」 |
+| `test_refresh_route_returns_503_when_cache_busy` | 路由层 `post_tmdb_cache_refresh(...)` → `ApiError` `code=TMDB_CACHE_BUSY` `http_status=503` |
+
+**端到端复核（真 37 表库副本，不用构造 schema）**
+
+```text
+app read: 30                                   # 副本可读
+holder write transaction ok                    # 用应用引擎的第二个连接占住写锁
+BUSY: ApiError code=TMDB_CACHE_BUSY http=503   # 用户触发 → 明确 503，不再假成功
+fetch calls while busy: 0                      # 没白发网络请求
+AFTER: queued=False fetched_at=2026-11-09 12:15:36 title=VERIFY-NEW err=None
+fetch calls total: 1                           # 锁释放后同一次点击成功落库
+```
+
+**验证（2026-11-09，cwd=backend，`PYTHONPATH=.`，`XXM_TESTING=1`）**
+
+- `python -m pytest tests regression_tests -q` → **513 passed, 2 skipped**（509 + 4 项新护栏）。
+- `python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json` → `modules=250 internal_imports=722 deferred_imports=84 violations=0 import_cycles=0`，exit 0。
+- `python -c "import app.main"` → ok；前端 SFC 用 `@vue/compiler-sfc` 编译通过（本机 Node 18 跑不了 `vite build`）。
+- 顺带删掉 `tmdb_cache.py` 里重复定义的 `_close_read_transaction`（原 :70-82 与 :84-96 两份，保留后者）。
+
+**四条教训**
+
+1. **「HTTP 200」不等于「业务做成了」**：刷新这类「触发型」接口必须回传**结果状态**（`last_error` / `refresh_in_progress`），前端不能只看请求成功。已在 §4.3 前端契约清单里补一条：*触发型接口的按钮提示必须读业务结果字段*。
+2. **`except 锁冲突: return` 是隐形丢数据**：把「写锁被占」和「别人正在做同一件事」混为一谈，就会出现「既没人做、也没人知道」。凡是 `return False` 的 busy 分支，都要能回答「用户怎么知道这次没做」。
+3. **用户路径与后台路径的错误语义要分开**：同一个函数用 `raise_on_busy` 开关区分——用户路径**必须显式失败**（503 + 文案，让用户重试），后台路径**必须静默跳过**（不能拖垮任务）。默认值取「静默」是为了不破坏既有调用方。
+4. **锁争用要留重试窗口**：0.5s 的连接超时对「另一个请求正在提交」这种短冲突太短，2.0s + 2 次 claim 重试足以吃掉大部分瞬时冲突，又不会让用户等太久。
+
+**用户侧动作**：改动只在工作区，**正在运行的实例（Docker 镜像 / 本地 uvicorn）需要重建或重启才生效**；若服务器出不去 TMDB，现在会明确报 `TMDB_CACHE_BUSY`/错误文案，而不是弹「已刷新」。
+
+## 10.25 工作台「清理失败记录」后仍显示失败任务：检测失败挂在**成功**记录上
+
+**现象**（用户报障）
+
+> 在工作台点击清理失败日志之后，上面还会显示失败任务
+
+**复现（真库副本 + 合成数据，确定性）**
+
+复制 `backend/data/app.db` 到 `backend/.tmp/dash.db`，插入 1 条 `status=failed` 的执行记录 + 1 条 `status=success` 且 `adapter_snapshot.generated_share_check.status="invalid"` 的执行记录：
+
+```text
+BEFORE: recent_failures=2（stage=generated_share_check + stage=end）; summary total=20 success=19 failed=1
+delete_failed_drama_executions(db, days=0) -> deleted=1
+AFTER : recent_failures=1（stage=generated_share_check）; summary total=19 success=19 failed=0
+```
+
+与用户所见完全一致：失败记录**已删**，但「近期失败」列表里还剩一条。
+
+**根因：`recent_failures` 有两个来源，清理只覆盖其中一个**
+
+| 来源 | 代码 | 清理是否覆盖 |
+| --- | --- | --- |
+| `status == "failed"` 的执行记录 | `backend/app/application/dashboard_drama.py` 主循环 | ✅ `delete_failed_drama_executions` 删除 |
+| **成功记录**里 `read_share_check(snapshot)["status"] in {"invalid","error"}` 派生的「分享链接检测失败」 | 同上，`if len(recent_failures) < 12:` 分支 | ❌ 失败信息挂在 `status=success` 的行上，按状态删失败记录永远删不到 |
+
+**为什么不用「改写快照 / 删成功记录」**
+
+| 方案 | 后果 |
+| --- | --- |
+| 把快照状态改成 `valid` 或删掉 `generated_share_check` | 任务列表徽章（`frontend/src/components/tasks/GeneratedShareStatus.vue`）会从「已失效」变回「待检测」——**掩盖真实状态**；且 `last_definitive` 去重被破坏，同一失效链接会**重复通知**（`backend/app/application/notifications/task_notify.py:47`） |
+| 连成功执行记录一起删 | 丢转存历史（用户想清的是「失败日志」，不是「成功记录」） |
+| 引入新的 `status` 值表示「已清理」 | 前端徽章用固定 labels 字典（valid/invalid/error）渲染，未知值直接 `undefined` 崩模板 |
+| ✅ **清理水位（采用）** | 只影响仪表盘**读模型**：清理后不再把已清理的检测失败当「近期失败」提醒；徽章仍如实显示分享链接真实状态，通知去重逻辑不受影响 |
+
+**实现（4 个文件）**
+
+| 位置 | 改动 |
+| --- | --- |
+| `backend/app/application/dashboard_drama.py` | 新增 `DRAMA_FAILURES_CLEARED_KEY="dashboard.drama_failures_cleared_at"`、`_parse_naive_datetime()`、`read_failures_cleared_at()`、`mark_failures_cleared()`（水位**只增不减**）、`clear_drama_failures(db, *, days=0, now=None)`；`build_drama_overview()` 读水位后，检测失败派生的条目仅当 `cleared_at is None or checked_dt is None or checked_dt > cleared_at` 才展示 |
+| `backend/app/api/routes/dashboard.py` | 清理端点改为调用应用层 `clear_drama_failures(db, days=days)`（仍在 `with transaction(db)` 内，审计与提交归属不变）；用例 import 起别名 `clear_drama_failures as clear_drama_failures_use_case`——**同名 handler 会自我递归** |
+| `backend/app/infrastructure/persistence/repositories/task_executions.py` | `delete_failed_drama_executions(db, *, days=0, before=None)`：`before` 由应用层给出时以其为准，保证「删除范围」与「清理水位」用**同一个 cutoff**；顺带去掉 `datetime.utcnow()`（原来与本地朴素 `started_at` 差 8 小时，且触发 DeprecationWarning） |
+| `backend/regression_tests/test_generated_share_check.py` | 该测试自建 schema，补 `SystemSetting.__table__`（仪表盘现在会读水位表），断言不变 |
+
+**关键取舍**
+
+1. **水位只增不减**：先「清理最近 30 天前」再「清理全部」时，水位不能被回拨，否则已隐藏的旧失败会重新冒出来。
+2. **解析不出时间的仍展示**：宁可多报一条，也不把真实失败藏起来。
+3. **清理范围与水位共用一个 cutoff**：否则会出现「记录删了但水位更早」或反之，导致「清完仍显示 / 没清却消失」两类不一致。
+4. **只影响展示**：快照、通知去重、任务列表徽章、转存历史全部不动；用户看到的「已清理」语义仅限仪表盘「近期失败」这个小卡片。
+
+**护栏：`backend/regression_tests/test_dashboard_clear_failures.py`（4 项）**
+
+| 用例 | 断言 |
+| --- | --- |
+| `test_clear_hides_share_check_failure_stored_on_success_execution` | 清理前 2 条（`end` + `generated_share_check`）→ `clear_drama_failures(days=0)` 返回 1 → 清理后 `recent_failures==[]`、`execution_failed==0`；**成功记录仍在且快照状态仍是 invalid**（徽章不被改写） |
+| `test_failure_newer_than_watermark_is_still_shown` | 水位只屏蔽历史：清理后新增的失败记录与更新的检测失败都照常出现（2 条） |
+| `test_clear_with_days_only_hides_entries_before_cutoff` | `days=30`：40 天前的失败记录被删、40 天前的检测失败被屏蔽；10 天前的两条保留（`deleted==1`，剩 3 行） |
+| `test_watermark_only_moves_forward` | 用更早的 cutoff 再写入不会把水位回拨 |
+
+**验证（2026-11-09，cwd=backend，`PYTHONPATH=.`，`XXM_TESTING=1`）**
+
+- `python -m pytest tests regression_tests -q` → **517 passed, 2 skipped**（513 + 4 项新护栏）。
+- `python scripts/check_layering.py --fail-on 0 --baseline backend/.layering-baseline.json`（cwd=仓库根）→ `modules=250 internal_imports=721 deferred_imports=84 violations=0 import_cycles=0`，exit 0。
+- `python -c "import app.main"` → ok。
+
+**三条教训**
+
+1. **「删了记录」不等于「清掉了视图」**：读模型只要有一个字段来自别处（快照/缓存/关联表），清理就必须同时处理这个来源，否则用户看到的是「清理无效」。
+2. **派生展示项要标明出处**：`recent_failures` 两类来源的 stage 不同（`end` vs `generated_share_check`），事故现场靠 `stage` 才能一眼分辨；新增派生条目时应保持这个可辨识性。
+3. **同名函数遮蔽是静默死循环**：路由 handler 与用例同名时，`from ... import` 被 `def` 覆盖，函数体内的同名调用会递归——**这是 `import app.main` 检查不出来的问题**，靠护栏测试才暴露（第一次跑测试即 `RecursionError` 级别失败）。
+
+**用户侧动作**：改动只在工作区，**正在运行的后端需要重启（本地 uvicorn）或重建镜像（Docker）才生效**；生效后点「清理失败日志」，卡片里的历史检测失败会一起消失，但任务列表的「已失效」徽章仍如实保留。
+
 ---
+
 ## 附录 A：现状 → 目标目录映射（可直接当搬迁清单）
 
 | 现状路径 | 目标路径 | 所属阶段 | 备注 |

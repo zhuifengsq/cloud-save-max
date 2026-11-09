@@ -6,10 +6,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_WRITE
 from app.application.container import get_db, transaction
-from app.application.container import task_executions_repo
 from app.schemas.dashboard import CapacityOverviewOut, DramaOverviewOut
 from app.application import audit
-from app.application.dashboard_drama import build_drama_overview
+from app.application.dashboard_drama import build_drama_overview, clear_drama_failures as clear_drama_failures_use_case
 from app.application.drive_accounts import build_capacity_overview
 from app.application.shareurl_update_logs import clear_drama_shareurl_update_logs
 
@@ -38,7 +37,7 @@ def clear_drama_failures(
 ):
     """删除追剧任务的失败执行记录；days>0 时只删该天数之前的。"""
     with transaction(db):
-        deleted = task_executions_repo().delete_failed_drama_executions(db, days=days)
+        deleted = clear_drama_failures_use_case(db, days=days)
         audit.write_audit_log(
             db,
             actor_user_id=current.user.id,

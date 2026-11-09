@@ -1,6 +1,7 @@
 """任务执行记录仓储（裁剪历史记录相关查询）。"""
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -70,10 +71,12 @@ def list_desc(db: Session, task_id: int, *, limit: int):
         .all()
     )
 
-def delete_failed_drama_executions(db: Session, *, days: int = 0) -> int:
-    """删除追剧任务的失败执行记录；days>0 时只删该天数之前的。"""
-    from datetime import datetime, timedelta
+def delete_failed_drama_executions(db: Session, *, days: int = 0, before: datetime | None = None) -> int:
+    """删除追剧任务的失败执行记录；days>0 时只删该天数之前的。
 
+    `before` 由应用层清理用例给出时以其为准，保证「删除范围」与「仪表盘清理水位」使用同一个截止时间；
+    缺省保留历史行为（UTC now 往前推 days 天）。
+    """
     from app.infrastructure.persistence.models.task import Task
 
     task_ids = select(Task.id).where(Task.task_type == "drama")
@@ -81,6 +84,9 @@ def delete_failed_drama_executions(db: Session, *, days: int = 0) -> int:
         TaskExecution.status == "failed",
         TaskExecution.task_id.in_(task_ids),
     )
-    if int(days) > 0:
-        stmt = stmt.where(TaskExecution.started_at < datetime.utcnow() - timedelta(days=int(days)))
+    cutoff = before
+    if cutoff is None and int(days) > 0:
+        cutoff = datetime.utcnow() - timedelta(days=int(days))
+    if cutoff is not None:
+        stmt = stmt.where(TaskExecution.started_at < cutoff)
     return int(db.execute(stmt).rowcount or 0)

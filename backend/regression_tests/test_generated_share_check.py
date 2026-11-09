@@ -12,6 +12,7 @@ from app.infrastructure.drive.adapters.quark_adapter import QuarkAdapter
 from app.infrastructure.execution import task_executor
 from app.infrastructure.persistence.models.task import Task
 from app.infrastructure.persistence.models.task_execution import TaskExecution
+from app.infrastructure.persistence.models.system_setting import SystemSetting
 from app.infrastructure.persistence.models.task_scheduler_setting import TaskSchedulerSetting
 from app.application.dashboard_drama import build_drama_overview
 from app.application.generated_share_check import check_generated_share, read_share_check
@@ -54,7 +55,15 @@ def test_baidu_probe_keeps_verify_expiry_code(monkeypatch):
 
 def test_checks_generated_link_each_run_without_blocking_transfer(monkeypatch):
     engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=[Task.__table__, TaskExecution.__table__, TaskSchedulerSetting.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Task.__table__,
+            TaskExecution.__table__,
+            TaskSchedulerSetting.__table__,
+            SystemSetting.__table__,  # 仪表盘「近期失败」清理水位
+        ],
+    )
     events = []
     responses = iter([
         {"code": 41012},

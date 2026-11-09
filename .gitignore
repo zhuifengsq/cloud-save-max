@@ -35,3 +35,4 @@ backend/pytest-of-*/
 .github_token
 .pnpm-store/
 node_modules/
+.pytest_tmp/

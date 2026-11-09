@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_permissions
+from app.core.errors import ApiError
 from app.core.permissions import TASK_READ
 from app.core.settings import settings
 from app.application.container import commit, get_db
@@ -25,6 +26,7 @@ from app.application.proxy_image_cache import (
     validate_image_url,
 )
 from app.application.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
+from app.application.tmdb_cache import TMDBCacheBusy
 from app.application.container import douban_client_cls as _acc_DoubanClient; DoubanClient = _acc_DoubanClient()
 
 
@@ -95,9 +97,14 @@ def get_tmdb_detail(
     mt = str(media_type or "").strip().lower()
     if mt not in ("movie", "tv"):
         return TMDBDetailOut(media_type=mt or media_type, data={}, update_weekdays=[], episode_weekdays=[])
-    configured, data, update_weekdays, episode_weekdays = tmdb_detail(
-        db, media_type=mt, tmdb_id=tmdb_id, force_refresh=force, close_read_tx=True  # type: ignore[arg-type]
-    )
+    try:
+        configured, data, update_weekdays, episode_weekdays = tmdb_detail(
+            db, media_type=mt, tmdb_id=tmdb_id, force_refresh=force, close_read_tx=True,  # type: ignore[arg-type]
+            raise_on_busy=bool(force),
+        )
+    except TMDBCacheBusy as exc:
+        # 强制刷新时若数据库写锁被占用，不能把旧缓存当「已刷新」返回。
+        raise ApiError(code="TMDB_CACHE_BUSY", message=str(exc), http_status=503) from exc
     commit(db)
     return TMDBDetailOut(
         media_type=mt,

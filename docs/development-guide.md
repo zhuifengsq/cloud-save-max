@@ -17,7 +17,7 @@
 # 1) 全量测试（cwd = backend）
 cd backend
 python -m pytest tests regression_tests -q
-# 当前基线：509 passed, 2 skipped（新增测试后同步更新本行与 docs/architecture/README.md）
+# 当前基线：517 passed, 2 skipped（新增测试后同步更新本行与 docs/architecture/README.md）
 
 # 2) 分层门禁（cwd = 仓库根）
 cd ..
@@ -390,7 +390,7 @@ golden 覆盖：10 个后端响应模型（字段+类型+顺序）、前端 15 �
 
 ```bash
 cd backend
-# 全量（当前 509 passed, 2 skipped）
+# 全量（当前 517 passed, 2 skipped）
 python -m pytest tests regression_tests -q
 
 # 只跑护栏（CI 同款，最快反馈）

@@ -181,9 +181,11 @@ def tmdb_detail(
     tmdb_id: int,
     force_refresh: bool = False,
     close_read_tx: bool = False,
+    raise_on_busy: bool = False,
 ) -> tuple[bool, dict[str, Any] | None, list[int], list[int]]:
     configured, data, update_weekdays, episode_weekdays, _row = get_tmdb_detail_cached(
-        db, media_type=media_type, tmdb_id=tmdb_id, force_refresh=force_refresh, close_read_tx=close_read_tx
+        db, media_type=media_type, tmdb_id=tmdb_id, force_refresh=force_refresh,
+        close_read_tx=close_read_tx, raise_on_busy=raise_on_busy,
     )
     return configured, data, update_weekdays, episode_weekdays
 
