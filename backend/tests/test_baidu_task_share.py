@@ -14,6 +14,11 @@ class BaiduTaskShareTests(unittest.TestCase):
         ]})
         self.adapter.ls_dir = Mock(return_value={"code": 0, "data": {"list": [{"fid": "episode"}]}})
         self.adapter._get_bdstoken = Mock(return_value="token")
+        # 创建成功后会立刻用同一 Cookie 自检一次，这里把自检读到「有一集视频」的正常分享页。
+        self.adapter._api_access_shared = Mock(return_value={"errno": 0})
+        self.adapter._api_shared_paths = Mock(return_value={
+            "errno": 0, "file_list": [{"path": "/剧集/测试/第1集.mp4"}]
+        })
 
     def test_creates_password_protected_link(self) -> None:
         self.adapter._request = Mock(return_value=Mock(json=Mock(return_value={

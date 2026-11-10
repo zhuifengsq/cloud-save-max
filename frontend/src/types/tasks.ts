@@ -90,6 +90,17 @@ export type TaskItem = {
   executions?: TaskExecutionItem[]
   // 引流文件状态（由后端任务详情接口返回）
   lead_in?: TaskLeadInSummary | null
+  // 运行日期判定（后端 application/drama_schedule.py）：仅用于说明「今天不在运行日期」，
+  // 手动执行不受它限制（后端 RunPolicy.manual_run 会跳过日期类拦截），定时轮询才按它跳过。
+  run_schedule?: TaskRunSchedule | null
+}
+
+export type TaskRunSchedule = {
+  allowed: boolean
+  mode: string
+  weekdays: number[]
+  reason: string
+  message: string
 }
 
 export type TaskSchedulerSetting = {

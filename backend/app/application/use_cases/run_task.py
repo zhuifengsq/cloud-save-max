@@ -41,6 +41,9 @@ class RunPolicy:
     share_check_always_notify: bool = True
     # 是否写入 TaskExecution 记录（分享预览不落库）
     persist_execution: bool = True
+    # 是否「手动触发」：手动执行不受追剧任务「运行星期」限制（用户要求：不到设定日期也能点、也能跑）；
+    # 只有 APScheduler 定时轮询为 False。执行器据此跳过日期类拦截，见 app/application/drama_schedule.py。
+    manual_run: bool = True
 
     @classmethod
     def for_trigger(cls, trigger: str) -> "RunPolicy":
@@ -52,18 +55,18 @@ class RunPolicy:
 
 
 # 触发方真值表（改造前逐点核对，勿随意改动）：
-# | trigger   | share_check_always_notify | persist_execution | 调用点 | 准入（仍在调用点） |
-# | http      | True                      | True              | POST /api/tasks/{id}/run | with task_admission.reserve(task_id) |
-# | sse       | True                      | True              | POST /api/tasks/{id}/run/stream | slot = reserve(task_id) 后 start_worker |
-# | scheduler | False                     | True              | APScheduler run_drama_tasks | reserve(task_id) + with slot |
-# | telegram  | True                      | True              | Telegram bot 手动执行 | handlers._run_async 提前占槽 |
-# | preview   | False                     | False             | POST /api/tasks/run/stream | slot = reserve(None) 后 start_worker |
+# | trigger   | share_check_always_notify | persist_execution | manual_run | 调用点 | 准入（仍在调用点） |
+# | http      | True                      | True              | True       | POST /api/tasks/{id}/run | with task_admission.reserve(task_id) |
+# | sse       | True                      | True              | True       | POST /api/tasks/{id}/run/stream | slot = reserve(task_id) 后 start_worker |
+# | scheduler | False                     | True              | False      | APScheduler run_drama_tasks | reserve(task_id) + with slot |
+# | telegram  | True                      | True              | True       | Telegram bot 手动执行 | handlers._run_async 提前占槽 |
+# | preview   | False                     | False             | True       | POST /api/tasks/run/stream | slot = reserve(None) 后 start_worker |
 _TRIGGER_POLICIES: dict[str, RunPolicy] = {
-    "http": RunPolicy(trigger="http", share_check_always_notify=True, persist_execution=True),
-    "sse": RunPolicy(trigger="sse", share_check_always_notify=True, persist_execution=True),
-    "scheduler": RunPolicy(trigger="scheduler", share_check_always_notify=False, persist_execution=True),
-    "telegram": RunPolicy(trigger="telegram", share_check_always_notify=True, persist_execution=True),
-    "preview": RunPolicy(trigger="preview", share_check_always_notify=False, persist_execution=False),
+    "http": RunPolicy(trigger="http", share_check_always_notify=True, persist_execution=True, manual_run=True),
+    "sse": RunPolicy(trigger="sse", share_check_always_notify=True, persist_execution=True, manual_run=True),
+    "scheduler": RunPolicy(trigger="scheduler", share_check_always_notify=False, persist_execution=True, manual_run=False),
+    "telegram": RunPolicy(trigger="telegram", share_check_always_notify=True, persist_execution=True, manual_run=True),
+    "preview": RunPolicy(trigger="preview", share_check_always_notify=False, persist_execution=False, manual_run=True),
 }
 
 
@@ -108,6 +111,7 @@ class RunTaskUseCase:
             account_manager=account_manager,
             init_account_for_task=init_account_for_task,
             share_check_always_notify=policy.share_check_always_notify,
+            manual_run=policy.manual_run,
         )
 
     def _legacy_execute(self, task, policy, *, log, account_manager, init_account_for_task):
@@ -116,14 +120,19 @@ class RunTaskUseCase:
         trigger = policy.trigger
         if trigger in {"http", "telegram"}:
             # 旧：routes/tasks.py:220、telegram_bot/actions.py:480
-            return executor.run_task(task, share_check_always_notify=True)
+            return executor.run_task(task, share_check_always_notify=True, manual_run=policy.manual_run)
         if trigger == "sse":
             # 旧：routes/tasks_stream.py:175
-            return executor.run_task(task, log=log, share_check_always_notify=True)
+            return executor.run_task(task, log=log, share_check_always_notify=True, manual_run=policy.manual_run)
         if trigger == "scheduler":
             # 旧：extensions/runtime/task_scheduler.py:250-254
-            return executor.run_task(task, account_manager=account_manager, init_account_for_task=False)
+            return executor.run_task(
+                task,
+                account_manager=account_manager,
+                init_account_for_task=False,
+                manual_run=policy.manual_run,
+            )
         if trigger == "preview":
             # 旧：routes/tasks_stream.py:292
-            return executor.run_task(task, log=log, persist_execution=False)
+            return executor.run_task(task, log=log, persist_execution=False, manual_run=policy.manual_run)
         raise ValueError(f"未知的任务触发方: {trigger!r}")

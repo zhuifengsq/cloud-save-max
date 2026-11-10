@@ -164,9 +164,19 @@ class AdapterDriveGateway:
             kind, message = self._classify(token)
             return ShareProbeResult(valid=False, kind=kind, message=message, stage="verify")
         detail = self._get_detail(pwd_id, stoken, str(folder_id or "0"))
-        data = _as_dict(_as_dict(detail).get("data"))
-        if str(_as_dict(detail).get("code")) == "0" and isinstance(data.get("list"), list):
+        response_code = str(_as_dict(detail).get("code"))
+        items = _items(detail)
+        if response_code == "0" and items:
             return ShareProbeResult(valid=True, kind="valid", message="", stage="read")
+        if response_code == "0":
+            # code=0 但目录为空不能证明分享可用：已失效的分享在部分网盘（如百度）会返回
+            # share_page_type=error + 空 file_list。把「空目录」判成不可用才拦得住死链。
+            return ShareProbeResult(
+                valid=False,
+                kind="invalid",
+                message="分享目录为空或链接不存在",
+                stage="read",
+            )
         kind, message = self._classify(detail)
         return ShareProbeResult(valid=False, kind=kind, message=message, stage="read")
 

@@ -16,3 +16,13 @@ class DramaUpdateProgressOut(BaseModel):
     is_latest: bool | None = None
     snapshot_captured_at: datetime | None = None
     reason: str | None = None
+
+
+class DramaRunScheduleOut(BaseModel):
+    """追剧任务「运行日期」判定结果（前端用它禁用「执行」按钮，后端用它拦截手动执行）。"""
+
+    allowed: bool = True
+    mode: str = "always"
+    weekdays: list[int] = []
+    reason: str = "not_drama"
+    message: str = ""

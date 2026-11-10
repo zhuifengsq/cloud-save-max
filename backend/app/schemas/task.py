@@ -72,7 +72,7 @@ class TaskExecutionOut(BaseModel):
     adapter_snapshot: dict[str, Any] = {}
 
 
-from app.application.dto.task import DramaUpdateProgressOut  # noqa: F401  (S5: 定义已迁到 dto)
+from app.application.dto.task import DramaRunScheduleOut, DramaUpdateProgressOut  # noqa: F401  (S5: 定义已迁到 dto)
 
 
 class TaskOut(BaseModel):
@@ -98,6 +98,7 @@ class TaskOut(BaseModel):
     executions: list[TaskExecutionOut] = []
     created_at: datetime
     updated_at: datetime
+    run_schedule: DramaRunScheduleOut = Field(default_factory=DramaRunScheduleOut)
 
 
 class StopCompletedDramaTasksOut(BaseModel):

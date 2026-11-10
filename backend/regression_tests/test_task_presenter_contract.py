@@ -73,7 +73,7 @@ def test_task_out_contract_is_frozen():
         "pattern", "replace", "ignore_extension", "account_name",
         "tmdb_id", "tmdb_media_type", "tmdb_status", "tmdb_is_ended",
         "drama_update_progress", "lead_in", "enabled", "addition", "extra",
-        "executions", "created_at", "updated_at",
+        "executions", "created_at", "updated_at", "run_schedule",
     ]
 
     payload = out.model_dump(mode="json")
@@ -137,6 +137,13 @@ def test_task_out_contract_is_frozen():
         ],
         "created_at": "2026-10-31T09:00:00",
         "updated_at": "2026-11-01T09:00:00",
+        "run_schedule": {
+            "allowed": True,
+            "mode": "always",
+            "weekdays": [],
+            "reason": "not_drama",
+            "message": "普通任务不受运行日期限制",
+        },
     }
 
 

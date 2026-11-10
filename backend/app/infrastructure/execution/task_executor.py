@@ -101,6 +101,7 @@ class TaskExecutor:
         account_manager: DatabaseAccountManager | None = None,
         init_account_for_task: bool = True,
         share_check_always_notify: bool = False,
+        manual_run: bool = False,
         _auto_update_depth: int = 0,
         _tried_shareurls: set[str] | None = None,
         _generated_share_check: dict | None = None,
@@ -137,6 +138,9 @@ class TaskExecutor:
             task_data["magic_regex"] = {}
 
         if str(getattr(task, "task_type", "") or "") == "drama":
+            # 手动触发（点「执行」/ Telegram / 试运行）不受运行星期限制，由 DramaTaskExecutor 放行；
+            # 只有 scheduler 定时轮询会带着 False 进来（见 RunPolicy.for_trigger 真值表）。
+            task_data["manual_run"] = bool(manual_run)
             extra = task_data.get("extra") or {}
             runweek_mode = str(extra.get("runweek_mode") or "manual").strip().lower()
             tmdb_id = int(task_data.get("tmdb_id") or 0)

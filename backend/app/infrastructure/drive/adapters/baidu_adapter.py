@@ -669,6 +669,34 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 return shared_data
         raise ValueError("无法读取百度分享文件列表，请检查分享链接、提取码或账号状态")
 
+    # 分享页（/s/xxx 页面里的 yunData/locals JSON）的 errno 与分享接口的 ERROR_CODES 语义不完全一致：
+    # -7 在分享页代表「分享不存在/已被取消」，而不是「分享文件夹等待审核中」。
+    _SHARED_PAGE_ERRNO_MESSAGES = {
+        -7: "分享链接不存在或已被取消",
+        -1: "分享链接不存在",
+        -9: "文件不存在或已被删除",
+        105: "分享链接已过期",
+        145: "分享链接已失效",
+    }
+
+    def _shared_page_error(self, shared_data: Dict) -> Dict:
+        """从分享页 JSON 里识别失效信号；返回 {} 表示正常。
+
+        百度 share/verify 对已删除的分享依然返回 errno=0，真正的失效信号只出现在分享页：
+        share_page_type=error、errno 非 0、file_list 为空。此前 get_detail 把分享页当成功处理，
+        于是死链在「生成分享检测」里被判成「有效」。
+        """
+        data = shared_data if isinstance(shared_data, dict) else {}
+        page_type = str(data.get("share_page_type") or "").strip().lower()
+        raw_errno = data.get("errno")
+        errno = self._lead_in_to_int(raw_errno, 0) if raw_errno is not None else 0
+        if not errno and page_type != "error":
+            return {}
+        if not errno:
+            errno = -1
+        message = self._SHARED_PAGE_ERRNO_MESSAGES.get(errno) or self._get_error_message(errno)
+        return {"code": errno, "message": message}
+
     def _api_list_shared_paths(
         self,
         sharedpath: str,
@@ -955,6 +983,18 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             if not shared_data:
                 raise ValueError("无法读取百度分享文件列表")
 
+            page_error = self._shared_page_error(shared_data)
+            if page_error:
+                logger.warning(
+                    f"[Baidu] 分享页标记失效 errno={page_error['code']}：{share_url}"
+                )
+                return {
+                    "code": page_error["code"],
+                    "message": page_error["message"],
+                    "data": {"list": [], "full_path": []},
+                    "metadata": {"_total": 0},
+                }
+
             uk = shared_data.get("share_uk") or shared_data.get("uk")
             if uk:
                 uk = int(uk)
@@ -1136,6 +1176,10 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
 
             if not shared_data:
                 return {"code": 1, "message": "无法获取分享信息", "data": {}}
+
+            page_error = self._shared_page_error(shared_data)
+            if page_error:
+                return {"code": page_error["code"], "message": page_error["message"], "data": {}}
 
             uk = shared_data.get("share_uk") or shared_data.get("uk")
             if uk:
@@ -1355,6 +1399,62 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
 
         return results
 
+    # 分享创建后的自检：用同一个 Cookie 立刻验证一次，避免把死链返回给用户。
+    # 刚创建的分享在百度侧偶尔需要几秒才可读，所以重试；只有「分享页明确标记失效/不存在」才判失败。
+    _SHARE_VERIFY_ATTEMPTS = 3
+    _SHARE_VERIFY_DELAY_SECONDS = 0.8
+    _SHARE_VERIFY_FATAL_CODES = frozenset({-1, -7, -9, 105, 145})
+
+    def _verify_created_share(
+        self,
+        share_page_url: str,
+        passcode: str,
+        *,
+        attempts: Optional[int] = None,
+        delay_seconds: Optional[float] = None,
+    ) -> Tuple[bool, str, str]:
+        """校验刚创建的分享是否真的可读，返回 (是否放行, 结论状态, 说明文案)。
+
+        三种结论：
+        - `valid`：能读到内容，链接可用；
+        - `invalid`：分享页明确标记失效/不存在（确定性失败，调用方必须报错，不能返回死链）；
+        - `unknown`：读不到（网络/解析异常、暂时空列表），不能证明失效，放行但记录告警。
+        """
+        total = max(1, int(attempts if attempts is not None else self._SHARE_VERIFY_ATTEMPTS))
+        delay = max(0.0, float(delay_seconds if delay_seconds is not None else self._SHARE_VERIFY_DELAY_SECONDS))
+        last_state = "unknown"
+        message = ""
+        for attempt in range(1, total + 1):
+            shared_data: Optional[Dict] = None
+            try:
+                self._api_access_shared(share_page_url, passcode)
+                shared_data = self._api_shared_paths(share_page_url)
+            except Exception as exc:  # 网络抖动/页面结构变化都不能当成「链接失效」
+                logger.warning("[Baidu] 分享创建后自检读取失败（第%s次）：%s", attempt, exc)
+                shared_data = None
+                message = str(exc) or type(exc).__name__
+
+            page_error = self._shared_page_error(shared_data) if isinstance(shared_data, dict) else {}
+            if page_error:
+                code = int(page_error.get("code") or 0)
+                message = str(page_error.get("message") or "")
+                last_state = "invalid" if code in self._SHARE_VERIFY_FATAL_CODES else "unknown"
+            elif isinstance(shared_data, dict) and shared_data:
+                file_list = shared_data.get("file_list") or []
+                if isinstance(file_list, dict):
+                    file_list = file_list.get("list") or []
+                if file_list:
+                    return True, "valid", ""
+                last_state = "unknown"
+                message = message or "分享创建后暂时读不到内容"
+
+            if attempt < total:
+                time.sleep(delay * attempt)
+
+        if last_state == "invalid":
+            return False, "invalid", message
+        return True, "unknown", message
+
     def create_share_link(self, file_path: str, title: str) -> Dict[str, str]:
         """Create a Baidu share for the exact saved folder, permanent when possible."""
         from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -1417,6 +1517,23 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
         query["pwd"] = passcode
         share_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+        # 创建完立刻自检：拿到「分享页不存在/已失效」这类确定性证据就报错，绝不把死链返给调用方。
+        share_page_url = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+        verified, verify_state, verify_message = self._verify_created_share(share_page_url, passcode)
+        if not verified:
+            logger.error(
+                "[Baidu] 分享创建后自检未通过：share=%s state=%s message=%s",
+                share_url, verify_state, verify_message,
+            )
+            raise RuntimeError(
+                f"分享创建后自检未通过：{verify_message or '百度侧未返回可读取内容'}，请稍后重试（本次生成的链接未返回）"
+            )
+        if verify_state != "valid":
+            logger.warning(
+                "[Baidu] 分享创建后无法完成自检，按原样返回：share=%s message=%s",
+                share_url, verify_message or "读取失败",
+            )
+
         result = {
             "share_url": share_url,
             "share_id": str(response.get("shareid") or response.get("share_id") or ""),

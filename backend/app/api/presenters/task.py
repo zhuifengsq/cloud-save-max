@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from app.application.dto.task import DramaRunScheduleOut
 from app.schemas.task import TaskExecutionOut, TaskOut
 from app.schemas.task_scheduler import TaskSchedulerSettingOut
 from app.application.queries.task_views import TaskExecutionView, TaskSchedulerSettingView, TaskView
@@ -54,6 +55,7 @@ def task_out(view: TaskView) -> TaskOut:
         executions=[execution_out(x) for x in view.executions[:MAX_EXECUTIONS_PER_TASK]],
         created_at=view.created_at,
         updated_at=view.updated_at,
+        run_schedule=view.run_schedule or DramaRunScheduleOut(),
     )
 
 

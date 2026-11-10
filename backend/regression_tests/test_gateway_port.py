@@ -37,7 +37,12 @@ class _BaseFakeAdapter:
         }
         self.mkdir_response = {"code": 0}
         self.token_response = {"code": 0, "data": {"stoken": "st"}}
-        self.detail_response = {"code": 0, "data": {"list": []}}
+        # 分享详情默认给「有内容」的响应：空目录在探测语义里等于不可用（见 test_probe_share_rejects_empty_list），
+        # 默认空列表会让「探测通过」变成假阳性，正是死链被判有效的老 bug。
+        self.detail_response = {
+            "code": 0,
+            "data": {"list": [{"fid": "f1", "fid_token": "t1", "file_name": "第一集.mp4", "is_dir": False}]},
+        }
         self.save_response = {"code": 0, "data": {"task_id": "task-1"}}
         self.verdict = {"kind": "unknown", "message": ""}
 
@@ -224,6 +229,16 @@ def test_transfer_raises_when_fid_token_missing():
         gateway_for_adapter(adapter).transfer("https://pan.quark.cn/s/x", "target-fid")
     assert excinfo.value.kind == "invalid"
 
+
+def test_probe_share_rejects_empty_list_even_when_code_is_zero():
+    """死链回归：部分网盘（百度）对已失效分享返回 code=0 + 空 file_list，不能判「有效」。"""
+    adapter = _BaseFakeAdapter()
+    adapter.detail_response = {"code": 0, "data": {"list": []}}
+    result = gateway_for_adapter(adapter).probe_share("https://pan.baidu.com/s/1abc")
+    assert result.valid is False
+    assert result.kind == "invalid"
+    assert result.stage == "read"
+    assert "空" in result.message or "不存在" in result.message
 
 def test_fake_eleventh_drive_needs_no_gateway_change():
     """扩展性验收：新网盘只实现适配器方法，端口层一行不改即可用。"""

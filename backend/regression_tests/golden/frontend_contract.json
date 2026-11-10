@@ -23,7 +23,8 @@
       "extra": "dict[str, typing.Any]",
       "executions": "list[app.schemas.task.TaskExecutionOut]",
       "created_at": "<class 'datetime.datetime'>",
-      "updated_at": "<class 'datetime.datetime'>"
+      "updated_at": "<class 'datetime.datetime'>",
+      "run_schedule": "<class 'app.application.dto.task.DramaRunScheduleOut'>"
     },
     "TaskExecutionOut": {
       "id": "<class 'int'>",
@@ -162,6 +163,7 @@
       "lead_in",
       "pattern",
       "replace",
+      "run_schedule",
       "savepath",
       "shareurl",
       "task_type",
@@ -172,6 +174,13 @@
       "tmdb_media_type",
       "tmdb_status",
       "updated_at"
+    ],
+    "TaskRunSchedule": [
+      "allowed",
+      "message",
+      "mode",
+      "reason",
+      "weekdays"
     ],
     "TaskSchedulerSetting": [
       "crontab",

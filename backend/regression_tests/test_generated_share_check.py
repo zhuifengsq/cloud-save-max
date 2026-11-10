@@ -86,7 +86,8 @@ def test_checks_generated_link_each_run_without_blocking_transfer(monkeypatch):
 
     def detail(share_id, stoken, folder, *, first_page):
         assert first_page
-        return {"code": 0, "data": {"list": []}}
+        # 必须返回「有内容」的目录：空目录在探测语义里等于不可用（死链防护，见 gateway.probe_share）
+        return {"code": 0, "data": {"list": [{"fid": "f1", "fid_token": "t1", "file_name": "第一集.mp4"}]}}
 
     # 用真实的 QuarkAdapter 实例（不初始化网络），让检测走真实的失败分类逻辑
     adapter = object.__new__(QuarkAdapter)

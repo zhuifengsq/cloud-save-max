@@ -725,6 +725,8 @@ async function handleRunStream(opts: { title: string; url: string; body?: any; t
 }
 
 async function handleRun(row: TaskItem) {
+  // 手动执行不受「运行星期」限制：用户要求「不到设定的日期也能点击执行，并且执行」。
+  // run_schedule 仍在接口里下发（仅用于展示「今天不在运行日期」的说明），定时轮询才按它跳过。
   await handleRunStream({
     title: `执行日志：${row.taskname}`,
     url: `/api/tasks/${row.id}/run/stream`,
@@ -832,17 +834,24 @@ async function saveScheduler() {
 
 async function confirmRunAll() {
   if (runAllDialog.running) return
+  const runnable = filteredTasks.value.filter((task) => task.enabled)
+  if (!runnable.length) {
+    ElMessage.warning('当前没有可执行的追剧任务')
+    return
+  }
   try {
-    await ElMessageBox.confirm('确认现在手动执行全部“追剧任务”吗？将按当前任务的 runweek 自动跳过不符合条件的任务。', '手动执行', {
-      type: 'warning',
-      confirmButtonText: '执行',
-      cancelButtonText: '取消',
-    })
+    await ElMessageBox.confirm(
+      `确认现在手动执行全部“追剧任务”吗？共 ${runnable.length} 个任务（手动执行不受运行星期限制）。`,
+      '手动执行',
+      {
+        type: 'warning',
+        confirmButtonText: '执行',
+        cancelButtonText: '取消',
+      },
+    )
   } catch {
     return
   }
-  const target = filteredTasks.value.filter((task) => task.enabled)
-  const runnable = target
 
   runAllDialog.items = runnable.map((task) => ({
     taskId: Number(task.id) || 0,

@@ -16,14 +16,24 @@
 > presenter 变纯函数、列表查询条数与任务数无关（回归测试计数锁定）。
 > 非阻塞小项② 前端契约 golden 已完成（方案 §10.19，2026-11-09）：后端模型字段/顺序、`frontend/src/types/tasks.ts` 字段集合、
 > SSE 逐字节线格式、错误体全部落盘为 `backend/regression_tests/golden/frontend_contract.json`，两侧任一方改动不更新 golden 即失败。
-> 当前基线：回归 **525 passed / 2 skipped**、分层违规 **0**、deferred 84、250 模块，
-> `backend/.layering-baseline.json` = `{"violations":0,"deferred_imports":84,"cycles":0}`。
+> 当前基线：回归 **553 passed / 2 skipped**、分层违规 **0**、deferred 90、251 模块，
+> `backend/.layering-baseline.json` = `{"violations":0,"deferred_imports":90,"cycles":0}`。
 > 非阻塞小项③ 3 篇 ADR 已完成（方案 §10.20，2026-11-09）：[0001 TMDB 写路径例外](adr/0001-tmdb-cache-writer-isolation.md)、
 > [0002 准入保留在调用点](adr/0002-task-admission-stays-at-call-sites.md)、
 > [0003 单进程假设](adr/0003-single-process-deployment-assumption.md) —— 写的是「为什么不能那样改、什么条件下可以改」。
 > 2026-11-09 事故复盘：TMDB 缓存刷新 500（仓储下沉遗留未定义名 `lookup`，同批共 6 处未定义名/漏 import）已全部修复，
 > 新增两个护栏：[静态扫描 `test_no_undefined_globals.py`](../../backend/regression_tests/test_no_undefined_globals.py)
 > 与 [刷新端点 `test_tmdb_cache_refresh_route.py`](../../backend/regression_tests/test_tmdb_cache_refresh_route.py)，方案 §10.22。
+> 2026-11-10 加固：生成分享后立刻用同一 Cookie 自检（`BaiduAdapter._verify_created_share`），
+> 只有「分享页明确标记失效」才报错，读不到一律放行（fail-open），避免把网络抖动变成用户可见失败；新增 9 项护栏，方案 §10.29。
+> 2026-11-10 缺陷修复：「已删除的分享仍显示有效」——百度 `share/verify` 对死链也返回 errno=0，且 `get_detail` 把分享页的
+> `errno=-7` 丢掉后按「空目录=成功」返回，网关又把空列表当有效。修复：适配器透传分享页 errno（`_shared_page_error`）、`save_file` 拒绝死链、
+> 网关「成功但空目录」判不可用（`probe_share`）。新增 6 项护栏，方案 §10.28。
+> 2026-11-10 需求：「追剧任务不到运行日期不能点执行」。判定抽成唯一事实源 `app/application/drama_schedule.py`（纯函数 + 读模型字段），
+> auto 模式只读本地 TMDB 缓存不发请求，读不到按每天放行（fail-open）。方案 §10.30。
+> **同日口径修正（§10.30.8）**：用户澄清「希望不到设定的日期也能点击执行，并且执行」→ 手动执行**无视运行星期**
+> （按钮永远可点、路由不 409、执行器不 SkipTask，`RunPolicy.manual_run=True`）；运行星期只约束 APScheduler 定时轮询。
+> 第一版的 409 拦截与按钮禁用已全部撤除，`run_schedule` 字段保留为展示信息。新增 13 项护栏，回归 553。
 > 未完成（非阻塞）：`domain/` 实体化（当前 `app/domain/` 只有 8 个 Protocol，无实体/值对象）。
 
 ## 1. 四层 + 横切层（唯一契约）
@@ -65,11 +75,11 @@
 
 | 用途 | 命令 | 通过标准 |
 | --- | --- | --- |
-| 分层门禁 | `python scripts/check_layering.py --fail-on 0 --baseline backend/.layering-baseline.json` | 违规数 ≤ 预算（当前 **0**；84 deferred；0 cycle；250 模块） |
+| 分层门禁 | `python scripts/check_layering.py --fail-on 0 --baseline backend/.layering-baseline.json` | 违规数 ≤ 预算（当前 **0**；90 deferred；0 cycle；251 模块） |
 | schema 漂移 | `python scripts/check_schema_drift.py --ignore-file scripts/schema_drift_allowlist.txt` | `drift=0`（白名单只含 10 张已确认遗留表；`model_only` 永不豁免） |
 | 迁移预检 | `python scripts/migration_preflight.py` | 报告 current/head/pending、库体积、WAL、freelist、最近备份 |
 | 备份+校验 | `python scripts/backup_db.py --keep 5` | integrity_check/quick_check 均为 ok |
-| 测试 | `cd backend && python -m pytest tests regression_tests -q` | 当前基线 525 passed, 2 skipped |
+| 测试 | `cd backend && python -m pytest tests regression_tests -q` | 当前基线 553 passed, 2 skipped |
 
 CI 侧已有三个 workflow：`layering-gate`（分层预算）、`db-schema-gate`（空库跑完整迁移链→drift→preflight）、
 `docker-publish`（镜像构建与 `regression_tests`）。`backend/tests` 的 299 项目前只在本地跑。

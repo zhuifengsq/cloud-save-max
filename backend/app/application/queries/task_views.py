@@ -21,12 +21,15 @@ from sqlalchemy.orm import Session
 
 from app.application.drama_lead_in import load_lead_in_summary_map
 from app.application.drama_update_progress import build_drama_update_progress
-from app.application.dto.task import DramaUpdateProgressOut
+from app.application.drama_schedule import resolve_item_run_schedule, resolve_run_schedule
+from app.application.dto.task import DramaRunScheduleOut, DramaUpdateProgressOut
 from app.application.tasks import list_recent_executions, list_tasks_recent_executions
+from app.application.tmdb_settings import is_tmdb_configured
 from app.application.tmdb_view import (
     get_tmdb_status,
     load_tmdb_payload_map,
     load_tmdb_status_map,
+    load_tmdb_weekday_map,
     tmdb_cache_key,
 )
 
@@ -84,6 +87,7 @@ class TaskView:
     addition: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     executions: tuple[TaskExecutionView, ...] = ()
+    run_schedule: DramaRunScheduleOut | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +121,9 @@ def task_view(
     tmdb_status_map: dict[tuple[str, int], str | None] | None = None,
     tmdb_payload_map: dict[tuple[str, int], dict[str, Any] | None] | None = None,
     lead_in_map: dict[int, dict[str, Any]] | None = None,
+    run_schedule: DramaRunScheduleOut | None = None,
+    tmdb_weekday_map: dict[tuple[str, int], tuple[int, ...]] | None = None,
+    tmdb_configured: bool | None = None,
 ) -> TaskView:
     """单个任务 → 视图。
 
@@ -149,6 +156,30 @@ def task_view(
         )
         drama_update_progress = build_drama_update_progress(tmdb_details=tmdb_details, saved_latest=saved_latest)
 
+    task_type = str(getattr(item, "task_type", "") or "")
+    if run_schedule is not None:
+        schedule = run_schedule
+    elif task_type == "drama":
+        if isinstance(tmdb_weekday_map, dict):
+            # 列表场景：更新日由调用方一次批量算好；「TMDB 是否已配置」按需读一次
+            # （tmdb_settings 在 Session 级缓存，只有真是 auto 模式的任务才会触发查询）
+            days = (tmdb_weekday_map or {}).get(key, ()) if key is not None else ()
+            configured = tmdb_configured if tmdb_configured is not None else (is_tmdb_configured(db) if db is not None else False)
+            schedule = resolve_run_schedule(
+                task_type=task_type,
+                extra=extra,
+                tmdb_id=getattr(item, "tmdb_id", None),
+                tmdb_media_type=getattr(item, "tmdb_media_type", None),
+                tmdb_configured=bool(configured),
+                episode_weekdays=days,
+            ).to_out()
+        elif db is not None:
+            schedule = resolve_item_run_schedule(db, item, payload=(tmdb_payload_map or {}).get(key) if key else None)
+        else:
+            schedule = resolve_run_schedule(task_type=task_type, extra=extra).to_out()
+    else:
+        schedule = resolve_run_schedule(task_type=task_type, extra=extra).to_out()
+
     lead_in_summary = (lead_in_map or {}).get(int(getattr(item, "id", 0) or 0))
     if not isinstance(lead_in_summary, dict):
         lead_in_summary = dict(_EMPTY_LEAD_IN)
@@ -176,6 +207,7 @@ def task_view(
         addition=_load_json_dict(getattr(item, "addition_json", None)),
         extra=extra,
         executions=tuple(execution_view(x) for x in raw_executions),
+        run_schedule=schedule,
     )
 
 
@@ -186,6 +218,7 @@ def list_task_views(db: Session, *, executions_per_task: int = DEFAULT_EXECUTION
         return []
     tmdb_status_map = load_tmdb_status_map(db, items)
     tmdb_payload_map = load_tmdb_payload_map(db, items)
+    tmdb_weekday_map = load_tmdb_weekday_map(db, items, payload_map=tmdb_payload_map)
     lead_in_map = load_lead_in_summary_map(db, [int(getattr(item, "id", 0) or 0) for item in items])
     return [
         task_view(
@@ -194,6 +227,7 @@ def list_task_views(db: Session, *, executions_per_task: int = DEFAULT_EXECUTION
             tmdb_status_map=tmdb_status_map,
             tmdb_payload_map=tmdb_payload_map,
             lead_in_map=lead_in_map,
+            tmdb_weekday_map=tmdb_weekday_map,
         )
         for item in items
     ]

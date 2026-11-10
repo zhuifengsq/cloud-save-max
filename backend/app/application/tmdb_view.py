@@ -102,6 +102,66 @@ def load_tmdb_payload_map(db: Session, items: list[object]) -> dict[tuple[str, i
     return out
 
 
+def load_tmdb_weekday_map(
+    db: Session,
+    items: list[object],
+    *,
+    payload_map: dict[tuple[str, int], dict[str, object] | None] | None = None,
+) -> dict[tuple[str, int], tuple[int, ...]]:
+    """批量算「更新日」（1=周一…7=周日）：优先单集播出日，取不到回落整季更新日。
+
+    任务列表要用它判断今天是否该跑，因此这里只读缓存、**绝不触发网络刷新**
+    （refresh 走 get_tmdb_detail_cached，缓存缺失时会发请求，列表里不能用）。
+    """
+    from app.application.drama_schedule import normalize_weekdays
+    from app.application.tmdb_cache import infer_tv_episode_weekdays_from_details
+
+    keys: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for item in items:
+        if str(getattr(item, "task_type", "") or "") != "drama":
+            continue
+        key = tmdb_cache_key(item)
+        if key is None or key in seen or key[0] != "tv":
+            continue
+        seen.add(key)
+        keys.append(key)
+    if not keys:
+        return {}
+
+    payloads = payload_map if payload_map is not None else load_tmdb_payload_map(db, items)
+    out: dict[tuple[str, int], tuple[int, ...]] = {}
+    missing: list[tuple[str, int]] = []
+    for key in keys:
+        days = normalize_weekdays(infer_tv_episode_weekdays_from_details(payloads.get(key)))
+        if days:
+            out[key] = days
+        else:
+            missing.append(key)
+    if not missing:
+        return out
+
+    language, poster_language = get_tmdb_lang_pair(db)
+    rows = tmdb_media_cache_repo().load_update_weekday_rows(
+        db,
+        language=language,
+        poster_language=poster_language,
+        tv_ids=[tid for _mt, tid in missing],
+    )
+    fallback: dict[tuple[str, int], tuple[int, ...]] = {}
+    for mt, tid, raw in rows:
+        key = (str(mt or "").strip().lower(), int(tid))
+        if key in fallback or not raw:
+            continue
+        try:
+            fallback[key] = normalize_weekdays(json.loads(raw))
+        except Exception:
+            fallback[key] = ()
+    for key in missing:
+        out[key] = fallback.get(key, ())
+    return out
+
+
 def get_tmdb_status(db: Session, mt: str, tid: int) -> str | None:
     """单个媒体的最新状态（无批量 map 时使用）。"""
     language, poster_language = get_tmdb_lang_pair(db)

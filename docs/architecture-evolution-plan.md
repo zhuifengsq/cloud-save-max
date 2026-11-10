@@ -763,9 +763,9 @@ class RunTaskUseCase:
 
 | 指标 | 改造前基线 | 当前 | 命令 |
 | --- | --- | --- | --- |
-| 测试总数 | 404 passed / 2 收集失败 | **493 passed, 2 skipped**（+89 项新护栏；含网关端口 13、兼容层垫片 5） | `python -m pytest tests regression_tests -q` |
-| 分层违规 | 165 条（60/38/30/23/10/4） | **115 条（38/27/23/15/8/4）**，净减 50 | `python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json` |
-| 模块 / import 边 | 188 / 610 | **329 / 769**（deferred 33→63；增量含仓储访问、时钟/限速/网关实现、composition root 延迟 import，以及 S4-6 搬目录后新增的 84 个旧路径垫片） | 同上 |
+| 测试总数 | 404 passed / 2 收集失败 | **553 passed, 2 skipped**（+149 项新护栏；含网关端口 14、分享页 errno 6、生成后自检 9、兼容层垫片 5、追剧运行日期判定 13） | `python -m pytest tests regression_tests -q` |
+| 分层违规 | 165 条（60/38/30/23/10/4） | **0 条**（S5 收尾归零；本轮新增改动仍为 0） | `python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json` |
+| 模块 / import 边 | 188 / 610 | **250 / 721**（deferred 33→84；增量含仓储访问、时钟/限速/网关实现、composition root 延迟 import、S4-6 搬目录后的旧路径垫片） | 同上 |
 | 路由层裸 `db.commit()` | 89 处 / 18 文件 | **0 处 / 0 文件**（13 个路由文件全部归零，89 处全收口） | `grep -rc "db\.commit()" backend/app/api/routes` |
 | 全 app 提交点 | 146 处（路由 45 / 服务 80 / 扩展 16 / main 2 / scripts 2 / db 1） | **95 处 / 11 文件**：handlers 50、actions 20、scheduler 14、drama_lead_in 2、main 2、scripts 2、db+core 2、task_executor 1、telegram_bot_manager 1、share_preview_batch 1（全部登记归属，见 §10.10） | `pytest regression_tests/test_commit_ownership.py -q`；`grep -rn "\.commit()" backend/app` |
 | 锁冲突下的写入语义 | **静默丢数据**（flush 已回滚，重试提交空事务并成功） | 抛原始锁错误（5xx），行不落库 | `pytest regression_tests/test_unit_of_work.py -k lock_conflict -q` |
@@ -1782,7 +1782,286 @@ AFTER : recent_failures=1（stage=generated_share_check）; summary total=19 suc
 
 ---
 
+## 10.28 「已删除的分享仍显示有效」：检测链路漏掉了分享页错误（2026-11-10）
+
+**现象**：用户拿本系统生成的百度分享 `https://pan.baidu.com/s/1liYN70njkafHvRKCyXZNIA?pwd=6666`（`pwd=6666` 是 `create_share_link` 的硬编码，确系本系统产物）在浏览器打开，百度页标题是「百度网盘-链接不存在」；但任务列表里「有效」徽章一直是绿色，点「执行」之后依然显示有效。
+
+**证据链（四级，全部实测）**
+
+| 步骤 | 观测 | 结论 |
+| --- | --- | --- |
+| 1. 百度侧事实 | 死链页面 `<title>百度网盘-链接不存在</title>`（12,727 B）；对照有效链接 `https://pan.baidu.com/s/1FDxqzujCQy_sZIss3NS3Qw?pwd=1111` 是 `<title>百度网盘 请输入提取码</title>`（15,645 B） | 分享确实已不存在，不是提取码错、也不是网络问题 |
+| 2. `get_stoken` | 百度 `share/verify` 对已删除的分享同样返回 `{"errno": 0, "err_msg": "", "randsk": "..."}`，`get_stoken` 随后无条件返回 `stoken = f"{pwd_id}:{passcode}"` | **验证阶段天然不可靠**：`check_errno=True` 也拦不住（errno 就是 0） |
+| 3. 分享页 JSON | `_api_shared_paths()` 解析出的 `yunData.setData`：死链 `errno=-7, share_page_type="error", file_list=[]`；有效链接 `errno=0, file_list=[嫁丨金钗（4K）]` | 失效信号**只**出现在分享页这一层 |
+| 4. `get_detail` | 旧代码只读 `file_list`，空列表时直接 `return {"code": 0, "message": "success", "data": {"list": []}}`，把 `errno=-7` 丢掉 | `gateway.probe_share` 看到 `code=="0"` 且 `list` 是 list（空列表也是 list）→ 判「有效」 |
+
+**两层修复（都必要，缺一层就还有死链能漏过去）**
+
+1. **适配器层透传分享页错误**（`backend/app/infrastructure/drive/adapters/baidu_adapter.py`）
+   - 新增 `_shared_page_error(shared_data)`（:682）与分享页 errno 文案表 `_SHARED_PAGE_ERRNO_MESSAGES`（:674）：`share_page_type == "error"` 或 `errno` 非 0 即返回 `{"code", "message"}`。**`-7` 在分享页是「分享不存在/已被取消」**，与 `ERROR_CODES[-7]`（分享接口的「等待审核中」）语义不同，单独映射，避免把死链说成「审核中」。
+   - `get_detail`（:986-996）拿到 `shared_data` 后先查 page error，命中直接返回 `code=errno` + 文案，不再把空列表当成功。
+   - `save_file`（:1180-1181）同样前置拦截：死链**不进入转存 API**，直接返回错误，避免「没转存任何文件却算成功」。
+2. **端口层纵深防御**（`backend/app/infrastructure/drive/gateway.py:167-181`）
+   - `probe_share`：`code=="0"` 且目录**非空**才算 `valid`；`code=="0"` + 空列表 → `ShareProbeResult(valid=False, kind="invalid", message="分享目录为空或链接不存在")`。这一层与具体网盘无关，任何网盘返回「成功但空目录」都会被判不可用。
+
+**为什么不是「直接把 -7 加进 SHARE_INVALID_ERRNOS」**：`-7` 在不同接口语义相反（分享页=不存在/取消，文件接口=审核中）。加进 `SHARE_INVALID_ERRNOS` 会让「真的在审核」的分享被判失效；本次做法是「分享页这一层给出准确文案」，`classify_share_failure` 靠文案里的「不存在」自然归到 `invalid`（message 分支），审核中的 `-7` 原样仍是 `pending`。
+
+**护栏（`backend/regression_tests/test_baidu_share_page_errno.py` 5 项 + `test_gateway_port.py` 1 项）**
+
+| 测试 | 断言 |
+| --- | --- |
+| `test_get_detail_propagates_share_page_errno` | 分享页 `errno=-7` → `get_detail` 的 `code` 必须是 -7，文案含「不存在/取消」，列表为空 |
+| `test_get_detail_treats_share_page_type_error_as_invalid` | 只有 `share_page_type=error`（无 errno）→ 也判失败 |
+| `test_get_detail_keeps_normal_page_success` | 无失效信号的空目录仍返回 `code=0`（不误杀；可用性由端口层判定） |
+| `test_save_file_refuses_dead_share` | 死链调 `save_file` 直接返回错误，不发转存请求 |
+| `test_gateway_probe_marks_dead_baidu_share_invalid` | 真 `BaiduAdapter` + 端口 → `valid=False, kind="invalid", stage="read"` |
+| `test_probe_share_rejects_empty_list_even_when_code_is_zero`（网关护栏） | 任意网盘 `code=0` + 空列表 → 不可用 |
+
+**两个测试夹具的旧假设一并修正**（本次最有价值的发现之一）：`test_gateway_port.py` 的假适配器默认返回 `{"code": 0, "data": {"list": []}}`、`test_generated_share_check.py` 的假 `detail` 也返回空列表，并且都断言「探测成功」——**测试夹具本身在固化这个 bug**。改成返回「有一集视频」的目录后，语义才和真实分享一致。
+
+**真实链接验收（本机真账号，2026-11-10 11:2x）**
+
+~~~text
+[Baidu] 分享页标记失效 errno=-7：https://pan.baidu.com/s/1liYN70njkafHvRKCyXZNIA
+DEAD: valid=False kind=invalid stage=read message=分享链接不存在或已被取消
+GOOD: valid=True  kind=valid   stage=read message=
+~~~
+
+修复后全量 **531 passed, 2 skipped**（525 + 6 项新护栏）；门禁 `modules=250 internal_imports=721 deferred_imports=84 violations=0 import_cycles=0`，exit 0；`import app.main` ok。
+
+**影响面与回退**
+
+- 无灰度开关：这是判定正确性修复，不是性能/行为优化。回退方式 = 还原 `get_detail` 的 page-error 分支。
+- 对外契约不变：`ShareProbeResult` 仍是 `(valid, kind, message, stage)`；前端 `GeneratedShareStatus.vue` 只按 `valid/invalid/error` 上色，`message` 进 tooltip → 死链现在显示「已失效」（红），悬停看到「分享链接不存在或已被取消」。
+- 行为变更点（预期内）：**「成功的空目录分享」不再判有效**。本系统只在目录非空时创建分享（`create_share_link` 先列目录校验），自有链路无影响；外部空目录分享对转存本来也无价值。
+- 用户侧动作：重启后端（或重建镜像）后，对相关任务**再点一次「执行」**，徽章才会刷新成「已失效」；历史执行记录里的旧快照不会自动纠正。
+- 遗留（已补上）：`create_share_link` 创建后不自检的问题已在下一节补掉 → 见 §10.29。
+
+**四条教训**
+
+1. **「验证通过」不等于「分享存在」**：百度 `share/verify` 对已删除分享也回 errno=0，任何只依赖 verify 的判定都会漏；必须落到「能不能列出内容」这一层。
+2. **空集合不能当成功**：`list: []` 被 `isinstance(..., list)` 判真，是最典型的假阳性写法；凡「有内容才算成功」的地方都要显式判非空。
+3. **测试夹具会固化 bug**：夹具默认空目录却断言成功，等于把 bug 写进了护栏；修 bug 时必须回头检查夹具是不是「照着 bug 写的」。
+4. **同名错误码在不同接口要分开映射**：`-7` 在分享页与文件接口语义相反，一张全局错误码表兜不住。
+
 ---
+
+## 10.29 生成分享后立刻自检：不再把死链交到用户手里（2026-11-10）
+
+**需求**（用户原话）：「生成完立刻用同一 Cookie 验一遍，失败就报错而不是返回死链。」
+
+§10.28 修的是「已有分享被判有效」，这一节补的是源头：`create_share_link` 创建成功后**没有任何验证**，百度侧即便返回了链接、后面又变成死链（或创建时就被限流/风控），用户点「生成分享」拿到的就是一个打不开的地址。历史死链 `1liYN70njkafHvRKCyXZNIA` 极可能就是这种产物。
+
+**实现（`backend/app/infrastructure/drive/adapters/baidu_adapter.py`）**
+
+```text
+create_share_link()                        # :1458
+  ├─ _api_list / ls_dir 校验目录非空        # 原有：空目录不创建分享
+  ├─ POST share/set（先 period=0，失败退 7 天）# 原有
+  └─ _verify_created_share(share_page_url, passcode)   # :1408 新增
+       ├─ _api_access_shared → _api_shared_paths       # 同一个 Cookie 读分享页
+       ├─ _shared_page_error(shared_data)              # 复用 §10.28 的分享页错误识别
+       └─ 三态：valid / invalid / unknown
+```
+
+关键设计是**只对「确定性证据」报错**（否则会把网络抖动变成用户可见的失败）：
+
+| 三态 | 判定依据 | 调用方行为 |
+| --- | --- | --- |
+| `valid` | 分享页无错误且 `file_list` 非空 | 返回链接（正常路径） |
+| `invalid` | 分享页 `errno ∈ {-1, -7, -9, 105, 145}`（`_SHARE_VERIFY_FATAL_CODES`，:1406）或 `share_page_type=error` | **抛 `RuntimeError`**：`分享创建后自检未通过：分享链接不存在或已被取消…`（:1522-1534），路由转成 `TASK_SHARE_FAILED` 错误提示，链接不写入任务 |
+| `unknown` | 读页面抛异常、解析不到数据、或「无错误但暂时空列表」 | **放行**并 `logger.warning`（:1535-1538）——读不到不能证明链接死了 |
+
+**为什么要重试**：百度侧新建分享有时要几秒才可读（这也是为什么不能「一次读不到就报失败」）。`_SHARE_VERIFY_ATTEMPTS = 3`、`_SHARE_VERIFY_DELAY_SECONDS = 0.8`（退避 0.8s/1.6s，共约 2.4s）。重试期间任何一次读到 `valid` 立即返回；只有「重试后仍是 invalid」才报错。
+
+**真实链接实测（本机真账号 id=2「百度」，`attempts=1` 直调自检函数，未创建新分享）**
+
+~~~text
+GOOD -> ok=True  state=valid   msg=
+DEAD -> ok=False state=invalid msg=分享链接不存在或已被取消
+~~~
+
+**护栏（`backend/regression_tests/test_create_share_self_check.py`，9 项）**
+
+| 分组 | 断言 |
+| --- | --- |
+| 三态语义 | 有内容→valid；分享页 -7→invalid；读页面抛异常→unknown **且放行**；无错误但空列表→unknown；第 3 次才可读→valid（验证重试，`call_count==3`） |
+| 创建链路 | 自检通过→返回 `?pwd=6666` 链接，且自检访问的是**不带提取码参数**的分享页地址；自检判死链→`RuntimeError` 含「自检未通过」+「不存在」；自检读不到→仍返回链接；`share/set` 本身失败→**不做自检**（`_api_shared_paths.assert_not_called`） |
+
+同时把 `backend/tests/test_baidu_task_share.py` 的 `setUp` 补了自检所需的假分享页（`_api_access_shared` + `_api_shared_paths`），4 项原有测试语义不变。
+
+**代价与影响面**
+
+- 每次「生成分享」多 1~2 次 HTTP GET（分享页），失败路径最多 3 次、约 +2.4s；成功路径通常 1 次、几百毫秒。
+- 对外契约变化（预期内）：以前「创建成功但链接不可读」返回 200 + 死链，现在返回错误提示。前端 `生成分享` 按钮已有失败提示分支，无需改动。
+- 回退方式：删掉 `create_share_link` 里那一行 `_verify_created_share(...)` 调用即可，自检函数本身不影响其它链路。
+
+**遗留**
+
+- 只做了百度。夸克/其它网盘的 `create_share_link` 走的是各自的分享接口（`backend/app/infrastructure/drive/adapters/quark_adapter.py:426`），目前没有「生成即死链」的证据，暂不动；要加时按同样三态模式实现即可。
+- 自检失败时，百度侧其实**已经创建了分享**（挂在账号里，30 天后才被清理或一直占位）。我们在日志里留了 `share=<url>` 便于排查，但没做自动清理（取消分享需要额外接口 + 风控风险）。若后续发现残留过多，可在失败分支补一次 `share/cancel`。
+
+---
+
+## 10.30 追剧任务「不到运行日期不能点执行」：一处判定、三处同源（2026-11-10）
+
+**需求**（用户原话）：「不到设定的日期不能点击执行」→「追剧任务里面的」。
+即：追剧任务列表里今天**不在「运行星期」**范围内时，「执行」按钮置灰；即便绕过前端，后端两个手动执行入口也要拒绝。
+
+> **口径已修正（2026-11-10 12:40，用户澄清 m07014）**：上面这条只实施了半小时就被推翻——用户原话是
+> 「**我的意思是希望不到设定的日期也能点击执行，并且执行**」。现行语义：**手动执行无视运行星期**
+> （按钮永远可点、路由不 409、执行器不 SkipTask），运行星期只约束 APScheduler 定时轮询。
+> 修正细节见 **§10.30.8**；本节 §10.30.1–10.30.7 保留为第一版实现的历史记录。
+
+### 10.30.1 为什么这不是「加个 if」
+
+改造前，「今天能不能跑」这套判定**只存在于执行器内部**（`DramaExecutor.execute()` 的 `validate_schedule` 段，原 `backend/app/infrastructure/execution/drama_executor.py:669-716`），
+而且是在**已经占了准入槽、已经起了执行线程之后**才失败，用户看到的是「点了执行 → 日志里出现一条 SkipTask」。同时：
+
+- 列表页拿不到这套判定（响应里没有该字段），前端只能让按钮永远可点；
+- 「执行全部」按 `enabled` 过滤，不按运行星期过滤，等于把判断全推给后台；
+- 判定口径有两套可选输入（`allow_once` 兼容开关、auto 模式用 TMDB 更新日），散落在 if/else 里，任何一处改都会和其它入口漂移。
+
+所以做法是**把判定抽成一份纯函数，三个入口 + 列表读模型全部调它**，执行器只保留日志文案。
+
+### 10.30.2 判定口径（唯一事实源：`backend/app/application/drama_schedule.py`）
+
+| 情形 | allowed | reason | 前端提示（message） |
+| --- | --- | --- | --- |
+| 非追剧任务（transfer/share 等） | 是 | `not_drama` | 普通任务不受运行日期限制 |
+| `extra.allow_once = true`（历史兼容字段，前端不再写入） | 是 | `allow_once` | 任务已设置运行一次，忽略运行日期限制 |
+| manual + `runweek` 为空 | 是（按每天） | `no_runweek` | 未设置运行星期，按每天运行 |
+| manual + `runweek` 配置但全部非法 | 否 | `invalid_runweek` | 运行星期设置为空或无效，已阻止执行 |
+| manual + 今天命中 | 是 | `due` | 今天是运行日期：周二（周一、周二…） |
+| manual + 今天未命中 | 否 | `off_day` | 今天（周二）不在设定的运行日期（…)内 |
+| auto + 未绑定 TMDB 电视剧 | 否 | `auto_not_tv` | 运行日期为自动模式，需要任务绑定 TMDB 电视剧 |
+| auto + TMDB 未配置 API key | 否 | `tmdb_not_configured` | TMDB 未配置，无法自动识别更新日 |
+| auto + 未识别到更新日 | 是（按每天） | `no_update_day` | 未识别到更新日，按每天运行 |
+| auto + 单集播出日/整季更新日未命中 | 否 | `off_day` | 今天（周二）不在设定的运行日期（周五）内 |
+
+关键点：
+
+1. **auto 模式的更新日只读本地缓存**（`tmdb_media_cache.payload_json` / `update_weekdays_json`），走 `get_latest_schedule_row` 单表单行读取，**不发任何 TMDB 请求**——列表接口不能因为判定就把 10 个任务打成 10 次外部 HTTP。
+2. **读不到缓存 → 按每天放行（fail-open）**：宁可多跑一次（执行器自己还有 `saved_latest` 去重），也不能因为缓存缺失把用户的按钮全禁掉。反过来，只有「读到确定的更新日且今天不在其中」才禁用。
+3. 单集播出日优先于整季更新日（`infer_tv_episode_weekdays_from_details`，与 §10.27 的口径一致），取不到再回落 `update_weekdays_json`。
+
+### 10.30.3 落地结构（分层归属）
+
+| 位置 | 职责 |
+| --- | --- |
+| `backend/app/application/drama_schedule.py`（新增，12.7 KB） | `RunSchedule` frozen dataclass + `resolve_run_schedule()`（纯函数，可传 `now`）+ `resolve_item_run_schedule()`（读缓存分支）+ `ensure_run_allowed()`（不允许时抛 409） |
+| `backend/app/application/dto/task.py` | 新增 `DramaRunScheduleOut(allowed, mode, weekdays, reason, message)` |
+| `backend/app/application/queries/task_views.py` | `TaskView.run_schedule`；`list_task_views` **一次**批量算好（`load_tmdb_weekday_map` + 惰性 `is_tmdb_configured`），任务数不影响查询条数 |
+| `backend/app/application/tmdb_view.py` | 新增 `load_tmdb_weekday_map(db, items, payload_map=...)`：先用已有 payload 算，缺的再 1 条 SQL 回落 |
+| `backend/app/application/tmdb_settings.py` | 新增 `is_tmdb_configured(db)`，用 `db.info` 做会话级缓存（同一请求只读一次设置） |
+| `backend/app/infrastructure/persistence/repositories/tmdb_media_cache.py` | 新增 `load_update_weekday_rows`（批量）与 `get_latest_schedule_row`（单行，不整行加载 payload） |
+| `backend/app/api/presenters/task.py` | `task_out` 输出 `run_schedule`（缺省 `DramaRunScheduleOut()`） |
+| `backend/app/schemas/task.py` | `TaskOut` 末尾新增 `run_schedule` 字段（追加在末尾，保持既有字段顺序不变） |
+| `backend/app/infrastructure/execution/drama_executor.py` | 原 `validate_schedule` 段整段改调 `resolve_run_schedule()`，**日志文案逐字保留**（「运行一次: 忽略按星期运行限制」「未配置运行星期: 默认允许运行」「未识别到更新日，按每天执行」「跳过: 星期 N 不在 [...]」），不允许时 `raise SkipTask(decision.skip_reason)` |
+| `backend/app/api/routes/tasks.py` / `tasks_stream.py` | 两个手动入口在 `reserve()` 之后、起线程之前调 `ensure_run_allowed`，不允许直接 409 |
+
+**409 契约**：`code = "TASK_RUN_NOT_SCHEDULED"`、`http_status = 409`、`message = "{判定原因}，已阻止执行。如需立即执行，请编辑任务的「运行星期」。"`。
+错误体沿用统一 `{code, message, detail}`，前端 `readTaskRunError` 能把这句话直接弹出来。
+
+**预览端点不拦**：`POST /api/tasks/{id}/run/stream`（按 payload 的试运行，`RunPolicy.for_trigger('preview')`）保持可用——它不写执行记录、只是预览目录，属于「先看看再决定」的入口，拦住反而挡住用户排查。
+
+### 10.30.4 前端
+
+- `frontend/src/types/tasks.ts`：`TaskItem.run_schedule?: TaskRunSchedule | null` + `export type TaskRunSchedule = { allowed; mode; weekdays; reason; message }`。
+- `frontend/src/views/tasks/DramaTaskView.vue`：三处「执行」按钮（表格两分支 + 移动卡片）统一 `:disabled="!isRunAllowed(row)"` + `:title="runBlockedReason(row)"`；
+  `handleRun` 开头再做一次兜底（键盘/脚本触发也不会发请求）；「执行全部」改为只提交 `allowed` 的任务，并在确认框里说明「本次将执行 N 个任务，另有 M 个任务今天不在运行日期、已自动跳过」。
+
+**（现行，见 §10.30.8）** 上述禁用逻辑已全部回退：按钮永远可点、`handleRun` 不再拦截、「执行全部」恢复按 `enabled` 过滤；
+`run_schedule` 字段仅保留为展示信息（列表仍能看到「今天不在运行日期」），不再作为禁用依据。
+
+### 10.30.5 真实数据验证（不是只跑单测）
+
+把 `backend/data/app.db` 用 sqlite3 backup API 复制到 `.tmp`（不动生产库），`XXM_TESTING=1 DATABASE_URL` 指向副本后实测：
+
+| 场景 | 结果 |
+| --- | --- |
+| 线上 10 个追剧任务（全部 manual、运行星期 = 周一…周日） | 10/10 `allowed=True, reason=due`，文案「今天是运行日期：周二（…）」 |
+| 把某任务 `runweek` 改成「除周二外」后重跑列表读模型 | `allowed=False, reason=off_day`，文案「今天（周二）不在设定的运行日期（周一、周三…）内」 |
+| 同上调 `ensure_run_allowed`（第一版的路由前置拦截，**已于 §10.30.8 删除**） | 曾抛 `ApiError`：`TASK_RUN_NOT_SCHEDULED` / 409 / 完整中文提示 |
+| 改成 auto 模式 + 真实缓存 `tv:121876`（`update_weekdays_json=[5]`，周五更新） | `allowed=False, reason=off_day, weekdays=[5]`，文案「今天（周二）不在设定的运行日期（周五）内」——**证明 auto 分支读的是真实缓存且没发网络请求** |
+
+### 10.30.6 一个被「假通过」掩盖的坑（重要）
+
+第一轮改完跑测试是 551 绿，我一度以为收工了；实际上 `TaskOut` 里的 `run_schedule` 字段**没写进去**（字符串替换静默 no-op），而 `task_out(run_schedule=...)` 仍然「成功」——
+因为 **pydantic v2 默认 `extra="ignore"`**，多传的构造参数会被静默丢掉，单侧契约测试（`model_dump()` 快照）也跟着「通过」。
+
+真正把它抓出来的是**双侧对齐测试** `test_frontend_contract_golden.py::test_frontend_and_backend_field_sets_are_aligned`（前端类型有 `run_schedule`、后端 `TaskOut.model_fields` 没有 → 报「前端多出未登记字段」）。
+教训：
+
+1. 「响应模型多了/少了字段」只能靠**读 `model_fields` 的双侧对齐**发现，`model_dump()` + pydantic 默认 `extra=ignore` 会把问题吃掉；
+2. 改文件后必须**回读校验**（这次已在 `tasks.py`/`tasks_stream.py`/`schemas/task.py` 三处分别补验）；
+3. 契约变更后重建 golden（`UPDATE_CONTRACT_GOLDEN=1`）并把 diff 一起提交，否则下一次改动的红/绿都不可信。
+
+### 10.30.7 验证结果
+
+| 项 | 结果 |
+| --- | --- |
+| 全量测试 | **552 passed, 2 skipped**（第一版：新增 `backend/regression_tests/test_drama_run_schedule.py` 12 项，含「两个手动入口都 import 并调用同一个 guard」的静态断言；现行 13 项见 §10.30.8） |
+| 分层门禁 | violations **0**（基线 0）、cycles **0**、modules 251、deferred 90、`exit 0` |
+| 前端类型 | `npx vue-tsc -b` → `EXIT=0` |
+| 契约 golden | `test_task_presenter_contract.py` 字段顺序末尾追加 `run_schedule`；`golden/frontend_contract.json` 重建 |
+
+**回退方式（第一版）**：前端把三处 `:disabled` 去掉即可恢复「永远可点」；后端删掉两个 `ensure_run_allowed(...)` 调用即回到「执行器内部 SkipTask」的旧行为。判定模块本身无副作用，可独立保留。
+
+### 10.30.8 口径修正：手动执行「无视运行星期」（2026-11-10 12:40，用户澄清后重做）
+
+**用户原话**（m07014）：「我的意思是希望不到设定的日期也能点击执行，并且执行」。
+
+第一版把需求理解成「拦」，实际要的是「放」：**运行星期只约束自动轮询，不约束人点按钮**。判定模块（`drama_schedule.py`）保留，改为「供展示与自动轮询使用」；拦截链路整条撤掉。
+
+| 场景 | 第一版（已废弃） | 现行 |
+| --- | --- | --- |
+| 列表「执行」按钮 | `allowed=false` 时置灰 + tooltip | 永远可点（`run_schedule` 仅展示说明） |
+| `POST /api/tasks/{id}/run` | 前置 `ensure_run_allowed` → 409 `TASK_RUN_NOT_SCHEDULED` | 不拦截，直接执行 |
+| `POST /api/tasks/{id}/run/stream` | `_prepare()` 内 409，占槽前拒绝 | 不拦截，直接执行 |
+| 执行器（手动：http/sse/telegram/preview） | `SkipTask("不在允许运行的星期范围内")` | **越过日期类拦截**，日志「手动执行: 忽略运行日期限制（…）」，继续正常转存 |
+| 执行器（APScheduler 定时轮询） | 跳过 | **不变**，仍按运行星期跳过 |
+| 自动模式下「未绑定 TMDB TV / TMDB 未配置 key」 | 跳过 | **不变**（手动也跳过：配置缺失，放行只会空跑） |
+
+**改动清单**
+
+| 文件 | 改动 |
+| --- | --- |
+| `backend/app/application/drama_schedule.py` | 删 `ensure_run_allowed()` + `RUN_NOT_SCHEDULED_CODE` + `ApiError` import；新增 `MANUAL_OVERRIDE_REASONS = {off_day, invalid_runweek}`、`manual_override_allows(decision)`、`requires_skip(decision, manual_run)`（执行器唯一跳过口径，避免执行器自己再拼一遍条件） |
+| `backend/app/application/use_cases/run_task.py` | `RunPolicy` 新增 `manual_run: bool = True`：真值表 `scheduler=False`，`http/sse/telegram/preview=True`；统一路径与 `_legacy_execute()` 两条路径都把它传给执行器 |
+| `backend/app/infrastructure/execution/task_executor.py` | `run_task()` 新增 `manual_run: bool = False` 参数；drama 分支写 `task_data["manual_run"] = bool(manual_run)` |
+| `backend/app/infrastructure/execution/drama_executor.py` | `validate_schedule` 段改用 `requires_skip(decision, manual_run)`；手动放行分支打日志「手动执行: 忽略运行日期限制（{message}）」；旧日志文案（运行一次 / 未配置运行星期 / 未识别到更新日 / 跳过: 星期 x 不在 y）全部保留 |
+| `backend/app/api/routes/tasks.py`、`tasks_stream.py` | 删 `from app.application.drama_schedule import ensure_run_allowed` 与调用点，恢复原流程（准入 → 取任务 → 执行） |
+| `frontend/src/views/tasks/DramaTaskView.vue` | 三处按钮撤 `:disabled`/`:title`；删 `isRunAllowed()`/`runBlockedReason()` 与 `handleRun` 兜底；`confirmRunAll()` 恢复「只按 enabled 过滤」，确认文案改为「共 N 个任务（手动执行不受运行星期限制）」 |
+| `frontend/src/types/tasks.ts` | `run_schedule` 注释改为「仅用于说明今天不在运行日期；手动执行不受其限制」 |
+| `backend/regression_tests/test_drama_run_schedule.py` | 删「两个入口都调 guard」的静态断言；新增 `manual_override_allows` 越权范围、`requires_skip` 真值、`resolve_item_run_schedule` 行级判定、以及「策略→执行器→drama 执行器」接线（含 `ensure_run_allowed`/`TASK_RUN_NOT_SCHEDULED` 必须消失）共 13 项 |
+| `backend/regression_tests/test_run_task_use_case.py` | 真值表加第三列 `manual_run`；两条路径的假执行器实参断言同步更新 |
+
+**保留 `run_schedule` 字段的理由**：① 列表页仍要能告诉用户「今天不在运行日期」（否则用户不知道为什么定时轮询没跑）；② 定时轮询的跳过仍走它；③ 前端契约 golden 已冻结该字段，删掉是更大的契约变更。
+
+**为什么配置类缺失手动也不放行**：`auto_not_tv` / `tmdb_not_configured` 是「数据没准备好」，不是「今天不该跑」。放行只会走到执行器深处空跑（没有 TMDB 就没有单集排期可比对），对用户是更差的体验。
+
+**执行器级真机探针**（假适配器 + 今天=2026-11-10 周二 + 任务 runweek=[1] 周一）：
+
+~~~text
+today iso weekday: 2
+manual_run= None -> SkipTask: 不在允许运行的星期范围内 | log: ['跳过: 星期 2 不在 [1]']
+manual_run= False -> SkipTask: 不在允许运行的星期范围内 | log: ['跳过: 星期 2 不在 [1]']
+manual_run= True  -> RuntimeError: get_fids failed（假适配器没有该方法） | log: ['手动执行: 忽略运行日期限制（今天（周二）不在设定的运行日期（周一）内）']
+~~~
+
+第三行说明：跳过逻辑**确实被越过**，代码继续走到了分享解析后的取文件列表阶段（假适配器缺方法才报错），不是「换了个地方再 Skip」。
+
+**验证结果**
+
+| 项 | 结果 |
+| --- | --- |
+| 全量测试 | **553 passed, 2 skipped**（`--basetemp=.tmp/pytest`，cwd=`backend`，`PYTHONPATH=.`，`XXM_TESTING=1`） |
+| 分层门禁 | violations **0**、cycles **0**、modules 251、internal_imports 732、deferred 90、`exit 0`（应用层只新增判定函数，无新跨层边） |
+| 前端类型 | `npx vue-tsc -b` → `EXIT=0` |
+| 契约 golden | 未变（`run_schedule` 字段与取值语义不变，只是不再驱动禁用） |
+
+**回退方式（现行）**：`RunPolicy.for_trigger("http").manual_run = False` 一行即可让手动执行重新受运行星期约束（所有入口共用同一真值表），无需改执行器。
 
 ---
 

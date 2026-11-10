@@ -18,6 +18,20 @@ def get_or_create_tmdb_setting(db: Session) -> Any:
     return tmdb_settings_repo().get_or_create_tmdb_setting(db)
 
 
+_TMDB_CONFIGURED_SESSION_KEY = "tmdb_configured"
+
+
+def is_tmdb_configured(db: Session) -> bool:
+    """TMDB 是否已配置 API Key（同一 Session 内只读一次设置表）。"""
+    cached = db.info.get(_TMDB_CONFIGURED_SESSION_KEY)
+    if cached is not None:
+        return bool(cached)
+    cfg = get_tmdb_runtime_config(get_or_create_tmdb_setting(db))
+    configured = bool(str(cfg.get("api_key") or "").strip())
+    db.info[_TMDB_CONFIGURED_SESSION_KEY] = configured
+    return configured
+
+
 def get_tmdb_lang_pair(db: Session) -> tuple[str, str]:
     cached = db.info.get(_TMDB_LANG_PAIR_SESSION_KEY)
     if cached is not None:

@@ -10,6 +10,14 @@ from typing import Any, Callable, Iterable, TypeVar
 
 from treelib import Tree
 
+from app.application.drama_schedule import (
+    REASON_ALLOW_ONCE,
+    REASON_NO_UPDATE_DAY,
+    REASON_NO_RUNWEEK,
+    REASON_OFF_DAY,
+    requires_skip,
+    resolve_run_schedule,
+)
 from app.core.errors import bad_request
 from app.core.settings import settings
 from app.infrastructure.execution.execution_log import ExecutionLog
@@ -670,50 +678,38 @@ class DramaTaskExecutor:
         extra = self.task_data.get("extra") or {}
         self._saved_name_pool.clear()
         self._folder_episode_hints.clear()
-        allow_once = bool(extra.get("allow_once"))
-        runweek_mode = str(extra.get("runweek_mode") or "manual").strip().lower()
-        runweek = extra.get("runweek") or []
         now = datetime.now()
         self._set_stage("validate_schedule")
         self._section("验证调度条件")
         self._line(f"执行时间: {now.strftime('%Y-%m-%d %H:%M:%S')}")
-        if allow_once:
+        # 判定口径与「任务列表禁用执行按钮」「手动执行 409 拦截」共用
+        # app.application.drama_schedule.resolve_run_schedule()，避免三处各写一套。
+        decision = resolve_run_schedule(
+            task_type="drama",
+            extra=extra if isinstance(extra, dict) else {},
+            now=now,
+            tmdb_id=self.task_data.get("tmdb_id"),
+            tmdb_media_type=self.task_data.get("tmdb_media_type"),
+            tmdb_configured=bool(self.task_data.get("tmdb_configured")),
+            episode_weekdays=self.task_data.get("tmdb_episode_weekdays") or [],
+            update_weekdays=self.task_data.get("tmdb_update_weekdays") or [],
+        )
+        manual_run = bool(self.task_data.get("manual_run"))
+        if decision.reason == REASON_ALLOW_ONCE:
             self._line("运行一次: 忽略按星期运行限制")
-        elif runweek_mode == "auto":
-            tmdb_id = int(self.task_data.get("tmdb_id") or 0)
-            tmdb_media_type = str(self.task_data.get("tmdb_media_type") or "").strip().lower()
-            if tmdb_id <= 0 or tmdb_media_type != "tv":
-                self._line("跳过: 自动识别运行星期需要绑定 TMDB TV")
-                raise SkipTask("未绑定 TMDB TV")
-            if not bool(self.task_data.get("tmdb_configured")):
-                self._line("跳过: TMDB 未配置，无法自动识别运行星期")
-                raise SkipTask("TMDB 未配置")
-            days = self.task_data.get("tmdb_episode_weekdays") or self.task_data.get("tmdb_update_weekdays") or []
-            try:
-                week = set(int(x) for x in (days or []))
-            except Exception:
-                week = set()
-            week = {int(x) for x in week if 1 <= int(x) <= 7}
-            if not week:
-                self._line("未识别到更新日，按每天执行")
-            elif now.isoweekday() not in week:
-                self._line(f"跳过: 星期 {now.isoweekday()} 不在 {sorted(list(week))}")
-                raise SkipTask("不在允许运行的星期范围内")
-        else:
-            if not runweek:
-                self._line("未配置运行星期: 默认允许运行")
+        elif decision.mode == "manual" and decision.reason == REASON_NO_RUNWEEK:
+            self._line("未配置运行星期: 默认允许运行")
+        elif decision.reason == REASON_NO_UPDATE_DAY:
+            self._line("未识别到更新日，按每天执行")
+        elif requires_skip(decision, manual_run):
+            if decision.reason == REASON_OFF_DAY:
+                self._line(f"跳过: 星期 {now.isoweekday()} 不在 {list(decision.weekdays)}")
             else:
-                try:
-                    week = set(int(x) for x in runweek)
-                except Exception:
-                    week = set()
-                week = {int(x) for x in week if 1 <= int(x) <= 7}
-                if not week:
-                    self._line("跳过: 未配置运行星期")
-                    raise SkipTask("未配置运行星期")
-                if now.isoweekday() not in week:
-                    self._line(f"跳过: 星期 {now.isoweekday()} 不在 {sorted(list(week))}")
-                    raise SkipTask("不在允许运行的星期范围内")
+                self._line(f"跳过: {decision.skip_reason}")
+            raise SkipTask(decision.skip_reason)
+        elif not decision.allowed:
+            # 用户点「执行」= 现在就跑：运行星期只约束定时轮询，不拦手动执行。
+            self._line(f"手动执行: 忽略运行日期限制（{decision.message}）")
 
         self._set_stage("share_parse")
         self._section("解析分享链接")

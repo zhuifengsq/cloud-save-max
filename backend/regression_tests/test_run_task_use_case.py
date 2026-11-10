@@ -15,13 +15,14 @@ from app.application.use_cases import run_task as run_task_use_case
 from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
 
 
-# trigger -> (share_check_always_notify, persist_execution)
+# trigger -> (share_check_always_notify, persist_execution, manual_run)
+# manual_run=True 表示「手动触发」：追剧任务不受运行星期限制；只有 scheduler 定时轮询为 False。
 TRUTH_TABLE = {
-    "http": (True, True),
-    "sse": (True, True),
-    "scheduler": (False, True),
-    "telegram": (True, True),
-    "preview": (False, False),
+    "http": (True, True, True),
+    "sse": (True, True, True),
+    "scheduler": (False, True, False),
+    "telegram": (True, True, True),
+    "preview": (False, False, True),
 }
 
 
@@ -29,7 +30,11 @@ TRUTH_TABLE = {
 def test_policy_truth_table(trigger):
     policy = RunPolicy.for_trigger(trigger)
     assert policy.trigger == trigger
-    assert (policy.share_check_always_notify, policy.persist_execution) == TRUTH_TABLE[trigger]
+    assert (
+        policy.share_check_always_notify,
+        policy.persist_execution,
+        policy.manual_run,
+    ) == TRUTH_TABLE[trigger]
 
 
 def test_for_trigger_normalizes_case_and_space():
@@ -108,11 +113,11 @@ def test_legacy_path_matches_old_call_arguments(fake_deps, monkeypatch):
     )
 
     assert [call["kwargs"] for call in _RecordingExecutor.calls] == [
-        {"share_check_always_notify": True},
-        {"share_check_always_notify": True},
-        {"log": log, "share_check_always_notify": True},
-        {"account_manager": manager, "init_account_for_task": False},
-        {"log": log, "persist_execution": False},
+        {"share_check_always_notify": True, "manual_run": True},
+        {"share_check_always_notify": True, "manual_run": True},
+        {"log": log, "share_check_always_notify": True, "manual_run": True},
+        {"account_manager": manager, "init_account_for_task": False, "manual_run": False},
+        {"log": log, "persist_execution": False, "manual_run": True},
     ]
 
 
@@ -133,6 +138,7 @@ def test_unified_path_derives_arguments_from_policy(fake_deps, monkeypatch):
         "account_manager": manager,
         "init_account_for_task": False,
         "share_check_always_notify": False,
+        "manual_run": False,
     }
 
 
