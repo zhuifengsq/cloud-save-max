@@ -16,7 +16,7 @@
 > presenter 变纯函数、列表查询条数与任务数无关（回归测试计数锁定）。
 > 非阻塞小项② 前端契约 golden 已完成（方案 §10.19，2026-11-09）：后端模型字段/顺序、`frontend/src/types/tasks.ts` 字段集合、
 > SSE 逐字节线格式、错误体全部落盘为 `backend/regression_tests/golden/frontend_contract.json`，两侧任一方改动不更新 golden 即失败。
-> 当前基线：回归 **553 passed / 2 skipped**、分层违规 **0**、deferred 90、251 模块，
+> 当前基线：回归 **570 passed / 2 skipped**、分层违规 **0**、deferred 90、252 模块，
 > `backend/.layering-baseline.json` = `{"violations":0,"deferred_imports":90,"cycles":0}`。
 > 非阻塞小项③ 3 篇 ADR 已完成（方案 §10.20，2026-11-09）：[0001 TMDB 写路径例外](adr/0001-tmdb-cache-writer-isolation.md)、
 > [0002 准入保留在调用点](adr/0002-task-admission-stays-at-call-sites.md)、
@@ -34,6 +34,13 @@
 > **同日口径修正（§10.30.8）**：用户澄清「希望不到设定的日期也能点击执行，并且执行」→ 手动执行**无视运行星期**
 > （按钮永远可点、路由不 409、执行器不 SkipTask，`RunPolicy.manual_run=True`）；运行星期只约束 APScheduler 定时轮询。
 > 第一版的 409 拦截与按钮禁用已全部撤除，`run_schedule` 字段保留为展示信息。新增 13 项护栏，回归 553。
+> **2026-11-12 缺陷修复（§10.31）**：百度「分享文件夹等待审核中」（`errno=-7`）以前被当成失败——检测显示「检测失败」、
+> 执行判 failed 并推 ❌ 通知。现在检测层新增 `pending` 状态（徽标「审核中」，不入失败列表）、执行层命中即 `SkipTask`（记 skipped、不通知、
+> 不触发换链），且「目录直转」降级分支不再吞掉该信号。新增 7 项护栏，回归 560。
+> **2026-11-12 需求（§10.32）**：追剧任务列表加「分类」筛选（国剧/韩剧/日剧/美剧/港台剧/综艺/动漫/电影/其他剧/未分类）。
+> 口径唯一事实源是 `backend/app/application/media_category.py`（纯函数），数据来自列表本就批量加载的 TMDB payload
+> （零新增查询、零网络请求）；前端 `DramaTaskView.vue` 只按 `media_category` 本地过滤，且只显示实际出现过的分类。
+> 新增 10 项护栏 + 契约 golden 同步（`TaskOut`/`TaskItem` 两侧同字段），回归 570。
 > 未完成（非阻塞）：`domain/` 实体化（当前 `app/domain/` 只有 8 个 Protocol，无实体/值对象）。
 
 ## 1. 四层 + 横切层（唯一契约）

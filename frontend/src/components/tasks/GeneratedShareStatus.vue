@@ -22,6 +22,7 @@ const check = computed(() => {
 const labels = {
   valid: { text: '有效', type: 'success' },
   invalid: { text: '已失效', type: 'danger' },
+  pending: { text: '审核中', type: 'info' },
   error: { text: '检测失败', type: 'warning' },
 } as const
 

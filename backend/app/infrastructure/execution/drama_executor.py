@@ -351,6 +351,24 @@ class DramaTaskExecutor:
             return fids, "query_task.data.save_as.save_as_top_fids"
         return [], "missing"
 
+    _PENDING_REVIEW_HINTS = ("审核",)
+
+    def _is_share_pending_review(self, response: Any) -> bool:
+        """判断网盘响应是否只是「分享审核中」。
+
+        -7 在转存接口是「分享文件夹等待审核中」（临时状态，稍后自愈），在分享页语境
+        才是「链接已被取消」。所以以适配器 classify_share_failure 为准，用文案兜底。
+        """
+        data = response if isinstance(response, dict) else {}
+        try:
+            verdict = self.adapter.classify_share_failure(data) or {}
+        except Exception:
+            verdict = {}
+        if str(verdict.get("kind") or "") == "pending":
+            return True
+        message = str(data.get("message") or "")
+        return any(hint in message for hint in DramaTaskExecutor._PENDING_REVIEW_HINTS)
+
     def _save_with_saved_fids(self, *, pwd_id: str, stoken: str, dest_root_fid: str, plan: list[DramaPlanItem]) -> list[str]:
         fid_list = [item.fid for item in plan]
         fid_token_list = [item.fid_token or "" for item in plan]
@@ -387,6 +405,9 @@ class DramaTaskExecutor:
                 file_names=batch_names,
             ) or {}
             if (save_ret.get("code") not in (0, "0", None)) or (save_ret.get("status") not in (200, "200", None)):
+                if self._is_share_pending_review(save_ret):
+                    self._line("跳过: 分享正在审核中，网盘审核通过后会自动重试")
+                    raise SkipTask("分享正在审核中，网盘审核通过后会自动重试")
                 err_msg = str(save_ret.get("message") or "转存失败")
                 break
 
@@ -403,7 +424,11 @@ class DramaTaskExecutor:
                 qret = self._query_task(str(job_id))
                 status = ((qret.get("data") or {}).get("status"))
                 if status not in (2, "2", None):
-                    err_msg = str((qret.get("data") or {}).get("message") or qret.get("message") or "转存任务失败")
+                    task_message = str((qret.get("data") or {}).get("message") or qret.get("message") or "")
+                    if self._is_share_pending_review({"status": status, "message": task_message}):
+                        self._line("跳过: 分享正在审核中，网盘审核通过后会自动重试")
+                        raise SkipTask("分享正在审核中，网盘审核通过后会自动重试")
+                    err_msg = task_message or "转存任务失败"
                     break
 
             batch_saved, source = self._extract_saved_fids(save_file_return=save_ret, query_task_return=qret)
@@ -1097,6 +1122,9 @@ class DramaTaskExecutor:
                             self._folder_episode_hints.append(int(hint))
                             self._line(f"按文件夹名记录集数: {hint}")
                     return []
+            except SkipTask:
+                # 审核中不是「目录直转失败」，不能降级成逐文件再刷一遍，直接上抛让任务记 skipped
+                raise
             except Exception as exc:
                 self._line(f"目录直转失败，改为逐文件转存: {exc}")
         # 退化：新建同名目录 + 递归转存全部文件

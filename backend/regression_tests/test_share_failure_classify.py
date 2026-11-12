@@ -1,4 +1,4 @@
-"""分享失败分类：只有网盘能确定「失效」才提醒，其余一律按检测失败处理。"""
+"""分享失败分类：只有网盘能确定「失效」才提醒；审核中(pending)是暂时状态，既不算失效也不算检测失败。"""
 
 import pytest
 
@@ -78,7 +78,7 @@ class _StubAdapter:
         ("throttled", "error", "网盘请求频率过高，稍后重试"),
         ("auth", "error", "网盘原因"),
         ("unknown", "error", "检测失败兜底"),
-        ("pending", "error", "检测失败兜底"),
+        ("pending", "pending", "网盘原因"),  # 审核中是暂时状态，不算失败
     ],
 )
 def test_check_marks_only_invalid_as_failure(kind, expected_status, expected_message):

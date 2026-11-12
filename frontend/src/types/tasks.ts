@@ -38,7 +38,7 @@ export type TaskExecutionItem = {
     generated_share_check?: {
       share_id: string
       saved_at: string
-      status: 'valid' | 'invalid' | 'error'
+      status: 'valid' | 'invalid' | 'pending' | 'error'
       message: string
       checked_at: string
     }
@@ -71,6 +71,9 @@ export type TaskItem = {
   tmdb_media_type?: string | null
   tmdb_status?: string | null
   tmdb_is_ended?: boolean | null
+  // 追剧任务分类：国剧 / 韩剧 / 日剧 / 美剧 / 港台剧 / 综艺 / 动漫 / 电影 / 其他剧 / 未分类
+  // 后端唯一口径（app/application/media_category.py）；非追剧任务为 null
+  media_category?: string | null
   drama_update_progress?: {
     available: boolean
     tmdb_season?: number | null

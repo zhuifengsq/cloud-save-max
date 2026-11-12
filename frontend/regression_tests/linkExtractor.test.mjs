@@ -56,6 +56,13 @@ test('decimal variety-show episode numbers are recognized in table and hot updat
   assert.equal(hot.text, '我家那闺女【更11.8期】')
 })
 
+test('finished updates become 全N集 while partial updates stay 更N集', () => {
+  assert.deepEqual(parseWpsHeadline('国剧「尚公主 更新40/40集」4K【孟子义 李昀锐】'), { title: '尚公主', episodeText: '更新40/40集' })
+  const hot = generateHotUpdates('国剧「尚公主 更新40/40集」4K【孟子义 李昀锐】\n国剧「折月亮 更新39/40集」4K\n嫁金钗 (2026) 【全30集】', '', '')
+  assert.equal(hot.count, 3)
+  assert.equal(hot.text, '尚公主【全40集】\n折月亮【更39集】\n嫁金钗【全30集】')
+})
+
 test('empty and unrelated input produces no fabricated resources', () => {
   assert.deepEqual(extractTable('只有文字'), [])
   assert.equal(organizeDualDisk('').baiduCount, 0)

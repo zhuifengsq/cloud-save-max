@@ -49,11 +49,15 @@ export function parseWpsHeadline(raw: string): { title: string; episodeText: str
   return { title, episodeText }
 }
 
-// 热播更新统一成「更N集 / 更N期」：更新30/30集 -> 更30集（取前面那个数字）；全30集保持不变。
+// 热播更新统一成「更N集 / 更N期」：更新29/30集 -> 更29集（取前面那个数字）；
+// 更新进度等于总集数（如更新40/40集）说明已完结 -> 全40集；全30集保持不变。
 function normalizeHotEpisode(text: string): string {
   const compact = text.replace(/\s+/g, '')
-  const match = compact.match(/^(?:首播)?(?:更新(?:至)?|更(?:新)?)(\d+(?:\.\d+)?)(?:\/\d+)?([集期])$/)
-  return match ? '更' + match[1]! + match[2]! : compact
+  const match = compact.match(/^(?:首播)?(?:更新(?:至)?|更(?:新)?)(\d+(?:\.\d+)?)(?:\/(\d+))?([集期])$/)
+  if (!match) return compact
+  const finished = match[2] !== undefined && Number(match[1]) === Number(match[2])
+  // 完结时按文档惯例去掉前导零（更新08/8集 -> 全8集），未完结保持原样（更新08/24集 -> 更08集）。
+  return (finished ? '全' + String(Number(match[1])) : '更' + match[1]!) + match[3]!
 }
 
 export function extractTable(input: string): ExtractedLink[] {

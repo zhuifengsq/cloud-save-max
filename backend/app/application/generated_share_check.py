@@ -37,6 +37,9 @@ def _map_kind(kind: str, message: str, fallback: str) -> tuple[str, str]:
     message = str(message or "").strip()
     if kind == "invalid":
         return "invalid", message or fallback
+    if kind == "pending":
+        # 审核中是暂时状态（网盘审核通过后分享自动恢复），不能算「检测失败」更不能通知。
+        return "pending", message or "分享正在审核中，网盘审核通过后会自动恢复有效"
     if kind == "passcode":
         return "error", "分享提取码无法通过验证"
     if kind == "throttled":

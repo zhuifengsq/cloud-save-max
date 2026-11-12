@@ -763,7 +763,7 @@ class RunTaskUseCase:
 
 | 指标 | 改造前基线 | 当前 | 命令 |
 | --- | --- | --- | --- |
-| 测试总数 | 404 passed / 2 收集失败 | **553 passed, 2 skipped**（+149 项新护栏；含网关端口 14、分享页 errno 6、生成后自检 9、兼容层垫片 5、追剧运行日期判定 13） | `python -m pytest tests regression_tests -q` |
+| 测试总数 | 404 passed / 2 收集失败 | **570 passed, 2 skipped**（+159 项新护栏；含网关端口 14、分享页 errno 6、生成后自检 9、兼容层垫片 5、追剧运行日期判定 13、媒体分类 10） | `python -m pytest tests regression_tests -q` |
 | 分层违规 | 165 条（60/38/30/23/10/4） | **0 条**（S5 收尾归零；本轮新增改动仍为 0） | `python ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json` |
 | 模块 / import 边 | 188 / 610 | **250 / 721**（deferred 33→84；增量含仓储访问、时钟/限速/网关实现、composition root 延迟 import、S4-6 搬目录后的旧路径垫片） | 同上 |
 | 路由层裸 `db.commit()` | 89 处 / 18 文件 | **0 处 / 0 文件**（13 个路由文件全部归零，89 处全收口） | `grep -rc "db\.commit()" backend/app/api/routes` |
@@ -2062,6 +2062,163 @@ manual_run= True  -> RuntimeError: get_fids failed（假适配器没有该方法
 | 契约 golden | 未变（`run_schedule` 字段与取值语义不变，只是不再驱动禁用） |
 
 **回退方式（现行）**：`RunPolicy.for_trigger("http").manual_run = False` 一行即可让手动执行重新受运行星期约束（所有入口共用同一真值表），无需改执行器。
+
+---
+
+## 10.31 「审核中」被当成失败：把 pending 从失败语义里剥离（2026-11-12）
+
+**现象**（用户报告）：百度对「分享文件夹等待审核中」返回 `errno=-7`，审核通过后链接自动恢复可用。但系统里：
+
+1. 任务列表的分享检测徽标显示「检测失败」（红/黄），并进首页失败列表；
+2. 任务执行时被判定 `failed` 并推送 ❌ 失败通知；
+3. 等审核通过，用户已经收到过一条「失败」通知，且历史记录永久留着 failed。
+
+**根因**（两层各一处）：
+
+| 层 | 位置 | 旧行为 |
+| --- | --- | --- |
+| 检测状态映射 | `backend/app/application/generated_share_check.py:30-46` `_map_kind` | 只显式处理 `invalid/passcode/throttled/auth`，其余（含 `pending`）一律落到兜底 `(error, fallback)` → 「检测失败」 |
+| 执行期转存 | `backend/app/infrastructure/execution/drama_executor.py` save 分支 | `save_ret` 非成功就 `err_msg = message` → `raise RuntimeError` → `status=failed` → ❌ 通知 |
+
+注意适配器本身是对的：`baidu_adapter.py:1682-1694` `classify_share_failure` 已把 `-7`/含「审核」判为 `kind="pending"`，只是下游没区分。另外 `-7` 在**分享页**语境是「链接已被取消」（`_SHARED_PAGE_ERRNO_MESSAGES[-7]`、`_SHARE_VERIFY_FATAL_CODES` 含 -7），语义不同，因此不能全局改 errno 表。
+
+**改动（6 个文件）**
+
+| 文件 | 改动 |
+| --- | --- |
+| `backend/app/application/generated_share_check.py` | `_map_kind` 在 `invalid` 分支后新增 `pending` 分支 → `return "pending", message or "分享正在审核中，网盘审核通过后会自动恢复有效"` |
+| `backend/app/infrastructure/execution/drama_executor.py` | 新增 `_PENDING_REVIEW_HINTS = ("审核",)` 与 `_is_share_pending_review(response)`：以 `adapter.classify_share_failure` 为主、文案含「审核」为兜底（适配器抛错时仍能判对）；save 分支与 `query_task` 分支命中时 `raise SkipTask("分享正在审核中，网盘审核通过后会自动重试")` |
+| `frontend/src/components/tasks/GeneratedShareStatus.vue` | labels 增加 `pending: { text: '审核中', type: 'info' }` |
+| `frontend/src/types/tasks.ts` | `generated_share_check.status` 联合类型加 `'pending'` |
+| `backend/regression_tests/test_share_pending_review.py`（新） | 7 项：映射为 pending、默认文案含「审核」、pending 永不标 invalid、`-7→pending/-1→非 pending`、适配器抛错时按文案兜底、pending 不生成通知段、skipped 静默 |
+| `backend/regression_tests/test_share_failure_classify.py`（既有） | 参数表 `("pending","error","检测失败兜底")` → `("pending","pending","网盘原因")`，与 §10.31 新语义对齐 |
+
+还有一个容易漏的吞异常点：`drama_executor.py` 的「目录直转」分支用 `except Exception as exc` 把失败降级成「逐文件转存」（原 :1125）。它会把 `SkipTask` 也一起吞掉，导致审核中被重试一遍再按别的方式失败。已在该处前置 `except SkipTask: raise`。
+
+**语义（改动后的真值表）**
+
+| 场景 | 检测徽标 | 首页失败列表 | 执行结果 | 通知 |
+| --- | --- | --- | --- | --- |
+| 审核中（`-7` / 含「审核」） | 「审核中」（info） | 不入 | `skipped` | **不发** |
+| 链接失效（-1/-9/105/145…） | 「已失效」（danger） | 入 | `failed` | 发 ❌ |
+| 其它检测异常（查询失败/未知） | 「检测失败」（warning） | 入 | 不因此改变执行 | 按执行结果 |
+
+机制：`SkipTask` → `backend/app/infrastructure/execution/task_executor.py:264` `status='skipped'` → `backend/app/application/notifications/task_notify.py:60-82` `_build_transfer_section` 对 skipped 直接返回空；也因为不是 `failed`，不会触发自动换链（换链只对 failed 且 stage 匹配）。`backend/app/application/dashboard_drama.py:208` 的 `recent_failures` 只收 `{"invalid","error"}`，pending 天然不入。
+
+**有意不动的三处**（语义不同，改了才是 bug）
+
+1. 引流路径 `baidu_adapter.py:1721` 仍有 `kind in ("invalid","pending")` → `LEAD_IN_MATERIAL_UNAVAILABLE`：引流当下确实拿不到素材，跳过是对的。
+2. 生成后自检 `_SHARE_VERIFY_FATAL_CODES` 仍含 `-7`：那里读的是**分享页**响应，-7 表示链接已被取消。
+3. `share_preview_batch` 批量预览本来就是「只看能不能拿到 stoken」的弱校验（属既有盲区，见 §10.5），本期不动。
+
+**验证（2026-11-12 实测）**
+
+```bash
+# 单项
+cd backend && PYTHONPATH=. XXM_TESTING=1 ./.venv/Scripts/python.exe -m pytest regression_tests/test_share_pending_review.py -q   # 7 passed
+
+# 全量（注意：必须带 --basetemp，否则会被历史目录 pytest-of-qiuqu 的 WinError 5 干扰）
+cd backend && PYTHONPATH=. XXM_TESTING=1 TMPDIR="$PWD/.tmp" ./.venv/Scripts/python.exe \
+  -m pytest tests regression_tests -q --basetemp=.tmp/pytest                                  # 570 passed, 2 skipped
+
+# 分层门禁 / 前端类型
+./.venv/Scripts/python.exe ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json  # violations=0 cycles=0 exit 0
+cd ../frontend && npx vue-tsc -b                                                             # EXIT=0
+```
+
+| 项 | 结果 |
+| --- | --- |
+| 全量测试 | **560 passed, 2 skipped**（553 + 7 项新护栏） |
+| 分层门禁 | violations **0**、cycles **0**、modules 251、internal_imports 732、deferred 90、`exit 0`（判定函数放 application 层，无新跨层边） |
+| 前端类型 | `npx vue-tsc -b` → `EXIT=0` |
+| 契约 | 新增一个取值 `pending`（前端 types 已同步）；既有 `valid/invalid/error` 语义与通知条件不变 |
+
+**回退方式**：删掉 `_map_kind` 的 `pending` 分支即回到「pending 当检测失败」；执行侧把 `_is_share_pending_review` 的两个 `raise SkipTask` 分支删掉即回到「-7 判 failed」。
+
+**遗留（下一轮可选）**：审核通过后不会自动重试本次被 skip 的任务，要等下一次调度/手动执行——如需「自愈重试」，应在 skip 时记录 `next_retry_hint`（属 S5 计划项，不在本期范围）。
+
+---
+
+## 10.32 追剧任务列表「分类」筛选：后端出唯一口径，前端零请求过滤（2026-11-12）
+
+用户需求（m07411）：追剧任务列表的筛选条右侧加一组分类（国剧 / 韩剧 / 综艺 / 动漫等）。
+
+### 10.32.1 为什么不是「前端自己算」
+
+前端已经有 `frontend/src/utils/mediaCategory.ts`（只认 电影/电视剧/动漫/综艺），如果列表再自己算一套，
+两套口径迟早分叉：抽屉说「动漫」、列表筛选却按「日剧」归类。因此**分类口径放后端**，前端只负责展示与过滤。
+
+### 10.32.2 数据从哪来（零新增查询的关键）
+
+- `tmdb_media_cache.payload_json` 存的是 TMDB **原始详情 JSON**，本就含 `genres`、`origin_country`、`original_language`；
+- 任务列表原本就为了算追剧进度，已经用 `app/application/tmdb_view.load_tmdb_payload_map()` 把这些 payload **批量**取出来了；
+- 于是「分类」是顺手算的一个字段，**不新增查询、不发网络请求**（TMDB 不可达也不影响列表）。
+
+唯一扩展：`load_payload_rows()` 增加 `movie_ids`（原来只取 tv），`load_tmdb_payload_map()` 也带 movie 键——
+否则电影任务永远只能落到「未分类」。
+
+### 10.32.3 口径（`backend/app/application/media_category.py`，命中即止）
+
+| 顺序 | 分类 | 判断条件 |
+| --- | --- | --- |
+| 1 | 动漫 | `genres` 含 16（或类型名含 animation / 动画） |
+| 2 | 综艺 | `genres` 含 10764 / 10767 / 10763（真人秀 / 脱口秀 / 新闻） |
+| 3 | 电影 | `media_type == movie` |
+| 4 | 国剧 | `origin_country` 含 CN |
+| 5 | 韩剧 | KR |
+| 6 | 日剧 | JP |
+| 7 | 美剧 | US |
+| 8 | 港台剧 | HK / TW |
+| 9 | 其他剧 | 其余 tv |
+| 10 | 未分类 | 未绑 TMDB 或缓存里没有 payload |
+
+两个刻意的选择：
+
+- **国剧/韩剧看 `origin_country` 而不是 `original_language`**：港剧的 `original_language` 是 `cn`，合拍片更不可靠；
+  `zh` 因此不做语言兜底（`ko/ja/en` 才兜底）。
+- **动漫/综艺优先于国家**：否则「日本动漫」会被算成日剧。
+
+### 10.32.4 改动清单
+
+| 文件 | 改动 |
+| --- | --- |
+| `backend/app/application/media_category.py` | 新增：`categorize(media_type, payload)` 纯函数 + `CATEGORY_ORDER`（零 IO、不抛异常） |
+| `backend/app/infrastructure/persistence/repositories/tmdb_media_cache.py` | `load_payload_rows()` 支持 `movie_ids` |
+| `backend/app/application/tmdb_view.py` | `load_tmdb_payload_map()` 同时取 movie payload |
+| `backend/app/application/queries/task_views.py` | `TaskView.media_category`；列表走批量 payload，单条场景按需补一次 payload（避免「编辑后回显分类变 null」） |
+| `backend/app/schemas/task.py` | `TaskOut.media_category: str \| None = None` |
+| `backend/app/api/presenters/task.py` | 透传 `media_category` |
+| `frontend/src/types/tasks.ts` | `TaskItem.media_category?: string \| null` |
+| `frontend/src/views/tasks/DramaTaskView.vue` | `filters.category` + `categoryFilterOptions`（只显示实际出现的分类）+ 过滤/重置/空状态 + 移动端横向滚动 |
+| `backend/regression_tests/test_media_category.py` | 新增 10 项（十类口径、优先级、缺数据兜底、列表接线、非追剧为 null） |
+| `backend/regression_tests/golden/frontend_contract.json` | 契约 golden 同步（后端 `TaskOut` 与前端 `TaskItem` 两侧同字段） |
+
+前端 chips 与「全部网盘」同一套逻辑：`categoryFilterOptions.length > 1` 才显示（只有一个分类时没有筛选意义），
+且**后端以后新增分类、前端还没登记值时也会追加进去**——保证任务不会因为前端没登记就从列表里「被消失」。
+
+### 10.32.5 验证（2026-11-12）
+
+```bash
+cd backend
+PYTHONPATH=. XXM_TESTING=1 TMPDIR="$PWD/.tmp" ./.venv/Scripts/python.exe \
+  -m pytest tests regression_tests -q --basetemp=.tmp/pytest        # 570 passed, 2 skipped
+./.venv/Scripts/python.exe ../scripts/check_layering.py --fail-on 0 --baseline .layering-baseline.json
+                                                                    # violations 0 / cycles 0 / modules 252
+cd ../frontend && npx vue-tsc -b                                     # EXIT=0
+```
+
+| 项 | 结果 |
+| --- | --- |
+| 全量测试 | **570 passed, 2 skipped**（560 + 10 项分类护栏） |
+| 分层门禁 | violations **0**、cycles **0**、modules 252、internal_imports 733、deferred 90、`exit 0` |
+| 前端类型 | `npx vue-tsc -b` → `EXIT=0` |
+| 真实数据（本地库只读） | 10 个 drama 任务：国剧 7、综艺 2、港台剧 1、缺数据 0（与 payload 里的 `origin_country`/`genres` 逐条一致） |
+
+### 10.32.6 边界与回退
+
+- **不回退旧语义**：非追剧任务 `media_category` 恒为 `null`；旧前端忽略新字段即可，不算破坏性变更。
+- 抽屉（`DramaTaskDrawer.vue`）里的分类展示仍在用前端 `categoryFromTmdb`，**下一轮**统一改成读后端字段（本期不动，避免扩大改动面）。
+- 回退：后端删 `media_category` 字段 + 前端删 chips 即完全回到改造前；golden 与 `test_task_presenter_contract` 会立刻提示漏改。
 
 ---
 
