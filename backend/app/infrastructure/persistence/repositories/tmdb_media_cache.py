@@ -25,15 +25,27 @@ def load_status_rows(db: Session, *, language: str, poster_language: str, tv_ids
     )
 
 
-def load_payload_rows(db: Session, *, language: str, poster_language: str, tv_ids: list[int]):
-    if not tv_ids:
+def load_payload_rows(
+    db: Session,
+    *,
+    language: str,
+    poster_language: str,
+    tv_ids: list[int],
+    movie_ids: list[int] | None = None,
+):
+    movie_ids = movie_ids or []
+    conds = []
+    if tv_ids:
+        conds.append(and_(TMDBMediaCache.media_type == "tv", TMDBMediaCache.tmdb_id.in_(tv_ids)))
+    if movie_ids:
+        conds.append(and_(TMDBMediaCache.media_type == "movie", TMDBMediaCache.tmdb_id.in_(movie_ids)))
+    if not conds:
         return []
     return (
         db.execute(
             select(TMDBMediaCache.media_type, TMDBMediaCache.tmdb_id, TMDBMediaCache.payload_json)
             .where(
-                TMDBMediaCache.media_type == "tv",
-                TMDBMediaCache.tmdb_id.in_(tv_ids),
+                or_(*conds),
                 TMDBMediaCache.language == language,
                 TMDBMediaCache.poster_language == poster_language,
             )

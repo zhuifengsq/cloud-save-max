@@ -47,6 +47,7 @@ def task_out(view: TaskView) -> TaskOut:
         tmdb_media_type=view.tmdb_media_type,
         tmdb_status=view.tmdb_status,
         tmdb_is_ended=view.tmdb_is_ended,
+        media_category=view.media_category,
         drama_update_progress=view.drama_update_progress,
         lead_in=view.lead_in,
         enabled=view.enabled,

@@ -72,6 +72,9 @@ def test_task_out_contract_is_frozen():
         "id", "task_uid", "task_type", "taskname", "shareurl", "savepath",
         "pattern", "replace", "ignore_extension", "account_name",
         "tmdb_id", "tmdb_media_type", "tmdb_status", "tmdb_is_ended",
+        # 2026-11-12 新增：追剧任务分类筛选（app/application/media_category.py），
+        # 非追剧任务恒为 null，因此这里不影响旧客户端的字段语义。
+        "media_category",
         "drama_update_progress", "lead_in", "enabled", "addition", "extra",
         "executions", "created_at", "updated_at", "run_schedule",
     ]
@@ -92,6 +95,7 @@ def test_task_out_contract_is_frozen():
         "tmdb_media_type": None,
         "tmdb_status": None,
         "tmdb_is_ended": None,
+        "media_category": None,
         "drama_update_progress": None,
         "lead_in": {"state": "added", "last_added_at": "2026-11-01T00:00:00"},
         "enabled": True,

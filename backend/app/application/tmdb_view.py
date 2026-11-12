@@ -62,7 +62,11 @@ def load_tmdb_status_map(db: Session, items: list[object]) -> dict[tuple[str, in
 
 
 def load_tmdb_payload_map(db: Session, items: list[object]) -> dict[tuple[str, int], dict[str, object] | None]:
-    """批量取剧集详情 payload（只对 drama/tv 任务有意义），解析失败记为 None。"""
+    """批量取详情 payload（drama 任务的 tv / movie 都取），解析失败记为 None。
+
+    movie 也取的原因：任务列表的「分类」筛选要看 genres / origin_country，
+    电影任务同样需要（见 app/application/media_category.py）。
+    """
     keys: list[tuple[str, int]] = []
     seen: set[tuple[str, int]] = set()
     for item in items:
@@ -71,7 +75,7 @@ def load_tmdb_payload_map(db: Session, items: list[object]) -> dict[tuple[str, i
         key = tmdb_cache_key(item)
         if key is None or key in seen:
             continue
-        if key[0] != "tv":
+        if key[0] not in ("tv", "movie"):
             continue
         seen.add(key)
         keys.append(key)
@@ -80,11 +84,12 @@ def load_tmdb_payload_map(db: Session, items: list[object]) -> dict[tuple[str, i
 
     language, poster_language = get_tmdb_lang_pair(db)
     tv_ids = [tid for mt, tid in keys if mt == "tv"]
-    if not tv_ids:
+    movie_ids = [tid for mt, tid in keys if mt == "movie"]
+    if not tv_ids and not movie_ids:
         return {}
 
     rows = tmdb_media_cache_repo().load_payload_rows(
-        db, language=language, poster_language=poster_language, tv_ids=tv_ids
+        db, language=language, poster_language=poster_language, tv_ids=tv_ids, movie_ids=movie_ids
     )
     out: dict[tuple[str, int], dict[str, object] | None] = {}
     for mt, tid, payload in rows:

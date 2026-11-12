@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.application.drama_lead_in import load_lead_in_summary_map
+from app.application.media_category import categorize
 from app.application.drama_update_progress import build_drama_update_progress
 from app.application.drama_schedule import resolve_item_run_schedule, resolve_run_schedule
 from app.application.dto.task import DramaRunScheduleOut, DramaUpdateProgressOut
@@ -82,6 +83,7 @@ class TaskView:
     tmdb_media_type: str | None = None
     tmdb_status: str | None = None
     tmdb_is_ended: bool | None = None
+    media_category: str | None = None
     drama_update_progress: DramaUpdateProgressOut | None = None
     lead_in: dict[str, Any] = field(default_factory=lambda: dict(_EMPTY_LEAD_IN))
     addition: dict[str, Any] = field(default_factory=dict)
@@ -137,6 +139,7 @@ def task_view(
     key = tmdb_cache_key(item)
     tmdb_status: str | None = None
     tmdb_is_ended: bool | None = None
+    payload: dict[str, Any] | None = None
     if key is not None:
         if isinstance(tmdb_status_map, dict):
             tmdb_status = tmdb_status_map.get(key)
@@ -147,13 +150,17 @@ def task_view(
 
     extra = _load_json_dict(getattr(item, "extra_json", None))
     drama_update_progress: DramaUpdateProgressOut | None = None
+    media_category: str | None = None
     if str(getattr(item, "task_type", "") or "") == "drama":
+        if isinstance(tmdb_payload_map, dict) and key is not None:
+            payload = tmdb_payload_map.get(key)
+        if payload is None and key is not None and db is not None and not (isinstance(tmdb_payload_map, dict) and key in tmdb_payload_map):
+            # 单条场景（详情 / 创建后回显）：按需补一次 payload 查询，否则分类会从有值
+            # 变成 None，前端筛选条里这个分类也就跟着消失。
+            payload = load_tmdb_payload_map(db, [item]).get(key)
+        media_category = categorize(getattr(item, "tmdb_media_type", None), payload)
         saved_latest = extra.get("saved_latest") if isinstance(extra, dict) else None
-        tmdb_details = (
-            tmdb_payload_map.get(key)
-            if (isinstance(tmdb_payload_map, dict) and key is not None and key[0] == "tv")
-            else None
-        )
+        tmdb_details = payload if (key is not None and key[0] == "tv") else None
         drama_update_progress = build_drama_update_progress(tmdb_details=tmdb_details, saved_latest=saved_latest)
 
     task_type = str(getattr(item, "task_type", "") or "")
@@ -202,6 +209,7 @@ def task_view(
         tmdb_media_type=getattr(item, "tmdb_media_type", None),
         tmdb_status=tmdb_status,
         tmdb_is_ended=tmdb_is_ended,
+        media_category=media_category,
         drama_update_progress=drama_update_progress,
         lead_in=lead_in_summary,
         addition=_load_json_dict(getattr(item, "addition_json", None)),

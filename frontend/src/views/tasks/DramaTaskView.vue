@@ -160,6 +160,7 @@ const filters = reactive({
   keyword: '',
   status: 'all',
   drive: 'all' as 'all' | DriveType,
+  category: 'all',
 })
 
 const accountByName = computed(() => new Map(accounts.value.map((item) => [item.name, item])))
@@ -263,6 +264,38 @@ const driveFilterOptions = computed(() => {
   return [{ label: '全部网盘', value: 'all' }, ...picked]
 })
 
+// 分类展示顺序（后端 app/application/media_category.py 的 CATEGORY_ORDER 同口径）；
+// 只显示列表里实际出现过的分类，和网盘筛选是同一套逻辑。
+const CATEGORY_FILTER_ORDER = [
+  '国剧',
+  '韩剧',
+  '日剧',
+  '美剧',
+  '港台剧',
+  '综艺',
+  '动漫',
+  '电影',
+  '其他剧',
+  '未分类',
+] as const
+
+const categoryFilterOptions = computed(() => {
+  const present = new Set<string>()
+  for (const item of tasks.value) {
+    if (item.task_type !== 'drama') continue
+    const category = String(item.media_category || '').trim()
+    if (category) present.add(category)
+  }
+  const known = CATEGORY_FILTER_ORDER.filter((category) => present.has(category))
+  // 后端以后新增的分类在前端还没登记时也要能筛，否则这些任务会「被消失」
+  const extra = Array.from(present)
+    .filter((category) => !(CATEGORY_FILTER_ORDER as readonly string[]).includes(category))
+    .sort()
+  const values = [...known, ...extra]
+  if (!values.length) return []
+  return [{ label: '全部分类', value: 'all' }, ...values.map((category) => ({ label: category, value: category }))]
+})
+
 const taskSort = reactive({
   prop: '' as '' | 'taskname',
   order: '' as '' | 'ascending' | 'descending',
@@ -300,7 +333,9 @@ const filteredTasks = computed(() =>
         (filters.status === 'disabled' && !item.enabled)
       const matchesFailed = !showFailedOnly.value || item.executions?.[0]?.status === 'failed'
       const matchesDrive = filters.drive === 'all' || taskDriveType(item) === filters.drive
-      return matchesKeyword && matchesStatus && matchesFailed && matchesDrive
+      const matchesCategory =
+        filters.category === 'all' || String(item.media_category || '') === filters.category
+      return matchesKeyword && matchesStatus && matchesFailed && matchesDrive && matchesCategory
     })
     .sort((a, b) => {
       if (taskSort.prop !== 'taskname' || !taskSort.order) return 0
@@ -328,13 +363,15 @@ const hasActiveFilter = computed(
     showFailedOnly.value ||
     Boolean(filters.keyword.trim()) ||
     filters.status !== 'all' ||
-    filters.drive !== 'all',
+    filters.drive !== 'all' ||
+    filters.category !== 'all',
 )
 
 function resetFilters() {
   filters.keyword = ''
   filters.status = 'all'
   filters.drive = 'all'
+  filters.category = 'all'
   showFailedOnly.value = false
 }
 
@@ -1087,6 +1124,12 @@ onBeforeUnmount(() => {
             v-model="filters.drive"
             :options="driveFilterOptions"
             class="task-drive-filter"
+          />
+          <el-segmented
+            v-if="categoryFilterOptions.length > 1"
+            v-model="filters.category"
+            :options="categoryFilterOptions"
+            class="task-category-filter"
           />
         </div>
       </div>
@@ -2110,7 +2153,8 @@ onBeforeUnmount(() => {
 }
 
 
-.task-drive-filter {
+.task-drive-filter,
+.task-category-filter {
   max-width: 100%;
 }
 
@@ -2124,7 +2168,8 @@ onBeforeUnmount(() => {
     width: 100%;
   }
 
-  .task-drive-filter {
+  .task-drive-filter,
+  .task-category-filter {
     overflow-x: auto;
   }
 }

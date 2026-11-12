@@ -4,47 +4,80 @@
 > 配套文档：[架构演进方案](architecture-evolution-plan.md)、[架构总览](architecture/README.md)、[架构决策记录](architecture/adr/)。
 > 维护原则：本文每一条「必须」都能被命令、测试或 CI 检查；写不进检查的规则不写进来。
 
-**一句话**：分层靠门禁（`scripts/check_layering.py`）、事务靠边界（`transaction(db)`）、契约靠 golden（`backend/regression_tests/golden/`）。
-这三样保持绿，重构成果就不会退回去。
+修订日期：2026-11-13。配套 [后端改造任务书](backend-hardening-taskbook.md)，本次仅修订规范，未实施任务书中的业务改造。
+
+**现状与目标分开记录**：分层门禁检查导入方向，事务测试检查提交/回滚，golden 检查响应契约；三者通过仍不能证明业务职责充分解耦、故障可恢复或真实网盘可用。
+
+| 工作包 | 修订时的现状 | 目标与切换条件 |
+| --- | --- | --- |
+| A：错误语义与 CI | 搜索外层异常仍返回成功；health 的 DB 故障仍是 HTTP 200；发布 CI 只跑 regression_tests | 错误分类、readiness/liveness、两组后端测试覆盖落地并验证后更新状态 |
+| B：日志与读接口 | 任务全量列表携带执行日志；单次日志无统一字节上限 | 日志有界、分页/概览/日志详情接口及内置调用方迁移均验收后切换 |
+| C：网盘契约 | 已有网关，但执行器仍识别网盘类型、方法参数与原始字段 | 注册网盘完成统一能力/结果契约测试，执行器移除对应兼容逻辑 |
+| D：用例与职责 | 容器暴露具体类/仓储模块，目标路由仍组织部分事务、审计及通知 | 执行、分享、引流用例接管编排，入口及大模块完成行为回归 |
+
+下文标记“目标”的规则用于新代码及本轮被改造的动作；未涉及的存量 CRUD 暂保留既有事务方式，不为套新样板扩张范围。每批完成时同步更新此表、示例、测试证据与相关 ADR，不能只改文档就标为完成。
 
 ---
 
 ## 0. 三分钟速查
 
-提交前四条命令必须全绿（在仓库根 / backend 目录分别执行）：
+提交前验证全量测试、分层、应用导入；涉及模型/迁移时另验证空库迁移与 schema 漂移。以下 PowerShell 命令从仓库根目录启动，使用项目虚拟环境并显式隔离数据库。建议在独立终端执行，避免测试环境变量影响随后启动的开发服务。
 
-```bash
-# 1) 全量测试（cwd = backend）
-cd backend
-python -m pytest tests regression_tests -q
-# 当前基线：525 passed, 2 skipped（新增测试后同步更新本行与 docs/architecture/README.md）
-
-# 2) 分层门禁（cwd = 仓库根）
-cd ..
-python scripts/check_layering.py --fail-on 0 --baseline backend/.layering-baseline.json
-# 期望：violations=0 import_cycles=0（modules/internal_imports 数字会随代码增长，不是指标）
-
-# 3) 迁移能否建出模型期望的库（cwd = backend）
-cd backend
-XXM_TESTING=1 DATABASE_URL=sqlite:///./.tmp/schema-check.db python -m alembic upgrade head
-XXM_TESTING=1 python ../scripts/check_schema_drift.py --db .tmp/schema-check.db --ignore-file ../scripts/schema_drift_allowlist.txt
-
-# 4) 应用能 import（cwd = backend）
-python -c "import app.main; print('import ok')"
+```powershell
+$backendPython = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
+$env:XXM_TESTING = '1'
+$env:DATABASE_URL = 'sqlite://'
+$env:RUN_MIGRATIONS = '0'
+$env:SCHEDULER_ENABLED = '0'
+Push-Location backend
+try {
+    & $backendPython -m pytest tests regression_tests -q --basetemp .tmp/pytest-guide
+    if ($LASTEXITCODE -ne 0) { throw '后端测试失败' }
+    & $backendPython -c "import app.main; print('import ok')"
+    if ($LASTEXITCODE -ne 0) { throw '应用导入失败' }
+} finally {
+    Pop-Location
+}
+& $backendPython scripts/check_layering.py --fail-on 0 --baseline backend/.layering-baseline.json
+if ($LASTEXITCODE -ne 0) { throw '分层门禁失败' }
 ```
+
+需要迁移/schema 检查时，接着运行以下命令。每次创建新的隔离库，不使用真实 `data/app.db`：
+
+```powershell
+$backendPython = (Resolve-Path .\backend\.venv\Scripts\python.exe).Path
+$env:XXM_TESTING = '1'
+$env:RUN_MIGRATIONS = '0'
+$env:SCHEDULER_ENABLED = '0'
+New-Item -ItemType Directory -Force .\backend\.tmp | Out-Null
+$schemaProbeDb = Join-Path (Resolve-Path .\backend\.tmp).Path ("schema-check-" + [guid]::NewGuid().ToString('N') + '.db')
+$env:DATABASE_URL = 'sqlite:///' + $schemaProbeDb.Replace('\', '/')
+Push-Location backend
+try {
+    & $backendPython -m alembic upgrade head
+    if ($LASTEXITCODE -ne 0) { throw '空库迁移失败' }
+} finally {
+    Pop-Location
+}
+& $backendPython scripts/check_schema_drift.py --db $schemaProbeDb --ignore-file scripts/schema_drift_allowlist.txt
+if ($LASTEXITCODE -ne 0) { throw 'Schema 漂移检查失败' }
+$env:DATABASE_URL = 'sqlite://'
+```
+
+2026-11-13 代码审查记录：全量测试 **570 passed、2 skipped**，分层 **252 模块、90 deferred imports、0 violations、0 import cycles**。这是带日期的历史基线；验收提交记录当次实际结果，不将固定测试数量作为通过条件。预算以 `backend/.layering-baseline.json` 为准。
 
 **十条铁律**（违反任何一条，评审直接打回）：
 
-1. 只有 `app.application.container` 是跨层通道；表现层不直接 import `infrastructure` / `persistence`。
-2. 路由里不出现裸 `db.commit()`，写端点用 `with transaction(db):`。
-3. 外部 IO（网盘、HTTP、Telegram）不放在事务里。
-4. 提交之后再发副作用/再刷新对象；提交之后不要用提交前读到的属性当真相。
-5. 用例/服务只 `flush`，提交由事务边界拥有者决定。
-6. 模块级缓存必须「有界 + 有 TTL + 写后失效」，禁止无界 dict。
-7. 新增后台线程必须走既有的受控入口（执行器/通知消费者），并受 `TaskAdmission` 配额约束。
+1. 表现层不直接 import `infrastructure` / `persistence`；装配点见 §1.1。目标业务路由只取得用例/查询入口，不能经容器转发具体类来规避职责边界。
+2. 路由零裸 `db.commit()`；目标动作的事务由应用用例拥有，未改造的存量写端点暂保留 `transaction(db)`，见 §4。
+3. 网盘、HTTP、Telegram IO 不占用数据库事务；显式结束只读事务，不把 `autoflush=False` 当成已经释放事务。
+4. 网盘写入是独立外部阶段，最终通知在业务结果提交成功后发送；数据库失败不自动重放外部写入。
+5. 仓储只 `flush` 不提交；提交由明确的用例/工作单元边界拥有。渐进持久化逐阶段登记，不能包成一次长事务。
+6. 缓存定义容量、过期及写后失效；锁表和在途 single-flight 定义容量策略及释放规则，不错误地用 TTL 淘汰正在使用的锁/任务。
+7. 后台工作走受控入口；转存执行受 `TaskAdmission` 配额约束，通知与轮询使用各自边界，不挤占转存执行槽。
 8. 响应模型改动必须同步前端 TS 类型与 `regression_tests/golden/frontend_contract.json`。
 9. 迁移必须可 downgrade；新增列必须可空或带 server_default。
-10. 禁止 `except Exception: pass`；降级要打日志并说明返回值语义。
+10. 禁止 `except Exception: pass`；失败不能伪装成功空结果，可选通知降级须有日志且不推翻已提交的业务结果。
 
 ---
 
@@ -62,11 +95,11 @@ python -c "import app.main; print('import ok')"
 | platform（平台/横切） | `app/core`（settings / errors / deps / runtime / logging / metrics） | platform |
 | tooling（工具） | `app/scripts` | 全层 |
 
-**唯一例外（组合根）**：`app/main.py`、`app/application/container.py`、`app/application/factories.py` 可以被任意层 import —— 它们是装配点，不属于任何层。
+**装配点例外**：`app/main.py`、`app/application/container.py`、`app/application/factories.py` 在分层扫描中作为 composition root 豁免。这是工具规则，业务调用方通过 container/factories 获取依赖，不因此去 import 会启动应用装配的 `app.main`，也不在装配点放业务流程。
 
 **已登记的 documented exception**：`app/application/tmdb_cache.py` → `app.infrastructure.persistence`（4 条，见 [ADR 0001](architecture/adr/0001-tmdb-cache-writer-isolation.md)）。新增例外必须：写 ADR → 改 `scripts/check_layering.py` 的 `DOCUMENTED_EXCEPTIONS` → 在 PR 说明，三者缺一不可。
 
-### 1.2 目录树（当前完成态，新增代码按此归位）
+### 1.2 目录树（当前目录，不代表职责改造已完成）
 
 ```text
 backend/app/
@@ -77,8 +110,8 @@ backend/app/
 │   └── deps.py             # 认证/权限依赖
 ├── schemas/                # pydantic 响应/入参模型（对外契约）
 ├── application/
-│   ├── container.py        # 组合根：仓储/客户端/事务边界/组件的唯一出口
-│   ├── use_cases/          # 业务流程（run_task.py = 唯一任务执行入口）
+│   ├── container.py        # 组合根：现有类/模块出口；目标为向入口提供已装配的用例/端口
+│   ├── use_cases/          # 业务流程；现有 run_task 统一参数，事务/通知收口属于批次 D
 │   ├── queries/            # 读模型：frozen dataclass 视图 + 批量装配（禁 N+1）
 │   ├── dto/                # application ⇄ presentation 共用的数据形状
 │   ├── notifications/      # 通知选择/发送/队列
@@ -99,7 +132,7 @@ backend/app/
 
 ### 1.3 三条硬规则
 
-1. **表现层不 import `infrastructure` / `persistence`**：要事务、仓储、适配器，一律 `from app.application.container import ...`（`container` 已 re-export `SessionLocal / commit / get_db / transaction`）。
+1. **导入与职责都要检查**：表现层不 import `infrastructure` / `persistence`。container 现有的 `SessionLocal / commit / get_db / transaction` re-export 用于存量边界；目标路由获取已装配用例，不获取具体执行器/账号管理器/适配器或直接调用仓储。替换 import 只能修导入方向，不能作为职责改造的完成证据。
 2. **application 不 import presentation**：不能返回 `app.schemas` 的模型；返回 `app/application/dto` 或 `queries` 视图，由 presenter 转成响应模型。
 3. **新增顶层包必须注册层**：改 `scripts/check_layering.py` 的 `LAYER_OF_PREFIX`，否则脚本按未知层处理并报违规。
 
@@ -116,27 +149,27 @@ python scripts/check_layering.py --fail-on 0 --top 50
 python scripts/check_layering.py --baseline backend/.layering-baseline.json --update-baseline
 ```
 
-> 当前预算：`{"violations": 0, "deferred_imports": 84, "cycles": 0}`。
-> `deferred_imports`（函数内延迟 import）是容器/避免循环依赖的产物，**允许增长但不参与失败判定**；
-> `violations` 与 `cycles` 必须保持 0。
+> 2026-11-13 文件快照：`{"violations": 0, "deferred_imports": 90, "cycles": 0}`，实际值以预算文件为准。
+> 当前 CLI 的失败判定只比较 violations，cycles/deferred 会报告但不因此自动失败；验收仍要求 violations=0、cycles=0，必须检查报告。
+> deferred 的变动需说明装配/延迟加载理由，不能通过增加转发把业务依赖藏起来。预算不放宽，不能把报告数值当作业务解耦程度。
 
 ---
 
 ## 2. 新增一个功能的动线（7 步）
 
-以「任务标签（task_tags）」为例，每步只写该层的东西：
+以「任务标签（task_tags）」为示意说明目标写法。该功能及以下同名模块并未在当前仓库实现，代码片段不是可直接运行的现有接口。
 
 | # | 产出 | 放哪里 | 验收 |
 | --- | --- | --- | --- |
 | 1 | ORM 模型 | `infrastructure/persistence/models/task_tag.py` | 只用 SQLAlchemy 声明，无业务逻辑 |
 | 2 | 迁移 | `alembic/versions/YYYYMMDD_task_tags.py` | `upgrade head` + `downgrade -1` 都成功，CI 的 db-schema-gate 绿 |
 | 3 | 仓储函数 | `infrastructure/persistence/repositories/task_tags.py` | 只碰 `TaskTag` 模型；不 commit、不返回 `Select` |
-| 4 | 装配访问器 | `application/container.py` 加 `def task_tags_repo()` | 表现层/应用层只能从这里拿 |
-| 5 | 读视图 或 用例 | `application/queries/task_tags.py`（读）/ `application/use_cases/*.py`（写） | 视图是 frozen dataclass；用例只 flush |
-| 6 | presenter + 路由 | `api/presenters/task_tag.py`、`api/routes/task_tags.py` | 路由 < 60 行；写端点 `with transaction(db):` + 审计 |
+| 4 | 应用 DTO 与端口 | `application/dto/`、`domain/ports/` | 输入/结果为明确类型，端口不暴露 ORM、具体适配器或原始响应 |
+| 5 | 查询/用例及装配 | `application/queries/task_tags.py`、`application/use_cases/`、`container.py` | 查询批量装配；用例拥有短事务、审计、提交后通知；容器返回已装配实例 |
+| 6 | presenter + 路由 | `api/presenters/task_tag.py`、`api/routes/task_tags.py` | 只做权限、命令映射、用例调用和响应；不以行数代替职责验收 |
 | 7 | 测试 | `tests/test_task_tags.py` +（改契约时）`regression_tests/` 与 golden | 见第 10 节 |
 
-### 2.1 路由样板（写端点）
+### 2.1 目标路由样板（写端点，示意）
 
 ```python
 # backend/app/api/routes/task_tags.py
@@ -145,8 +178,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, get_current_user_scoped, require_permissions_scoped
 from app.api.presenters.task_tag import task_tag_out
-from app.application.audit import write_audit_log
-from app.application.container import get_db, task_tags_repo, transaction
+from app.application.container import get_db, task_tag_use_case
+from app.application.dto.task_tag import CreateTaskTagCommand
 from app.core.permissions import TASK_WRITE          # 权限码统一在 core/permissions
 from app.schemas.task_tag import TaskTagCreateIn, TaskTagOut
 
@@ -159,14 +192,16 @@ def post_task_tag(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user_scoped),
 ):
-    with transaction(db):                            # 一个用例一个事务
-        row = task_tags_repo().add_tag(db, name=payload.name, color=payload.color)
-        write_audit_log(db, actor_user_id=current.user.id, action="task_tag.create", target_type="task_tag", target_id=None)
-    db.refresh(row)                                  # 提交后再刷新，再序列化
-    return task_tag_out(row)
+    command = CreateTaskTagCommand(
+        name=payload.name, color=payload.color, actor_user_id=current.user.id,
+    )
+    view = task_tag_use_case(db).execute(command)
+    return task_tag_out(view)
 ```
 
-**注意顺序**：写库 → 审计（同事务）→ 提交（由 `transaction` 负责）→ `refresh` → 序列化 → 返回。
+会话可以作为边界依赖传入，但路由不组织业务写入或提交。示意中的命令/结果与用例职责见附录 A.2；在真实功能中定义后才能接线，不要仅新增同名访问器。
+
+纯数据库用例：写库 → 同事务审计 → 提交 → 返回值对象。含网盘 IO 的用例：读取计划并结束读事务 → 外部操作 → 短事务保存结果和审计 → 提交后最终通知 → 返回值对象。需要重新读取结果时由用例在提交后处理，presenter 不触发 ORM 查询。
 
 ### 2.2 读端点样板（走 queries，不内联拼装）
 
@@ -207,25 +242,26 @@ def get_task_tags(db: Session = Depends(get_db)):
 
 | 原语 | 用途 | 谁用 |
 | --- | --- | --- |
-| `with transaction(db):` | 一个用例一个事务；异常自动 rollback，提交内置锁重试 | 路由写端点、后台工作单元 |
-| `commit(db)` | 「提交后还要发副作用/发通知/返回 id」的显式提交 | 需要精确控制提交时机的流程 |
+| `with transaction(db):` | 一个短数据库工作单元；异常自动 rollback，提交内置锁重试 | 目标用例/后台工作单元；存量路由迁移前可保留 |
+| `commit(db)` | 显式结束当前写阶段，成功后才发该阶段的最终通知 | 已登记边界，不能由目标路由代替用例决定 |
 | `end_read_tx(db)` | 结束**只读**事务（≠业务提交） | 长时间只读路径、刷新前释放读锁 |
 
-全部从 `app.application.container` 取（唯一合法来源）。`infrastructure/persistence/unit_of_work.py` 只给基础设施/测试用，**表现层不要 import**。
+表现层/应用层需要这些原语时从 `app.application.container` 取；基础设施可以直接使用其内部实现。当前 `UnitOfWork` 仅包装 Session 的事务上下文，不具备自动仓储注入、阶段编排或外部副作用恢复功能；不要在示例里把它当成已有的完整用例框架。
 
 ### 4.2 五条规则
 
-1. **路由零裸 `db.commit()`**：`regression_tests/test_commit_ownership.py` 会把路由里出现的裸 commit 判红。
-2. **事务里不做外部 IO**：正确形态是「读 → 外部 HTTP/网盘 → 短写事务」。反例：早期 TMDB 刷新在同一个事务里做外部请求，直接复现 `database is locked`。
-3. **提交后刷新对象**：`db.refresh(obj)` 或重新查询；提交前读到的属性不是真相（可能被并发改掉）。
+1. **目标动作由用例拥有事务**：`test_commit_ownership.py` 目前只检查裸 commit 的位置和预算，不会证明 `commit(db)`/`transaction(db)` 的业务归属正确。目标路由连同提交、审计、通知编排一起移走，配套增加行为/边界测试；存量 CRUD 暂保留既有方式。
+2. **事务里不做外部 IO**：正确形态是「读并结束只读事务 → 外部 HTTP/网盘 → 短写事务」。ORM 属性访问可能重新打开事务，阶段间传递值对象；有未提交写入时不能用只读事务清理函数偷偷提交/丢弃变更。
+3. **提交后返回值对象**：需要最新数据库状态时由事务边界拥有者 refresh/重新查询；不要把已过期 ORM 对象交给 presenter 或跨线程使用。最终通知从明确执行结果取得信息，不依赖可能裁剪的展示文本。
 4. **锁冲突要么安全重试、要么显式 5xx**：`transaction`/`commit` 内置的 `commit_with_locked_retry` 只重试 commit 且校验会话未被数据库回滚；`retry_on_locked(fn)` 的语义是「重跑整个用例」，**禁止用它包单个 commit**（会导致静默丢数据）。
-5. **新增提交点必须登记**：`test_commit_ownership.py` 维护了一份「文件 → 预算 → 归属类别 → 理由」的总账（当前 95 处 / 11 文件，分四类：请求级、应用生命周期、后台自有工作单元、有意渐进持久化）。新增后台工作单元要在总账里登记并写理由，**不能靠调大预算蒙过去**。
+5. **提交点迁移必须登记**：`test_commit_ownership.py` 维护「文件 → 预算 → 归属类别 → 理由」总账（2026-11-13 预算为 95 处，实际以测试文件为准）。用例接管旧提交时同步减少旧文件预算，登记新归属，保持总预算不扩大；新增后台工作单元必须说明理由，不能只调大预算使检查通过。
 
 ### 4.3 反模式速查
 
 | 反模式 | 后果 |
 | --- | --- |
-| 路由里 `db.commit()` + 之后又查询/序列化 | 提交后对象过期，序列化出旧值或触发额外查询 |
+| 目标路由经容器调用仓储、提交、发送通知 | 导入检查可能通过，但业务编排仍分散在入口 |
+| 已过期 ORM 对象交给 presenter 或另一个线程 | 隐式查询、会话状态错误，结果难以预测 |
 | 事务里调用网盘/HTTP | 长事务卡住 WAL checkpoint，全站写阻塞 |
 | 只读路径不结束事务 | 读事务一直持有快照，写者被拖慢 |
 | `except Exception: pass` | 失败不可见，数据静默丢失 |
@@ -257,7 +293,7 @@ def get_task_tags(db: Session = Depends(get_db)):
 
 - **模块级无界 dict 当缓存**：必须用 `TtlCache` 或 `LRUKeyedLocks` 这类有界容器（历史教训：引流锁表只增不删，素材名维度可累积数千把锁）。
 - **请求线程里 `time.sleep`**：限速放到 `KeyedRateLimiter`/基类 `_throttle_request`，不要在路由里睡。
-- **持锁做网络 IO**：锁只保护内存状态与「构造过程」，IO 移到锁外。
+- **持全局锁做网络 IO**：全局锁仅保护注册表/缓存读写；构造/登录 IO 在其外执行。同 key 的构造、令牌刷新及引流写入需要覆盖完整操作的互斥/单飞，允许在对应 key 的范围内做 IO，不能为缩短锁持有时间破坏防重。
 - **裸 `threading.Thread(...)`**：除执行器与通知消费者这两处受控入口外，不要新起线程；异步化优先用「队列 + 单消费者」。
 - **无限排队**：通知队列满 1000 条即丢弃并告警（`send_async` 返回 False）；新队列必须定义「满了怎么办」。
 - **只依赖本地状态做幂等**：转存类必须查网盘侧事实（同名文件是否已存在），本地记录只作辅助。
@@ -271,33 +307,36 @@ def get_task_tags(db: Session = Depends(get_db)):
 
 ## 6. 接入第 11 家网盘（适配器）
 
-新增一家网盘 = **1 个文件 + 2 行注册 + 1 组测试**：
+新增网盘先明确其能力、统一结果与失败语义，再实现适配器、注册和测试。文件数量不是完成条件；当前接口仍有历史差异，统一契约属于任务书批次 C，未接入前不得声称只注册就能兼容所有转存流程。
 
 1. 在 `app/infrastructure/drive/adapters/` 新建 `xxx_adapter.py`，继承 `BaseCloudDriveAdapter`；
 2. 在 `app/infrastructure/drive/factory.py` 的 `ADAPTER_MAP` 与 `URL_PATTERNS` 各加一行（或调用 `AdapterFactory.register_adapter / register_url_pattern`）；
-3. 测试放 `regression_tests/test_<name>_adapter.py`（假响应即可，`test_gateway_port.py` 里有「假第 11 家网盘」样板）。
+3. 测试放 `regression_tests/test_<name>_adapter.py`，复用统一契约用例；`test_gateway_port.py` 的假网盘样板可作起点。假响应证明归一与编排，真实账号联调另记结果。
 
 必须实现的抽象方法（其余有默认实现，按需覆盖）：
 
 | 方法 | 语义 |
 | --- | --- |
 | `init()` | 登录/初始化，成功后可复用实例 |
-| `get_stoken(share_url, passcode)` | 取分享令牌 |
+| `get_stoken(pwd_id, passcode)` | 根据解析出的分享 ID 和提取码取令牌，具体签名以基类为准 |
 | `get_detail(...)` | 分享/目录详情 |
 | `ls_dir(pdir_fid, max_items)` | 列目录 |
 | `save_file(...)` | 转存（核心写操作） |
 | `query_task(task_id)` | 查询异步任务状态 |
 | `mkdir(dir_path)` / `rename(...)` / `delete(...)` | 目录/文件操作 |
 | `get_fids(...)` | 取文件 id |
-| `extract_url(...)` | 取下载直链 |
+| `extract_url(url)` | 解析分享 ID、提取码、分享目录 ID 和路径，不是获取下载直链 |
 
 约定：
 
-- **不要在适配器里写业务编排**（多轮重试、选哪个文件、追剧季集判断）。编排在 `infrastructure/execution/`；跨网盘的统一语义走 `infrastructure/drive/gateway.py`（`DriveGatewayPort`：`list_dir / create_dir / transfer / check_share / probe_share / close`）。
+- **区分业务规则与网盘机制**：文件筛选、季集和增量计划属于业务/执行流程；`file_names` 参数、远端任务轮询、UC 中转目录和移动、不同返回字段属于网盘边界。用例通过统一网关/小能力端口调用，不在公共执行器中加网盘类型分支。
+- **目标统一契约（批次 C，尚未完成）**：文件值对象明确 ID/名称/目录/大小/可选令牌；转存结果明确 completed/pending/failed、保存文件映射、远端任务 ID 和是否核实。提交成功不等于转存完成，令牌是否必需由具体网盘验证。
+- **能力显式声明**：不支持分享/引流等能力时明确拒绝；不以 `hasattr`、基类方法比较、`inspect.signature` 或捕获 `TypeError` 后再次写入决定能力。
+- **写入结果不明先核对**：数据库失败或写请求超时不能直接重放；返回文件顺序不保证与计划一致，重命名前核对来源与目标映射。
 - **限速与令牌**：用基类的 `_rate_limit_key()` / `_token_refresh_key()` / `_throttle_request()`；令牌刷新走 `TokenManager` 的单飞，不要自己写重试循环。
 - **必须实现 `close()`**：实例被 LRU 淘汰时会调用；新增的 session/连接必须能释放。
 - **失败要分类**：`classify_share_failure` 的返回值决定「分享失效 / 需要提取码 / 风控」的用户文案，不要新造字符串。
-- **用户可见文案逐字保留**：重构/换实现时，错误消息按原文复制（有 golden 和 e2e 测试盯着）。
+- **纯重构保持业务口径**：尤其保留 pending、手动执行日期与引流预览确认规则。任务书明确要求修正的搜索错误/健康状态属于有意契约变化，前后端及 golden 同步更新，不能被“逐字保留”阻止。
 
 ---
 
@@ -309,6 +348,17 @@ def get_task_tags(db: Session = Depends(get_db)):
 - 关系数据必须在本层**一次批量查完**（禁止 N+1）：`regression_tests/test_task_queries.py` 用 SQL 计数锁定了「列表查询条数与任务数无关」；
 - 路由只做 `[presenter(view) for view in list_xxx(db)]`。
 
+### 7.1.1 列表、概览、详情的目标边界（批次 B，尚未完成）
+
+- 常用列表先筛选/排序/取页 ID，再批量装配当页任务，默认 20 条、最大 100 条；不先读取全部任务与执行记录后切片。
+- 列表/概览不读取 `run_log`、`tree_summary` 和完整 snapshot；所需徽标、成功更新及网盘类型用受控小字段投影。
+- 工作台/日历需要全局数据时用轻量概览；该集合仍有 O(N) 元数据成本，不能宣称所有接口都与任务数无关。
+- 分类、网盘候选、失败计数、名称排序和批量操作作用于全局匹配结果，不局限当前页。中文名称自然排序与同名网盘优先级保持现有口径；全局轻量索引成本单独测量。
+- 执行详情和日志按需加载；UTF-8 日志分块默认/最大 64 KiB，返回实际下一字节偏移，跨任务 execution ID 统一 404。
+- 新分页接口与旧全量 `/api/tasks` 并存直到内置调用方迁移完成；不能直接改变旧接口形状或悄悄截为首 N 条。
+- 概览与分页缓存分开，分页按过滤/排序/页码区分；修改、删除、执行完成后失效相关缓存，旧请求不能覆盖新筛选结果。
+- 具体接口、日志块及 facets 契约以 [任务书](backend-hardening-taskbook.md) 的批次 B 为准；发布顺序为先兼容后端、再新前端，回退反序。
+
 ### 7.2 写：presenter 纯函数
 
 `app/api/presenters/*` 是纯函数：入参是应用层视图/DTO，出参是 `app/schemas` 的 pydantic 模型。**不接 db、不做查询、不做业务判断**。
@@ -319,14 +369,20 @@ def get_task_tags(db: Session = Depends(get_db)):
 2. 改任何响应模型/枚举/字段名，必须同步：
    - `frontend/src/types/tasks.ts`（或对应 types 文件）；
    - `backend/regression_tests/golden/frontend_contract.json`；
-3. 更新 golden 用：
-   ```bash
-   cd backend
-   UPDATE_CONTRACT_GOLDEN=1 python -m pytest regression_tests/test_frontend_contract_golden.py -q
+3. 更新 golden：先按 §0 设置隔离环境，再在 `backend/` 目录执行：
+   ```powershell
+   $previousGoldenUpdate = $env:UPDATE_CONTRACT_GOLDEN
+   try {
+       $env:UPDATE_CONTRACT_GOLDEN = '1'
+       & $backendPython -m pytest regression_tests/test_frontend_contract_golden.py -q --basetemp .tmp/pytest-guide
+       if ($LASTEXITCODE -ne 0) { throw 'Golden 更新测试失败' }
+   } finally {
+       $env:UPDATE_CONTRACT_GOLDEN = $previousGoldenUpdate
+   }
    ```
    然后把 golden 的 diff 与代码改动放在**同一个提交**里。
 
-golden 覆盖：10 个后端响应模型（字段+类型+顺序）、前端 15 个 TS 类型字段集合、SSE 逐字节线格式、错误体。
+golden 的覆盖范围由 `test_frontend_contract_golden.py` 和实际 golden 文件决定；新增分页摘要、详情、错误分类时扩展对应覆盖，不以历史模型数量代替检查。字段+类型+顺序、前端字段集合、SSE 线格式和错误体均需验证。
 「后端有、前端暂时没消费」的字段必须在 `DRIFT_ALLOWLIST` 里写理由；前端一旦消费，白名单条目会变红，必须删掉。
 
 ### 7.4 SSE 与错误体（前端按字节/状态码解析）
@@ -334,8 +390,15 @@ golden 覆盖：10 个后端响应模型（字段+类型+顺序）、前端 15 �
 - SSE 事件：`init` / `log` / `stage` / `done`，空闲 15s 发 `: ping`；
   格式固定 `event: <name>\ndata: <json>\n\n`，JSON 用 `ensure_ascii=False`；
 - `tasks_share` 的流结束哨兵是 `data: [DONE]`（单独一段，不带 event 行）；
-- 错误统一抛 `ApiError(code, message, http_status, detail)`，响应体固定 `{code, message, detail}`；
+- 业务错误通过 `ApiError(code, message, http_status, detail)` 映射为 `{code, message, detail}`；未处理异常使用现有全局 500 处理，不能把异常原文返回用户。
   409（`TASK_ALREADY_RUNNING`）/ 429（`TASK_CAPACITY_EXCEEDED`）是前端重试与 toast 的判据，**不许改成 200 + failed**（见 [ADR 0002](architecture/adr/0002-task-admission-stays-at-call-sites.md)）。
+
+### 7.5 搜索与健康检查目标语义（批次 A，尚未完成）
+
+- 搜索无匹配：200、success=true、空列表；无启用源需要明确提示。部分源失败而其他源完成：200、partial=true、脱敏 warnings。
+- 所有启用源失败：502/SEARCH_UPSTREAM_FAILED；全部失败且均为超时：504/SEARCH_UPSTREAM_TIMEOUT。成功源的空结果不能算失败。数据库和程序异常保持 500，不伪装空结果。
+- `/api/health` 作为 readiness：数据库正常 200，故障 503，保留现有响应字段。新增 `/api/health/live` 仅检查 HTTP 进程响应，200，不访问数据库或网盘。
+- 当前代码仍存在搜索异常 success=true、health 故障 HTTP 200 的行为；本节只有在接口、前端和故障注入测试完成后才可标记已实现。
 
 ---
 
@@ -353,9 +416,11 @@ golden 覆盖：10 个后端响应模型（字段+类型+顺序）、前端 15 �
 ## 9. 可观测性
 
 - **审计**：所有 mutating 端点、后台写操作都要 `write_audit_log(...)`，并与业务写在同一个事务里（回滚则审计一起回滚，这是有意的）。
-- **异常**：禁止 `except Exception: pass`；至少 `logger.exception(...)`，并明确「降级返回什么」。
+- **异常**：禁止 `except Exception: pass`；错误分支记录可定位且脱敏的日志并明确返回语义。可选通知失败不推翻已提交业务，SQL/提交失败不能吞掉；搜索故障不伪装成功，目标语义见 §7.5。
 - **慢请求**：`settings.slow_request_ms`（默认 1000ms）由 Timing 中间件记录；新增外部调用要给埋点，不要出现「不知道慢在哪」。
-- **执行日志**：`run_log` 有长度上限、执行记录每任务只保留最近 20 条（`task_execution_history_limit`）；不要把大对象塞进去。
+- **执行日志现状**：执行历史默认每任务保留 20 条（`task_execution_history_limit`）；`ExecutionLog.lines` 仍无限追加，没有统一单次字节上限。记录条数限制、SSE 有界队列和 gzip 都不能替代单次日志容量控制。
+- **执行日志目标（批次 B1，尚未完成）**：`execution_log_max_bytes` 默认 262144 字节，`execution_tree_max_bytes` 默认 65536 字节，均为正整数，按 UTF-8 字节计；日志在追加时就有界，保留头尾及截断提示/元数据，不能只在 render/响应时裁剪。
+- **展示与事实分开**：现有成功通知解析 `tree_summary` 提取新增文件名，裁剪前必须先改为结构化结果驱动通知/进度/重命名，避免展示限额影响业务。历史大日志按需分块读取，不批量改写旧记录。
 
 ---
 
@@ -363,12 +428,12 @@ golden 覆盖：10 个后端响应模型（字段+类型+顺序）、前端 15 �
 
 ### 10.1 放哪里
 
-| 目录 | 定位 | 是否进 CI |
+| 目录 | 定位 | 修订时 CI 现状与目标 |
 | --- | --- | --- |
-| `backend/tests/` | 业务行为测试（unittest 风格，按模块组织） | ❌ 只在本地（`docker-publish.yml` 只跑 regression_tests） |
-| `backend/regression_tests/` | **护栏**：分层/事务/契约/并发/幂等/端口（pytest 风格，多用标准库 `ast` 检查源码） | ✅ CI 必跑 |
+| `backend/tests/` | 按业务模块组织的行为测试 | 当前发布工作流未运行；批次 A3 要求接入，尚未实施 |
+| `backend/regression_tests/` | 分层/事务/契约/并发/幂等/端口等护栏，包含源码及运行行为测试 | 当前 CI 已运行；接入全量后仍保留 |
 
-规则：**必须长期生效的约束，写成 regression_tests**；只验证某次业务行为的，放 tests。
+两组测试都需要长期生效，目录不代表测试寿命或重要性。按现有模块习惯归位；本地完整验收运行两组，CI 目标同样运行两组。CI 覆盖状态以 workflow 内容和实际运行结果为准，不因修改本文就视为已接入。
 
 ### 10.2 新功能至少要有的 4 类测试
 
@@ -388,27 +453,34 @@ golden 覆盖：10 个后端响应模型（字段+类型+顺序）、前端 15 �
 
 ### 10.4 命令
 
-```bash
-cd backend
-# 全量（当前 525 passed, 2 skipped）
-python -m pytest tests regression_tests -q
+完整 PowerShell 命令及隔离环境见 §0。已经设置该环境后，在 `backend/` 下运行：
 
-# 只跑护栏（CI 同款，最快反馈）
-python -m pytest regression_tests -q
+```powershell
+# 完整验收；测试数量以当次输出为准
+& $backendPython -m pytest tests regression_tests -q --basetemp .tmp/pytest-guide
 
-# 只跑一个文件
-python -m pytest regression_tests/test_commit_ownership.py -q
+# 仅护栏，适合迭代反馈，不能替代完整验收
+& $backendPython -m pytest regression_tests -q --basetemp .tmp/pytest-guide
+
+# 单文件验证
+& $backendPython -m pytest regression_tests/test_commit_ownership.py -q --basetemp .tmp/pytest-guide
 ```
 
-**Windows 注意**：pytest 临时目录若指向 MSYS 路径会落到 `pytest-of-<user>` 并报权限错误，需转成 Windows 路径：
+Windows 可显式指定上述 `--basetemp`，避免临时目录权限或 MSYS 路径问题；该目录仅作 pytest 临时产物，不放用户数据，也不与另一个并行测试进程共用。
 
-```bash
-TMPW="$(cygpath -w "$(pwd)/.tmp")"; TMPDIR="$TMPW" TEMP="$TMPW" TMP="$TMPW" python -m pytest tests regression_tests -q
+涉及前端，在仓库根目录使用已有工具检查，不新增测试框架：
+
+```powershell
+$frontendRegressionFiles = @(Get-ChildItem .\frontend\regression_tests\*.test.mjs | ForEach-Object { $_.FullName })
+node --test $frontendRegressionFiles
+if ($LASTEXITCODE -ne 0) { throw '前端回归失败' }
+pnpm --dir frontend build
+if ($LASTEXITCODE -ne 0) { throw '前端构建失败' }
 ```
 
-### 10.5 测不到的部分（必须人工 e2e）
+### 10.5 真实服务联调与自动测试的边界
 
-真实网盘转存、Telegram 交互、搜索插件加载这三块没有自动化覆盖；改动它们时按 `scripts/e2e_smoke.md` 手工跑一遍并在 PR 里贴结果。
+网盘响应归一、Telegram 分派和搜索插件加载可以且应使用假客户端做自动化验证，不能笼统称为“不可测试”。真实网络、真实账号权限及第三方行为仍需按 `scripts/e2e_smoke.md` 联调；PR 分开记录自动测试、浏览器检查和真实服务联调。环境不具备时写明未验证，不能把假响应通过标成真实网盘可用。
 
 ---
 
@@ -435,15 +507,22 @@ TMPW="$(cygpath -w "$(pwd)/.tmp")"; TMPDIR="$TMPW" TEMP="$TMPW" TMP="$TMPW" pyth
 - [ ] `python -c "import app.main"` 成功
 - [ ] 改模型/迁移：空库 `alembic upgrade head` 成功、`downgrade -1` 成功、`check_schema_drift` 无新增漂移
 - [ ] 改响应/错误/SSE：golden 已更新且前端类型同步
-- [ ] 新增提交点/后台线程：已在 `test_commit_ownership.py` 登记并写理由
-- [ ] 新增配置/开关：`settings.py` + 文档 + 双分支测试齐全
-- [ ] 涉及网盘/TG/搜索插件：已按 `scripts/e2e_smoke.md` 手工验证并贴结果
+- [ ] 目标路由只调用用例/查询；没有通过容器继续取得具体执行器、账号管理器或适配器来组织业务
+- [ ] 提交点/旁路会话在 `test_commit_ownership.py` 登记归属；后台线程另验证受控入口、配额、会话隔离与释放
+- [ ] 事务不跨外部 IO；提交失败不重放网盘写入；最终通知在提交成功之后发送
+- [ ] 涉及读接口/日志：分页先于完整装配、列表不读取大字段、全局筛选/缓存正确、日志字节限额与分块读取有测试
+- [ ] 涉及网盘：统一结果/能力契约通过，差异留在网盘边界，pending/结果不明不误判成功
+- [ ] 新增配置/开关：`settings.py` 与文档同步；配置默认/边界测试、开关双分支测试齐全
+- [ ] 涉及网盘/TG/搜索插件：附自动验证和真实联调记录，不能联调的部分明确注明
+- [ ] 改造批次的现状表、样例、ADR 与 CI 覆盖状态按实际交付同步，未把目标写成已实现
 
 ---
 
 ## 附录 A：常用代码片段
 
-### A.1 仓储函数（只碰自己的模型、不 commit）
+### A.1 仓储函数（基础设施内部示意，不 commit）
+
+基础设施内部可以返回 ORM 行；对应用用例暴露的端口应映射成明确值对象，而非把仓储模块或 ORM 对象直接交给路由。下例的 task_tag 模型是 §2 的示意功能。
 
 ```python
 # backend/app/infrastructure/persistence/repositories/task_tags.py
@@ -464,14 +543,39 @@ def add_tag(db: Session, *, name: str, color: str | None) -> TaskTag:
     return row
 ```
 
-### A.2 容器访问器（装配点唯一出口）
+### A.2 目标用例与装配（示意，当前未实现 task_tags 功能）
+
+§2.1 的 `CreateTaskTagCommand` 为 frozen dataclass，字段为 `name: str`、`color: str | None`、`actor_user_id: int`；返回的 `TaskTagView` 也是 frozen dataclass，字段为 `id: int`、`name: str`、`color: str | None`。
+
+用例接收同一 Session 上的 store/audit 端口实例：`store.add(name=..., color=...)` 返回不可变标签记录，`audit.record_created(actor_user_id=..., tag_id=...)` 写入审计，两者只 flush 不 commit。端口在 domain 中定义，不引用应用 DTO 或基础设施类；store 适配器负责将 A.1 的 ORM 行映射成 domain 值对象。
 
 ```python
-# backend/app/application/container.py
-def task_tags_repo():
-    from app.infrastructure.persistence.repositories import task_tags
-    return task_tags
+# application/use_cases/create_task_tag.py 内的用例方法示意
+from app.application.container import transaction
+from app.application.dto.task_tag import CreateTaskTagCommand, TaskTagView
+
+
+def execute(self, command: CreateTaskTagCommand) -> TaskTagView:
+    with transaction(self.db):
+        tag = self.store.add(name=command.name, color=command.color)
+        self.audit.record_created(actor_user_id=command.actor_user_id, tag_id=tag.id)
+        view = TaskTagView(id=tag.id, name=tag.name, color=tag.color)
+    return view
 ```
+
+上例只包含数据库写入；有外部 IO 的业务不能把整个操作放进该事务。store/audit 出错或提交失败向上传播，不能返回 view 假装成功。
+
+```python
+# application/container.py 内的目标装配示意
+def task_tag_use_case(db):
+    from app.application.use_cases.create_task_tag import CreateTaskTagUseCase
+    from app.infrastructure.persistence.repositories.task_tags import TaskTagStore
+    from app.infrastructure.persistence.repositories.audit import TaskTagAudit
+
+    return CreateTaskTagUseCase(db=db, store=TaskTagStore(db), audit=TaskTagAudit(db))
+```
+
+这些示意类由实际功能实现时定义，不是当前仓库已经提供的符号。装配点只建立依赖，不调用业务、不持有请求 ORM 对象、不跨线程复用会话；存量 `tasks_repo()` 等模块访问器由对应批次迁移，不一次性改写全部仓储。
 
 ### A.3 按 key 串行 + 单飞
 
@@ -486,31 +590,42 @@ with _locks.keyed(f"lead_in:{drive}:{account}:{path}"):
     token = _flight.run(f"token:{account}", lambda: refresh_token(account))
 ```
 
-### A.4 后台工作单元（提交自己负责，并登记总账）
+### A.4 后台会话与执行槽（存量方式示意，目标归属见 §4）
 
 ```python
-slot = task_admission.reserve(task_id)      # 拿不到就 409/429（调用点决定怎么呈现）
+from app.application.container import commit, db_session, task_admission_service
+from app.application.tasks import get_task
+from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
+
+
+task_admission = task_admission_service()
+slot = task_admission.reserve(task_id)  # HTTP/SSE 在建流/启动 worker 前完成准入
+
 def work():
-    with slot:
-        # from app.application.container import RunPolicy, RunTaskUseCase, db_session
-        with db_session() as db:             # 后台自己开 session（container 提供）
-            RunTaskUseCase(db).run(task, RunPolicy.for_trigger("scheduler"))
-            db.commit()                      # 归属：background-owned
+    with db_session() as db:           # 会话在 worker 线程内创建
+        task = get_task(db, task_id)   # 只传 ID 入线程，在本线程加载 ORM
+        RunTaskUseCase(db).run(task, RunPolicy.for_trigger("scheduler"))
+        commit(db)                    # 存量后台提交点，迁移时同步归属测试
+
 slot.start_worker(work)
 ```
 
-### A.5 适配器骨架
+所需符号分别从 `app.application.container`（`db_session`、`commit`、`task_admission_service`）、`app.application.tasks`（`get_task`）及 `app.application.use_cases.run_task`（`RunTaskUseCase`、`RunPolicy`）取得。当前 `start_worker()` 内部已持有并释放 slot，线程创建失败也会释放；无需再包一层 `with slot`。调度器原有同步循环继续用 `with slot`，不因为这个线程示例改成异步调度。
+
+批次 D2 完成后，提交与通知由执行用例接管，worker 只负责在线程内建立资源并调用用例；不能把上面的存量 commit 复制进新入口，形成双重提交。
+
+### A.5 适配器签名示意（不是完整可实例化的实现）
 
 ```python
 from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
 
 
 class XxxAdapter(BaseCloudDriveAdapter):
-    DRIVE_TYPE = "xxx"      # 基类在 __init__ 里据此生成 self.drive_type（base_adapter.py:81）
+    DRIVE_TYPE = "xxx"
 
     def init(self) -> None: ...
-    def get_stoken(self, share_url: str, passcode: str | None = None) -> dict: ...
-    def ls_dir(self, pdir_fid: str, max_items: int = 0) -> list[dict]: ...
+    def get_stoken(self, pwd_id: str, passcode: str = "") -> dict: ...
+    def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> dict: ...
     def save_file(self, *args, **kwargs) -> dict: ...
     def query_task(self, task_id: str) -> dict: ...
     def mkdir(self, dir_path: str) -> dict: ...
@@ -535,13 +650,13 @@ class XxxAdapter(BaseCloudDriveAdapter):
 | 定时/线程/配额 | `app/infrastructure/scheduling/` |
 
 **Q2：门禁报 `presentation -> persistence` 违规怎么办？**
-把 import 换成 `from app.application.container import ...`；确实需要新能力（新仓储/新组件）就在 `container.py` 加访问器，而不是在路由里直连。
+先判断这段 SQL/账号选择/事务/通知是否本就属于应用用例。目标路由应把该职责一起移到用例，由 container 装配依赖；不能只把 import 换成容器访问器继续在路由编排。未改造的存量边界可以使用已有导出，但必须标明迁移范围。
 
 **Q3：测试报 `ModuleNotFoundError: No module named 'app'`？**
 必须在 `backend/` 目录下跑，或显式 `PYTHONPATH=backend`。不要从仓库根跑 pytest。
 
 **Q4：pytest 报 `PermissionError: [WinError 5]` 指向 `pytest-of-xxx`？**
-临时目录路径是 MSYS 风格。按第 10.4 节的 `cygpath` 写法设置 `TMPDIR/TEMP/TMP`。
+先检查临时路径和权限；MSYS 路径只是可能原因之一。按 §0/§10.4 用项目 Python，并显式指定项目内专用 `--basetemp`；不删除或改权限整个用户临时目录。
 
 **Q5：接口变慢，按什么顺序排查？**
 ① 是否 N+1（queries 层查数量）→ ② 是否有长事务/未结束的只读事务 → ③ 是否连接池等待（5+10）→ ④ 是否事务里带外部 IO → ⑤ 是否大响应没走 gzip。前四项都有对应的回归测试或门禁。

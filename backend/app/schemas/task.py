@@ -90,6 +90,8 @@ class TaskOut(BaseModel):
     tmdb_media_type: str | None = None
     tmdb_status: str | None = None
     tmdb_is_ended: bool | None = None
+    # 追剧任务分类（后端唯一口径，见 app/application/media_category.py）；非追剧任务为 null
+    media_category: str | None = None
     drama_update_progress: DramaUpdateProgressOut | None = None
     lead_in: TaskLeadInSummaryOut = Field(default_factory=TaskLeadInSummaryOut)
     enabled: bool
