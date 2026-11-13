@@ -17,6 +17,7 @@ tests/*
 old_project
 backend/data/*.db.*
 backend/data/*.db*
+backend/data/secrets.json
 backend/data/cache
 docs/*.html
 docs/*.png
