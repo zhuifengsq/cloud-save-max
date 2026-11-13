@@ -21,13 +21,13 @@ jobs:
       with:
         python-version: '3.13'
     - run: python -m pip install -r requirements.txt -r requirements-dev.txt
-    - name: Run backend regression tests
+    - name: Run complete backend tests
       env:
         XXM_TESTING: '1'
         DATABASE_URL: 'sqlite://'
         RUN_MIGRATIONS: '0'
         SCHEDULER_ENABLED: '0'
-      run: python -m pytest regression_tests -q
+      run: python -m pytest tests regression_tests -q
     - name: Verify migrations
       env:
         XXM_TESTING: '1'

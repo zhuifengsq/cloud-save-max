@@ -1,9 +1,10 @@
+import logging
 import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -41,16 +42,26 @@ def _git_sha() -> str | None:
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+@router.get("/health/live")
+def liveness():
+    """HTTP process liveness; deliberately independent of external services."""
+    return {"status": "ok"}
 
 
 @router.get("/health")
-def health(db: Session = Depends(get_db)):
+def health(response: Response, db: Session = Depends(get_db)):
     db_connected = False
     try:
         db.execute(text("SELECT 1"))
         db_connected = True
     except Exception:
         db_connected = False
+        response.status_code = 503
+        # Exception text can contain connection credentials; keep this diagnostic safe.
+        logger.warning("Database health probe failed")
 
     build_tag = (os.getenv("BUILD_TAG") or "").strip() or _git_describe() or "dev"
     build_sha = (os.getenv("BUILD_SHA") or "").strip() or _git_sha()
