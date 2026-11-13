@@ -220,6 +220,16 @@
       "log_truncated": "<class 'bool'>",
       "log_dropped_bytes": "<class 'int'>",
       "tree_truncated": "<class 'bool'>"
+    },
+    "TMDBImageOut": {
+      "file_path": "<class 'str'>",
+      "width": "<class 'int'>",
+      "height": "<class 'int'>",
+      "language": "str | None"
+    },
+    "TMDBImagesOut": {
+      "posters": "list[app.schemas.media_discovery.TMDBImageOut]",
+      "backdrops": "list[app.schemas.media_discovery.TMDBImageOut]"
     }
   },
   "frontend_types": {
@@ -539,6 +549,16 @@
       "task_id",
       "tree_summary",
       "tree_truncated"
+    ],
+    "TMDBImage": [
+      "file_path",
+      "height",
+      "language",
+      "width"
+    ],
+    "TMDBImages": [
+      "backdrops",
+      "posters"
     ]
   },
   "sse": {

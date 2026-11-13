@@ -80,6 +80,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ShareLinkHistory: typeof import('./components/dashboard/ShareLinkHistory.vue')['default']
+    TMDBImagePicker: typeof import('./components/tasks/TMDBImagePicker.vue')['default']
     WpsPluginSettings: typeof import('./components/search/WpsPluginSettings.vue')['default']
   }
   export interface GlobalDirectives {

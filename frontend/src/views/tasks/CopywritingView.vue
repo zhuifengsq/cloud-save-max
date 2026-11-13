@@ -4,7 +4,8 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import { fetchTMDBCredits, fetchTMDBDetail } from '@/api/media'
-import type { TMDBCredits } from '@/types/media'
+import TMDBImagePicker from '@/components/tasks/TMDBImagePicker.vue'
+import type { TMDBCredits, TMDBImage, TMDBImages } from '@/types/media'
 import { copyText as writeClipboard } from '@/utils/clipboard'
 import { categoryFromTmdb, episodeUnitFor } from '@/utils/mediaCategory'
 import { buildWpsText, isPremiereToday } from '@/utils/wpsCopy'
@@ -45,6 +46,16 @@ const editingText = ref('')
 const textEdited = ref(false)
 const posterLoading = ref(false)
 const posterError = ref(false)
+const imagePickerVisible = ref(false)
+const selectedImageKind = ref<keyof TMDBImages>('posters')
+let posterSelectionVersion = 0
+
+function selectPoster(image: TMDBImage, kind: keyof TMDBImages) {
+  posterSelectionVersion++
+  draft.posterPath = image.file_path
+  selectedImageKind.value = kind
+  posterError.value = false
+}
 
 const TMDB_POSTER_BASE = 'https://image.tmdb.org/t/p/original'
 const TMDB_POSTER_PREVIEW = 'https://image.tmdb.org/t/p/w780'
@@ -139,12 +150,16 @@ onMounted(() => {
 
 async function loadPosterFromTMDB() {
   if (!draft.tmdbId) return
+  const selectionVersion = posterSelectionVersion
   posterLoading.value = true
   try {
     const detail = await fetchTMDBDetail(draft.mediaType, Number(draft.tmdbId))
     const data = (detail as any)?.data || {}
     const path = String(data.poster_path || '').trim()
-    if (path) draft.posterPath = path
+    if (path && selectionVersion === posterSelectionVersion) {
+      draft.posterPath = path
+      selectedImageKind.value = 'posters'
+    }
     // 旧草稿没有 category 时，按 TMDB 分类补上，决定文案里用「集」还是「期」
     if (!draft.category && Array.isArray(data.genres)) {
       draft.category = categoryFromTmdb(draft.mediaType, data)
@@ -197,8 +212,7 @@ const posterPngBlob = ref<Blob | null>(null)
 const posterPreparing = ref(false)
 const posterDialogVisible = ref(false)
 
-async function fetchPosterBlob(): Promise<{ blob: Blob; ext: string } | null> {
-  const url = fullPosterUrl.value
+async function fetchPosterBlob(url = fullPosterUrl.value): Promise<{ blob: Blob; ext: string } | null> {
   if (!url) return null
   try {
     const resp = await fetch(url, { mode: 'cors' })
@@ -241,22 +255,28 @@ async function blobToPng(blob: Blob): Promise<Blob | null> {
   }
 }
 
+let posterPrepareVersion = 0
 async function preparePoster(): Promise<void> {
-  if (!fullPosterUrl.value) {
-    posterRawBlob.value = null
-    posterPngBlob.value = null
+  const version = ++posterPrepareVersion
+  const url = fullPosterUrl.value
+  posterRawBlob.value = null
+  posterPngBlob.value = null
+  if (!url) {
+    posterPreparing.value = false
     return
   }
   posterPreparing.value = true
   try {
-    const poster = await fetchPosterBlob()
-    if (!poster) return
-    posterRawBlob.value = poster.blob
+    const poster = await fetchPosterBlob(url)
+    if (!poster || version !== posterPrepareVersion || url !== fullPosterUrl.value) return
     // 剪贴板只接受 image/png，先把 JPEG 转成 PNG 缓存好
-    posterPngBlob.value =
+    const png =
       poster.blob.type === 'image/png' ? poster.blob : await blobToPng(poster.blob)
+    if (version !== posterPrepareVersion || url !== fullPosterUrl.value) return
+    posterRawBlob.value = poster.blob
+    posterPngBlob.value = png
   } finally {
-    posterPreparing.value = false
+    if (version === posterPrepareVersion) posterPreparing.value = false
   }
 }
 
@@ -278,7 +298,7 @@ function canWriteImage(): boolean {
 }
 
 async function copyPoster() {
-  if (!posterPngBlob.value && !posterPreparing.value && !posterRawBlob.value) {
+  if (!posterPngBlob.value) {
     await preparePoster()
   }
   const png = posterPngBlob.value
@@ -545,11 +565,11 @@ function goBack() {
 
     <div v-else class="copy-grid">
       <section class="glass-panel copy-card copy-poster">
-        <div class="copy-poster__frame">
+        <div class="copy-poster__frame" :class="{'copy-poster__frame--wide': selectedImageKind === 'backdrops'}">
           <el-image
             v-if="posterUrl"
             :src="posterUrl"
-            fit="cover"
+            :fit="selectedImageKind === 'backdrops' ? 'contain' : 'cover'"
             class="copy-poster__img"
             @error="posterError = true"
           />
@@ -560,6 +580,7 @@ function goBack() {
           <span v-if="draft.tmdbId">TMDB #{{ draft.tmdbId }}</span>
         </div>
         <el-button text :loading="posterLoading" @click="loadPosterFromTMDB">重新获取海报</el-button>
+        <el-button class="copy-poster__more" :disabled="!draft.tmdbId" @click="imagePickerVisible = true">选择更多配图</el-button>
       </section>
 
       <section class="glass-panel copy-card copy-main">
@@ -774,6 +795,10 @@ function goBack() {
     </div>
   </div>
 
+    <TMDBImagePicker
+      v-model="imagePickerVisible" :media-type="draft.mediaType" :tmdb-id="draft.tmdbId"
+      :selected-path="draft.posterPath" @select="selectPoster"
+    />
     <el-dialog v-model="posterDialogVisible" title="复制海报" width="520px" style="max-width: 94vw" append-to-body>
       <div class="poster-copy-dialog">
         <img v-if="posterUrl" :src="posterUrl" class="poster-copy-dialog__img" alt="海报" />
@@ -821,6 +846,9 @@ function goBack() {
   height: 100%;
   display: block;
 }
+
+.copy-poster__frame--wide {aspect-ratio: 16 / 9;}
+.copy-poster__more {margin-left: 0;}
 
 .copy-poster__empty {
   display: grid;

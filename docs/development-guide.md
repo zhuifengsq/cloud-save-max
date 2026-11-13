@@ -385,6 +385,8 @@ def get_task_tags(db: Session = Depends(get_db)):
 golden 的覆盖范围由 `test_frontend_contract_golden.py` 和实际 golden 文件决定；新增分页摘要、详情、错误分类时扩展对应覆盖，不以历史模型数量代替检查。字段+类型+顺序、前端字段集合、SSE 线格式和错误体均需验证。
 「后端有、前端暂时没消费」的字段必须在 `DRIFT_ALLOWLIST` 里写理由；前端一旦消费，白名单条目会变红，必须删掉。
 
+生成文案的更多配图使用 `GET /api/media/{tv|movie}/{id}/images`，沿用 `TASK_READ` 权限。路由负责校验和错误响应，`application/tmdb_images.py` 获取配置后结束读事务，再由 TMDB 客户端获取海报/横图元数据；不把默认语言作为图片筛选条件。未配置返回 503、上游失败返回 502，成功空列表返回 200。对应类型为 `types/media.ts` 的 `TMDBImage`/`TMDBImages`，已纳入契约 golden。前端 `TMDBImagePicker.vue` 仅在打开时加载，当前页面缓存成功列表 5 分钟，缩略图每页 24 张；图片由浏览器直连 TMDB CDN，不新增后端图片磁盘缓存。选图后的原图准备和默认海报请求都必须防止晚到响应覆盖新选择。
+
 ### 7.4 SSE 与错误体（前端按字节/状态码解析）
 
 - SSE 事件：`init` / `log` / `stage` / `done`，空闲 15s 发 `: ping`；

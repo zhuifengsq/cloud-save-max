@@ -1,5 +1,5 @@
 import { http } from '@/api/http'
-import type { DoubanCategoryList, MediaDiscoverList, TMDBCredits, TMDBDetail, TMDBSearchList } from '@/types/media'
+import type { DoubanCategoryList, MediaDiscoverList, TMDBCredits, TMDBDetail, TMDBImages, TMDBSearchList } from '@/types/media'
 
 const TMDB_DETAIL_TTL_MS = 60_000
 const TMDB_CREDITS_TTL_MS = 5 * 60_000
@@ -53,6 +53,13 @@ export async function fetchDoubanList(params: { main_category: string; sub_categ
 
 export async function searchTMDB(params: { q: string; type?: 'multi' | 'movie' | 'tv'; page?: number; year?: string }) {
   const response = await http.get<TMDBSearchList>('/media/search', { params })
+  return response.data
+}
+
+export async function fetchTMDBImages(mediaType: 'movie' | 'tv', id: number): Promise<TMDBImages> {
+  const response = await http.get<TMDBImages>(`/media/${mediaType}/${id}/images`, {
+    headers: { 'X-Silent-Toast': '1' },
+  })
   return response.data
 }
 

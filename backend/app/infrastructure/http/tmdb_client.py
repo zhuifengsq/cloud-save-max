@@ -167,5 +167,10 @@ class TMDBClient:
     def get_tv_credits(self, tv_id: int) -> Optional[dict[str, Any]]:
         return self._make_request(f"/tv/{tv_id}/credits")
 
+    def get_images(self, media_type: str, tmdb_id: int) -> Optional[dict[str, Any]]:
+        # requests omits None parameters. Do not apply the client's default
+        # language here: it would hide other-language and textless artwork.
+        return self._make_request(f"/{media_type}/{tmdb_id}/images", {"language": None})
+
     def get_movie_credits(self, movie_id: int) -> Optional[dict[str, Any]]:
         return self._make_request(f"/movie/{movie_id}/credits")

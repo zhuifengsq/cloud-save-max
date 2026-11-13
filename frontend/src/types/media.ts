@@ -74,3 +74,15 @@ export type TMDBCredits = {
   configured: boolean
   cast: TMDBCastMember[]
 }
+
+export type TMDBImage = {
+  file_path: string
+  width: number
+  height: number
+  language: string | null
+}
+
+export type TMDBImages = {
+  posters: TMDBImage[]
+  backdrops: TMDBImage[]
+}

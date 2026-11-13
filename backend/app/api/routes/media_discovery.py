@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_permissions
@@ -14,6 +16,7 @@ from app.schemas.media_discovery import (
     TMDBCastMemberOut,
     TMDBCreditsOut,
     TMDBDetailOut,
+    TMDBImagesOut,
     TMDBSearchListOut,
 )
 from app.application.media_discovery import fetch_douban_list, list_douban_categories, tmdb_credits, tmdb_detail, tmdb_search
@@ -27,6 +30,7 @@ from app.application.proxy_image_cache import (
 )
 from app.application.tmdb_settings import get_or_create_tmdb_setting, get_tmdb_runtime_config
 from app.application.tmdb_cache import TMDBCacheBusy
+from app.application.tmdb_images import get_tmdb_images, TMDBImagesUnavailable, TMDBNotConfigured
 from app.application.container import douban_client_cls as _acc_DoubanClient; DoubanClient = _acc_DoubanClient()
 
 
@@ -130,6 +134,20 @@ def get_tmdb_credits(
         configured=configured,
         cast=[TMDBCastMemberOut(name=item.get("name", ""), character=item.get("character", "")) for item in cast],
     )
+
+
+@router.get("/{media_type}/{tmdb_id}/images", response_model=TMDBImagesOut, dependencies=[Depends(require_permissions(TASK_READ))])
+def get_tmdb_image_list(
+    media_type: Literal["movie", "tv"],
+    tmdb_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+) -> TMDBImagesOut:
+    try:
+        return TMDBImagesOut(**get_tmdb_images(db, media_type=media_type, tmdb_id=tmdb_id))
+    except TMDBNotConfigured as exc:
+        raise ApiError(code="TMDB_NOT_CONFIGURED", message=str(exc), http_status=503) from exc
+    except TMDBImagesUnavailable as exc:
+        raise ApiError(code="TMDB_IMAGES_UNAVAILABLE", message=str(exc), http_status=502) from exc
 
 
 @router.get("/proxy-image")

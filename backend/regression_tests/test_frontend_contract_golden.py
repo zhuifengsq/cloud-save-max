@@ -28,6 +28,7 @@ from pathlib import Path
 GOLDEN_PATH = Path(__file__).resolve().parent / "golden" / "frontend_contract.json"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TS_TASKS = REPO_ROOT / "frontend" / "src" / "types" / "tasks.ts"
+TS_MEDIA = REPO_ROOT / "frontend" / "src" / "types" / "media.ts"
 
 # (TS 类型名, 后端模块, 后端模型名)
 MODEL_PAIRS = [
@@ -50,6 +51,8 @@ MODEL_PAIRS = [
     ("TaskOrderIndexItem", "app.schemas.task_reads", "TaskOrderIndexItemOut"),
     ("TaskExecutionPage", "app.schemas.task_reads", "TaskExecutionPageOut"),
     ("TaskExecutionDetail", "app.schemas.task_reads", "TaskExecutionDetailOut"),
+    ("TMDBImage", "app.schemas.media_discovery", "TMDBImageOut"),
+    ("TMDBImages", "app.schemas.media_discovery", "TMDBImagesOut"),
 ]
 
 # 「后端有、前端没有」的已确认差异：字段 -> 理由。空理由视为未登记。
@@ -150,6 +153,10 @@ def _ts_types(path: Path = TS_TASKS) -> dict[str, list[str]]:
 
     for name in expressions:
         resolve(name)
+    if path == TS_TASKS:
+        media_types = _ts_types(TS_MEDIA)
+        for name in ("TMDBImage", "TMDBImages"):
+            resolved[name] = media_types[name]
     return resolved
 
 

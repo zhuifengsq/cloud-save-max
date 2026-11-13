@@ -86,3 +86,15 @@ class TMDBCastMemberOut(BaseModel):
 class TMDBCreditsOut(BaseModel):
     configured: bool = False
     cast: list[TMDBCastMemberOut] = []
+
+
+class TMDBImageOut(BaseModel):
+    file_path: str
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    language: str | None = None
+
+
+class TMDBImagesOut(BaseModel):
+    posters: list[TMDBImageOut] = Field(default_factory=list)
+    backdrops: list[TMDBImageOut] = Field(default_factory=list)
