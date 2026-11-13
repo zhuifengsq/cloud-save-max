@@ -387,6 +387,8 @@ golden 的覆盖范围由 `test_frontend_contract_golden.py` 和实际 golden �
 
 生成文案的更多配图使用 `GET /api/media/{tv|movie}/{id}/images`，沿用 `TASK_READ` 权限。路由负责校验和错误响应，`application/tmdb_images.py` 获取配置后结束读事务，再由 TMDB 客户端获取海报/横图元数据；不把默认语言作为图片筛选条件。未配置返回 503、上游失败返回 502，成功空列表返回 200。对应类型为 `types/media.ts` 的 `TMDBImage`/`TMDBImages`，已纳入契约 golden。前端 `TMDBImagePicker.vue` 仅在打开时加载，当前页面缓存成功列表 5 分钟，缩略图每页 24 张；图片由浏览器直连 TMDB CDN，不新增后端图片磁盘缓存。选图后的原图准备和默认海报请求都必须防止晚到响应覆盖新选择。
 
+追剧日历顶部“刷新已存进度”仅重新读取任务概览并复用已有 TMDB 资料，不清空缓存、不发起 TMDB 详情请求，也不等待后台资料刷新。它读取任务上次记录的已存进度，不扫描网盘。每部剧左上角“更新本剧资料”通过 `refreshTmdbDetail(id)` 强制更新单个 TV 条目；同一 TMDB ID 的多网盘/多日期入口合并请求，成功后更新共享缓存与排期映射，失败保留旧资料并允许重试。周视图、月视图及月视图更多弹窗均提供入口，单剧加载状态不遮挡整个日历。首次进入及后台检查仍可按原有过期规则补充资料。
+
 ### 7.4 SSE 与错误体（前端按字节/状态码解析）
 
 - SSE 事件：`init` / `log` / `stage` / `done`，空闲 15s 发 `: ping`；

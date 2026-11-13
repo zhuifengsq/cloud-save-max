@@ -63,9 +63,12 @@ export async function fetchTMDBImages(mediaType: 'movie' | 'tv', id: number): Pr
   return response.data
 }
 
-export async function fetchTMDBDetail(mediaType: 'movie' | 'tv', id: number, opts?: { force?: boolean }) {
+export async function fetchTMDBDetail(mediaType: 'movie' | 'tv', id: number, opts?: { force?: boolean; silent?: boolean }) {
   const mid = Number(id) || 0
-  const forceParams = opts?.force ? { params: { force: 1 } } : undefined
+  const forceParams = opts?.force || opts?.silent ? {
+    ...(opts.force ? { params: { force: 1 } } : {}),
+    ...(opts.silent ? { headers: { 'X-Silent-Toast': '1' } } : {}),
+  } : undefined
 
   if (mid <= 0) {
     const response = await http.get<TMDBDetail>(`/media/${mediaType}/${id}`, forceParams)

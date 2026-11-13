@@ -16,6 +16,7 @@ const fetchedAt: Record<number, number> = {}
 const versions: Record<number, number> = {}
 const failureAt: Record<number, number> = {}
 const inFlight = new Map<number, Promise<TMDBDetail | null>>()
+const forcedInFlight = new Map<number, Promise<TMDBDetail>>()
 // 全局变更计数：任何一次成功拉取/失效都会 +1，页面据此判断派生数据要不要重算
 let storeVersion = 0
 
@@ -88,6 +89,42 @@ export async function ensureTmdbDetail(
   }
 }
 
+// An explicit single-series refresh keeps old data visible, but reports failures
+// to its caller instead of treating a cached fallback as a successful refresh.
+export async function refreshTmdbDetail(id: number): Promise<TMDBDetail> {
+  if (!Number.isInteger(id) || id <= 0) throw new Error('未关联有效的 TMDB 条目')
+  const existing = forcedInFlight.get(id)
+  if (existing) return existing
+  const version = (versions[id] || 0) + 1
+  versions[id] = version
+  const request = (async () => {
+    try {
+      const detail = await fetchTMDBDetail('tv', id, { force: true, silent: true })
+      if (!detail?.data || !Object.keys(detail.data).length) throw new Error('未获取到本剧资料，请检查 TMDB 配置或稍后重试')
+      if (versions[id] !== version) throw new Error('本剧资料已变更，请重试')
+      tmdbDetailsById[id] = detail
+      fetchedAt[id] = Date.now()
+      versions[id] = version + 1
+      storeVersion += 1
+      delete failureAt[id]
+      return detail
+    } catch (error) {
+      if (versions[id] === version) failureAt[id] = Date.now()
+      throw error
+    }
+  })()
+  forcedInFlight.set(id, request)
+  // Ordinary background readers retain their existing failure fallback.
+  const fallbackRequest = request.catch(() => tmdbDetailsById[id] ?? null)
+  inFlight.set(id, fallbackRequest)
+  try {
+    return await request
+  } finally {
+    if (forcedInFlight.get(id) === request) forcedInFlight.delete(id)
+    if (inFlight.get(id) === fallbackRequest) inFlight.delete(id)
+  }
+}
+
 async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
   const queue = [...items]
   const runners: Promise<void>[] = []
@@ -123,6 +160,7 @@ export function invalidateTmdbDetails(ids?: number[]) {
     if (id <= 0) continue
     versions[id] = (versions[id] || 0) + 1
     inFlight.delete(id)
+    forcedInFlight.delete(id)
     delete tmdbDetailsById[id]
     delete fetchedAt[id]
     delete failureAt[id]

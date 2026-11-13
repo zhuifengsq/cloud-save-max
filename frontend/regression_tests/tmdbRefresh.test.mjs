@@ -58,3 +58,49 @@ test('a detail request started before refresh cannot repopulate stale data', asy
   await oldRequest
   assert.equal((await store.ensureTmdbDetail(307853)).episode, 3)
 })
+
+test('single-series refresh coalesces requests and preserves other series', async () => {
+  const calls=[]
+  let resolveRefresh
+  const {store}=makeCacheApis({get:async(url,config)=>{
+    calls.push({url,config})
+    if(config?.params?.force)return new Promise(resolve=>{resolveRefresh=resolve})
+    return {data:{media_type:'tv',data:{id:Number(url.split('/').pop()),name:'cached'}}}
+  }})
+  await store.ensureTmdbDetail(1);await store.ensureTmdbDetail(2)
+  const one=store.refreshTmdbDetail(1),two=store.refreshTmdbDetail(1)
+  assert.equal(calls.length,3)
+  assert.equal(calls[2].url,'/media/tv/1')
+  assert.equal(calls[2].config.params.force,1)
+  assert.equal(store.tmdbDetailsById[1].data.name,'cached')
+  resolveRefresh({data:{media_type:'tv',data:{id:1,name:'fresh'}}})
+  await one;await two
+  assert.equal(store.tmdbDetailsById[1].data.name,'fresh')
+  assert.equal(store.tmdbDetailsById[2].data.name,'cached')
+})
+
+test('failed or empty single-series refresh retains old detail, reports failure, and permits retry', async()=>{
+  let mode='normal'
+  const {store}=makeCacheApis({get:async()=>{
+    if(mode==='fail')throw Error('TMDB unavailable')
+    return {data:{media_type:'tv',data:mode==='empty'?{}:{id:1,name:mode}}}
+  }})
+  await store.ensureTmdbDetail(1)
+  mode='fail';await assert.rejects(store.refreshTmdbDetail(1),/unavailable/)
+  assert.equal(store.tmdbDetailsById[1].data.name,'normal')
+  mode='empty';await assert.rejects(store.refreshTmdbDetail(1))
+  assert.equal(store.tmdbDetailsById[1].data.name,'normal')
+  mode='fresh';await store.refreshTmdbDetail(1)
+  assert.equal(store.tmdbDetailsById[1].data.name,'fresh')
+})
+
+test('an older background detail cannot replace a completed single-series refresh',async()=>{
+  let resolveOld
+  const {store}=makeCacheApis({get:(url,config)=>config?.params?.force
+    ? Promise.resolve({data:{media_type:'tv',data:{id:1,name:'fresh'}}})
+    : new Promise(resolve=>{resolveOld=resolve})})
+  const old=store.ensureTmdbDetail(1)
+  await store.refreshTmdbDetail(1)
+  resolveOld({data:{media_type:'tv',data:{id:1,name:'old'}}});await old
+  assert.equal(store.tmdbDetailsById[1].data.name,'fresh')
+})

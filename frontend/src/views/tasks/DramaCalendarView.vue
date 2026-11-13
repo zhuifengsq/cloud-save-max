@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
+import CalendarDramaRefresh from '@/components/tasks/CalendarDramaRefresh.vue'
 
 import {
   TMDB_DETAIL_REFRESH_MS,
   ensureTmdbDetails,
   getTmdbDetailEntry,
   getTmdbDetailStoreVersion,
-  invalidateTmdbDetails,
+  refreshTmdbDetail,
   tmdbDetailIdsNeedingRefresh,
   tmdbDetailsById,
 } from '@/stores/tmdbDetailCache'
@@ -77,6 +78,8 @@ const monthCursor = ref(new Date(new Date().getFullYear(), new Date().getMonth()
 const viewport = reactive({ width: window.innerWidth })
 const isMobile = computed(() => viewport.width <= 768)
 const selectedDateKey = ref<string>('')
+const refreshingDetails = reactive<Record<number, boolean>>({})
+const detailRefreshErrors = reactive<Record<number, string>>({})
 
 function normalizeWeekdays(value: any): WeekdayKey[] {
   const arr = Array.isArray(value) ? value : []
@@ -1070,8 +1073,9 @@ function goToday() {
 const monthMoreDialog = reactive({
   visible: false,
   title: '',
-  items: [] as CalendarEntry[],
+  dateKey: '',
 })
+const monthDialogItems = computed(() => monthEntriesByDate.value.get(monthMoreDialog.dateKey) || [])
 
 const selectedItems = computed(() => (selectedDateKey.value ? monthEntriesByDate.value.get(selectedDateKey.value) || [] : []))
 const selectedDateTitle = computed(() => {
@@ -1082,7 +1086,7 @@ const selectedDateTitle = computed(() => {
 function openMonthMore(dateKey: string) {
   const d = parseDateOnly(dateKey)
   monthMoreDialog.title = d ? `${formatYYYYMMDD(d)}` : dateKey
-  monthMoreDialog.items = (monthEntriesByDate.value.get(dateKey) || []).slice()
+  monthMoreDialog.dateKey = dateKey
   monthMoreDialog.visible = true
 }
 
@@ -1119,17 +1123,8 @@ let calendarActive = false
 let derivedStoreVersion = -1
 let unsubscribeTasksChanged: (() => void) | null = null
 
-function clearDetailCache() {
-  for (const k of Object.keys(episodeDatesById)) delete episodeDatesById[Number(k)]
-  for (const k of Object.keys(episodeNumbersById)) delete episodeNumbersById[Number(k)]
-  for (const k of Object.keys(inferredWeekdaysById)) delete inferredWeekdaysById[Number(k)]
-  for (const k of Object.keys(inferredCycleDaysById)) delete inferredCycleDaysById[Number(k)]
-  for (const k of Object.keys(derivedVersion)) delete derivedVersion[Number(k)]
-}
-
-async function performLoad(opts: { silent?: boolean; forceDetails?: boolean }) {
+async function performLoad(opts: { silent?: boolean; localOnly?: boolean }) {
   const silent = opts.silent === true
-  const forceDetails = opts.forceDetails === true
   const versionAtStart = getTasksVersion()
   if (!silent) loading.value = true
   try {
@@ -1147,12 +1142,13 @@ async function performLoad(opts: { silent?: boolean; forceDetails?: boolean }) {
     )
 
     // 任务数据每次都要更新；TMDB 资料与工作台共用缓存，只在缺失或超过 30 分钟时才重新拉
-    const needsDetail = forceDetails ? ids : tmdbDetailIdsNeedingRefresh(ids, TMDB_DETAIL_REFRESH_MS)
-    await ensureTmdbDetails(needsDetail, {
-      force: forceDetails,
-      maxAgeMs: TMDB_DETAIL_REFRESH_MS,
-      concurrency: 6,
-    })
+    if (!opts.localOnly) {
+      const needsDetail = tmdbDetailIdsNeedingRefresh(ids, TMDB_DETAIL_REFRESH_MS)
+      await ensureTmdbDetails(needsDetail, {
+        maxAgeMs: TMDB_DETAIL_REFRESH_MS,
+        concurrency: 6,
+      })
+    }
     // 详情可能由工作台先拉好，这里统一补齐日历映射
     for (const id of ids) ensureDerived(id)
     derivedStoreVersion = getTmdbDetailStoreVersion()
@@ -1169,7 +1165,9 @@ async function performLoad(opts: { silent?: boolean; forceDetails?: boolean }) {
 }
 
 // 同一时间只允许一个刷新请求，避免重复请求和旧数据覆盖新数据
-function refreshData(opts: { silent?: boolean; forceDetails?: boolean } = {}): Promise<void> {
+function refreshData(opts: { silent?: boolean; localOnly?: boolean } = {}): Promise<void> {
+  // A toolbar read must not queue behind a slow background metadata request.
+  if (opts.localOnly) return performLoad(opts)
   if (refreshPromise) {
     if (opts.silent) return refreshPromise
     return refreshPromise.catch(() => {}).then(() => refreshData(opts))
@@ -1216,10 +1214,30 @@ function handleVisibilityChange() {
 }
 
 async function handleRefresh() {
-  for (const url of Object.keys(posterFailures)) delete posterFailures[url]
-  clearDetailCache()
-  invalidateTmdbDetails()
-  await refreshData({ silent: false, forceDetails: true })
+  await refreshData({ silent: false, localOnly: true })
+}
+
+async function refreshDramaDetail(item: CalendarEntry) {
+  const id = item.tmdbId
+  if (!id || refreshingDetails[id]) return
+  refreshingDetails[id] = true
+  delete detailRefreshErrors[id]
+  try {
+    const detail = await refreshTmdbDetail(id)
+    ensureDerived(id)
+    derivedStoreVersion = getTmdbDetailStoreVersion()
+    delete posterFailures[item.posterUrl]
+    const poster = posterUrlFromDetail(detail)
+    if (poster) delete posterFailures[poster]
+    refreshTodayKey()
+    ElMessage.success(`《${item.title}》资料已更新`)
+  } catch (error: any) {
+    const message = error?.response?.data?.message || error?.message || '本剧资料更新失败，请重试'
+    detailRefreshErrors[id] = message
+    ElMessage.error(message)
+  } finally {
+    delete refreshingDetails[id]
+  }
 }
 
 // 工作台可能在后台刷新过 TMDB 资料，切回日历时把派生映射同步一下
@@ -1305,7 +1323,7 @@ watch(
           <el-radio-button label="week">周视图</el-radio-button>
           <el-radio-button label="month">月视图</el-radio-button>
         </el-radio-group>
-        <el-button :loading="loading" type="primary" @click="handleRefresh">刷新</el-button>
+        <el-button :loading="loading" type="primary" title="重新读取本地任务已存进度，不重新请求 TMDB" @click="handleRefresh">刷新已存进度</el-button>
       </div>
     </div>
 
@@ -1332,6 +1350,10 @@ watch(
         <div v-else class="weekday-grid">
           <el-card v-for="it in sec.items" :key="`${it.taskId}-${it.weekday}-${it.tmdbId || 0}`" shadow="hover" class="show-card" :class="{ 'show-card--predicted': !it.confirmed }">
             <div class="poster-card">
+              <CalendarDramaRefresh
+                v-if="it.tmdbId" :title="it.title" :loading="Boolean(refreshingDetails[it.tmdbId])"
+                :error="detailRefreshErrors[it.tmdbId]" @refresh="refreshDramaDetail(it)"
+              />
               <img v-if="it.posterUrl && posterFailures[it.posterUrl] !== 'unavailable'" class="poster-img" :src="posterSource(it.posterUrl)" @error="handlePosterError(it.posterUrl)" :alt="`${it.title} 海报`" loading="lazy" decoding="async" />
               <div v-else class="poster-fallback">暂无海报</div>
               <span v-if="it.dateKey === todayKey() && it.episodeNumbers.length" class="poster-badge poster-badge--ep">
@@ -1410,8 +1432,14 @@ watch(
               :class="{ 'is-predicted': !it.confirmed }"
               :title="it.confirmed ? it.title : `${it.title}（预计更新）`"
             >
-              <img v-if="it.posterUrl" class="month-poster" :src="it.posterUrl" alt="poster" />
-              <div v-else class="month-poster-fallback">TMDB</div>
+              <div class="calendar-artwork">
+                <img v-if="it.posterUrl" class="month-poster" :src="it.posterUrl" alt="poster" />
+                <div v-else class="month-poster-fallback">TMDB</div>
+                <CalendarDramaRefresh
+                  v-if="it.tmdbId" compact :title="it.title" :loading="Boolean(refreshingDetails[it.tmdbId])"
+                  :error="detailRefreshErrors[it.tmdbId]" @refresh="refreshDramaDetail(it)"
+                />
+              </div>
               <div class="month-name" :title="it.title">{{ it.title }}</div>
               <div class="month-pct">
                 <template v-if="it.dateKey > todayKey() && it.confirmed && it.episodeNumbers.length">{{ formatEpisodeList(it.episodeNumbers) }}</template>
@@ -1435,8 +1463,14 @@ watch(
         <div v-if="!selectedItems.length" class="month-detail__empty">当天无更新</div>
         <div v-else class="month-detail__list">
           <div v-for="it in selectedItems" :key="`sel-${selectedDateKey}-${it.taskId}`" class="month-detail__item">
-            <img v-if="it.posterUrl" class="month-detail__poster" :src="it.posterUrl" alt="poster" />
-            <div v-else class="month-detail__poster-fallback">TMDB</div>
+            <div class="calendar-artwork">
+              <img v-if="it.posterUrl" class="month-detail__poster" :src="it.posterUrl" alt="poster" />
+              <div v-else class="month-detail__poster-fallback">TMDB</div>
+              <CalendarDramaRefresh
+                v-if="it.tmdbId" :title="it.title" :loading="Boolean(refreshingDetails[it.tmdbId])"
+                :error="detailRefreshErrors[it.tmdbId]" @refresh="refreshDramaDetail(it)"
+              />
+            </div>
             <div class="month-detail__main">
               <div class="month-detail__name" :title="it.title">{{ it.title }}</div>
               <div class="month-detail__progress">
@@ -1457,9 +1491,15 @@ watch(
     </div>
     <el-dialog v-if="!isMobile" v-model="monthMoreDialog.visible" :title="monthMoreDialog.title" width="720px">
       <div class="month-dialog">
-        <div v-for="it in monthMoreDialog.items" :key="`dlg-${monthMoreDialog.title}-${it.taskId}`" class="month-dialog-item">
-          <img v-if="it.posterUrl" class="month-dialog-poster" :src="it.posterUrl" alt="poster" />
-          <div v-else class="month-dialog-poster-fallback">TMDB</div>
+        <div v-for="it in monthDialogItems" :key="`dlg-${monthMoreDialog.title}-${it.taskId}`" class="month-dialog-item">
+          <div class="calendar-artwork">
+            <img v-if="it.posterUrl" class="month-dialog-poster" :src="it.posterUrl" alt="poster" />
+            <div v-else class="month-dialog-poster-fallback">TMDB</div>
+            <CalendarDramaRefresh
+              v-if="it.tmdbId" compact :title="it.title" :loading="Boolean(refreshingDetails[it.tmdbId])"
+              :error="detailRefreshErrors[it.tmdbId]" @refresh="refreshDramaDetail(it)"
+            />
+          </div>
           <div class="month-dialog-name" :title="it.title">{{ it.title }}</div>
           <div class="month-dialog-pct">
             {{ it.predictedAiredTotal != null ? `E${it.predictedAiredTotal}` : it.progressPercent != null ? `${it.progressPercent}%` : '—' }}
@@ -1586,6 +1626,8 @@ watch(
   background: #202734;
   isolation: isolate;
 }
+
+.calendar-artwork { position: relative; width: fit-content; }
 
 .poster-img {
   width: 100%;
