@@ -15,7 +15,7 @@ import { loadSharedTasks } from '@/stores/taskCache'
 import type { TMDBDetail } from '@/types/media'
 import type { TaskOverview } from '@/types/tasks'
 import { DRIVE_TYPE_META, detectDriveTypeByUrl, type DriveType } from '@/utils/driveType'
-import { resolveDramaEpisodeProgress, tvAiredEpisodesFromDetail, tvTotalEpisodesFromDetail } from '@/utils/dramaEpisodeProgress'
+import { calendarProgressText, resolveDramaEpisodeProgress, tvAiredEpisodesFromDetail, tvTotalEpisodesFromDetail } from '@/utils/dramaEpisodeProgress'
 import { getDramaSchedule } from '@/utils/dramaSchedule'
 import { getTasksVersion, subscribeTasksChanged } from '@/utils/taskChangeBus'
 
@@ -754,10 +754,7 @@ const weekEntriesByDate = computed(() => {
       savedEpisode != null && totalCount != null
         ? Math.max(0, Math.min(100, Math.floor((savedEpisode / totalCount) * 100)))
         : null
-    const savedText =
-      savedEpisode != null
-        ? `已存 ${savedEpisode}${totalCount != null && totalCount >= savedEpisode ? ` / ${totalCount}` : ''}`
-        : s.progressText
+    const savedText = calendarProgressText(savedEpisode, totalCount, s.baseAiredTotal)
 
     const progressItem = {
       key: `${groupKey}:${s.task.id}`,
@@ -925,10 +922,7 @@ const monthEntriesByDate = computed(() => {
       savedEpisode != null && totalCount != null
         ? Math.max(0, Math.min(100, Math.floor((savedEpisode / totalCount) * 100)))
         : null
-    const savedText =
-      savedEpisode != null
-        ? `已存 ${savedEpisode}${totalCount != null && totalCount >= savedEpisode ? ` / ${totalCount}` : ''}`
-        : s.progressText
+    const savedText = calendarProgressText(savedEpisode, totalCount, s.baseAiredTotal)
 
     const progressItem = {
       key: `${groupKey}:${s.task.id}`,

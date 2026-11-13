@@ -47,3 +47,42 @@ def test_drama_applies_file_filters_before_saving(location, rules, log_message):
     plan = executor._save_with_saved_fids.call_args.kwargs["plan"]
     assert [item.fid for item in plan] == ["video"]
     assert log_message in log.render()
+
+
+@pytest.mark.parametrize('mode', ['normal', 'folder_diff'])
+@pytest.mark.parametrize('has_source_files', [True, False])
+def test_existing_destination_progress_is_recorded_without_new_transfers(mode, has_source_files):
+    existing = [{'fid': 'saved-10', 'file_name': '测试剧 S01E10.mp4', 'size': 1024}]
+    source = [{'fid': 'source-10', 'file_name': '测试剧 S01E10.mp4', 'size': 1024}] if has_source_files else []
+    adapter = Mock()
+    adapter.extract_url.return_value = ('share', '', 'selected', [])
+    adapter.get_stoken.return_value = {'data': {'stoken': 'token'}}
+    executor = DramaTaskExecutor(adapter=adapter, task_data={
+        'taskname': '测试剧', 'savepath': '/测试剧', 'addition': {'folder_mode': mode},
+    })
+    executor._ensure_dest_dir_fid = Mock(return_value='dest')
+    executor._ls_dir = Mock(return_value={'data': {'list': existing}})
+    executor._fetch_share_items = Mock(return_value=source)
+    executor._save_with_saved_fids = Mock(side_effect=AssertionError('No files should be transferred'))
+    executor.execute()
+    executor._save_with_saved_fids.assert_not_called()
+    assert executor.saved_latest is not None
+    assert executor.saved_latest['episode'] == 10
+    assert executor.saved_latest['name'] == '测试剧 S01E10.mp4'
+    executor._ls_dir.assert_called_once_with('dest')
+
+
+def test_empty_destination_does_not_claim_source_episodes_are_saved():
+    adapter = Mock()
+    adapter.extract_url.return_value = ('share', '', 'selected', [])
+    adapter.get_stoken.return_value = {'data': {'stoken': 'token'}}
+    executor = DramaTaskExecutor(adapter=adapter, task_data={
+        'taskname': '测试剧', 'savepath': '/测试剧', 'addition': {'file_filter': 'does-not-match'},
+    })
+    executor._ensure_dest_dir_fid = Mock(return_value='dest')
+    executor._ls_dir = Mock(return_value={'data': {'list': []}})
+    executor._fetch_share_items = Mock(return_value=[{'fid': 'source-10', 'file_name': '测试剧 S01E10.mp4', 'size': 1024}])
+    executor._save_with_saved_fids = Mock(side_effect=AssertionError('Filtered files must not be saved'))
+    executor.execute()
+    assert executor.saved_latest is None
+    executor._save_with_saved_fids.assert_not_called()

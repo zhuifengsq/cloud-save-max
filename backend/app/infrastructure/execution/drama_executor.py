@@ -542,7 +542,9 @@ class DramaTaskExecutor:
         self._section("生成转存计划")
         plan = self._plan_transfer(share_files=self._iter_files(root_files), dest_file_list=dest_file_list)
         self._line(f"待转存文件数: {len(plan)}")
+        self._add_saved_names(_get_name(raw) for raw in dest_file_list if not _is_dir(raw))
         if not plan:
+            self._record_saved_latest()
             return
         self._set_stage("save_file")
         self._section("执行转存")
@@ -561,7 +563,6 @@ class DramaTaskExecutor:
                 "is_dir": False,
             }
             tree.create_node(f"{i + 1}. {item.origin_name} -> {item.target_name}", f"item-{i + 1}", parent="root", data=data)
-        self._add_saved_names(_get_name(raw) for raw in dest_file_list if not _is_dir(raw))
         self._add_saved_names(item.target_name for item in plan[:limit])
         self._record_saved_latest()
 
@@ -592,6 +593,7 @@ class DramaTaskExecutor:
         self._line(f"白名单: {'|'.join(whitelist) if whitelist else '(未设置，所有文件夹按增量处理)'}")
 
         # 1) 分享根目录下的文件：按普通模式（同名跳过，不改名）
+        self._add_saved_names(_get_name(raw) for raw in dest_file_list if not _is_dir(raw))
         if root_files:
             existing_names: set[str] = set()
             for raw in dest_file_list:
@@ -632,7 +634,6 @@ class DramaTaskExecutor:
                         "is_dir": False,
                     })
                 self._add_saved_names(item.origin_name for item in plan[:limit])
-            self._add_saved_names(_get_name(raw) for raw in dest_file_list if not _is_dir(raw))
 
         # 2) 子文件夹
         for raw in share_items:

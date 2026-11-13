@@ -33,3 +33,12 @@ export function resolveDramaEpisodeProgress(extra: Record<string, any> | null | 
   const airedEpisode = tvAiredEpisodesFromDetail(detail, totalEpisodes)
   return { savedEpisode, totalEpisodes, airedEpisode, updatedEpisode: savedEpisode ?? airedEpisode }
 }
+
+// Aired episodes are a fallback for display, never proof of files saved to a drive.
+export function calendarProgressText(savedEpisode: number | null, totalEpisodes: number | null, airedEpisode: number | null): string {
+  const hasSaved = savedEpisode != null && Number.isFinite(savedEpisode) && savedEpisode > 0
+  const episode = hasSaved ? savedEpisode : airedEpisode
+  if (episode == null || !Number.isFinite(episode) || episode <= 0) return '已存待确认'
+  const suffix = totalEpisodes != null && Number.isFinite(totalEpisodes) && totalEpisodes >= episode ? ` / ${totalEpisodes}` : ''
+  return `${hasSaved ? '已存' : '已播'} ${episode}${suffix}`
+}
