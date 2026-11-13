@@ -79,6 +79,18 @@ def summaries(db, ids, *, full=False, include_latest_success=False):
 
 def page_tasks(db, *, page=1, page_size=20, ids=None, **filters):
     rows = matching_tasks(db, **filters)
+    # Navigation choices describe the whole task type, so selecting a choice
+    # (or finding no matches) cannot remove the other filter buttons.
+    has_filter = (
+        filters.get("q")
+        or filters.get("enabled") is not None
+        or filters.get("drive_type")
+        or filters.get("media_category")
+        or filters.get("failed_only")
+    )
+    option_rows = (
+        matching_tasks(db, task_type=filters.get("task_type")) if has_filter else rows
+    )
     matching = {row["id"] for row in rows}
     if ids is not None:
         if (
@@ -94,7 +106,7 @@ def page_tasks(db, *, page=1, page_size=20, ids=None, **filters):
         selected = [
             row["id"] for row in rows[(page - 1) * page_size : page * page_size]
         ]
-    categories = {row["media_category"] for row in rows}
+    categories = {row["media_category"] for row in option_rows}
     return {
         "items": summaries(db, selected),
         "total": len(rows),
@@ -102,7 +114,7 @@ def page_tasks(db, *, page=1, page_size=20, ids=None, **filters):
         "page_size": page_size,
         "facets": {
             "categories": [value for value in CATEGORY_ORDER if value in categories],
-            "drives": sorted({row["drive_type"] for row in rows if row["drive_type"]}),
+            "drives": sorted({row["drive_type"] for row in option_rows if row["drive_type"]}),
             "failed_count": sum(row["latest_status"] == "failed" for row in rows),
         },
     }

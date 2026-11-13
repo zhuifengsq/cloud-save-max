@@ -312,6 +312,7 @@ const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const facets = ref<TaskFacets>({categories: [], drives: [], failed_count: 0})
+const pageLoaded = ref(false)
 let readVersion = 0
 const pageError = ref('')
 function readFilters(): TaskReadFilters {
@@ -329,6 +330,7 @@ async function loadPage() {
     const last = Math.max(1, Math.ceil(result.total / pageSize.value))
     if (page.value > last) { page.value = last; return }
     tasks.value = result.items; total.value = result.total; facets.value = result.facets
+    pageLoaded.value = true
   } catch { if (version === readVersion) pageError.value = '任务加载失败，请重试' }
   finally { if (version === readVersion) loading.value = false }
 }
@@ -339,7 +341,7 @@ watch(() => [filters.keyword, filters.status, filters.drive, filters.category, s
 watch(page, () => void loadPage())
 const stopTaskChanges = subscribeTasksChanged(() => { void loadPage() })
 
-const showSkeleton = computed(() => loading.value && tasks.value.length === 0)
+const showSkeleton = computed(() => loading.value && !pageLoaded.value)
 
 const hasActiveFilter = computed(
   () =>
@@ -1105,7 +1107,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="shell-page drama-task-page" v-loading="loading && !showSkeleton">
+  <div class="shell-page drama-task-page">
     <div class="section-header">
       <div class="section-header__title">
         <div class="section-header__eyebrow">Automation</div>

@@ -138,7 +138,7 @@ def test_drive_filter_falls_back_to_share_host_and_counts_all_matches(db):
     assert result['items'][0]['drive_type']=='baidu'
     assert result['facets']['drives']==['baidu']
 
-def test_category_and_failure_filters_apply_before_page_and_facets(db):
+def test_category_and_failure_filters_apply_before_page(db):
     import json
     from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
     from app.application.queries.task_reads import page_tasks
@@ -152,10 +152,35 @@ def test_category_and_failure_filters_apply_before_page_and_facets(db):
     assert result['total']==2
     assert result['items'][0]['id']==3
     assert result['items'][0]['media_category']=='动漫'
-    assert result['facets']['categories']==['动漫']
+    assert result['facets']['categories']==['动漫', '未分类']
     failed=page_tasks(db,media_category='动漫',failed_only=True)
     assert failed['total']==1 and failed['items'][0]['id']==1
     assert failed['facets']['failed_count']==1
+
+@pytest.mark.parametrize('filters', [
+    {'media_category': '动漫'}, {'drive_type': 'baidu'}, {'enabled': False},
+    {'q': '不存在的任务'}, {'failed_only': True},
+    {'media_category': '动漫', 'drive_type': 'baidu', 'enabled': False},
+])
+def test_filter_choices_stay_available_even_when_results_are_empty(db, filters):
+    import json
+    from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
+    from app.application.queries.task_reads import page_tasks
+    task = db.get(Task, 1)
+    task.shareurl = 'https://pan.baidu.com/s/example'
+    task.tmdb_id = 1
+    task.tmdb_media_type = 'tv'
+    db.get(Task, 2).shareurl = 'https://pan.quark.cn/s/example'
+    db.add(TMDBMediaCache(tmdb_id=1, media_type='tv', payload_json=json.dumps({'genres': [{'id': 16}]})))
+    # Other task types must not add choices to the drama list.
+    db.add(Task(task_uid='other', task_type='normal', taskname='其他任务', shareurl='https://alipan.com/s/other', savepath='/x'))
+    db.commit()
+    baseline = page_tasks(db, task_type='drama', page_size=1)
+    filtered = page_tasks(db, task_type='drama', page_size=1, **filters)
+    assert filtered['facets']['categories'] == baseline['facets']['categories']
+    assert filtered['facets']['drives'] == baseline['facets']['drives']
+    assert filtered['facets']['categories'] == ['动漫', '未分类']
+    assert filtered['facets']['drives'] == ['baidu', 'quark']
 
 def test_keyword_matches_automatic_account_display_label(db):
     from app.infrastructure.persistence.models.drive_account import DriveAccount

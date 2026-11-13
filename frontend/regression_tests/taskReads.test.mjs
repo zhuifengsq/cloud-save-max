@@ -59,7 +59,7 @@ function extract(start,end){return ts.transpileModule(view.slice(view.indexOf(st
 test('late task page cannot overwrite newer filters; deleting last row selects valid page',async()=>{
  const pending=[]
  const js=extract('async function loadPage()', '\nwatch(() => [filters.keyword')
- const state={page:{value:3},pageSize:{value:20},tasks:{value:[]},total:{value:0},facets:{value:{}},loading:{value:false},pageError:{value:''}}
+ const state={page:{value:3},pageSize:{value:20},tasks:{value:[]},total:{value:0},facets:{value:{}},loading:{value:false},pageLoaded:{value:false},pageError:{value:''}}
  const load=new Function(...Object.keys(state),'loadTaskPage','readFilters','taskSort','let readVersion=0;'+js+';return loadPage')(...Object.values(state),()=>new Promise(resolve=>pending.push(resolve)),()=>({}),{order:''})
  const old=load(),fresh=load()
  pending[1]({items:[{id:2}],total:45,facets:{failed_count:5}});await fresh
@@ -67,6 +67,23 @@ test('late task page cannot overwrite newer filters; deleting last row selects v
  assert.deepEqual(state.tasks.value,[{id:2}]); assert.equal(state.facets.value.failed_count,5)
  const removed=load();pending[2]({items:[],total:40,facets:{}});await removed
  assert.equal(state.page.value,2)
+})
+
+test('switching filters after an empty result keeps the list visible instead of restarting skeletons',async()=>{
+ const pending=[]
+ const js=extract('async function loadPage()', '\nwatch(() => [filters.keyword')
+ const skeleton=extract('const showSkeleton = computed(', '\nconst hasActiveFilter')
+ const state={page:{value:1},pageSize:{value:20},tasks:{value:[]},total:{value:0},facets:{value:{}},loading:{value:false},pageLoaded:{value:false},pageError:{value:''}}
+ const {loadPage,showSkeleton}=new Function(...Object.keys(state),'loadTaskPage','readFilters','taskSort','computed',
+  'let readVersion=0;'+js+skeleton+';return {loadPage,showSkeleton}')(
+  ...Object.values(state),()=>new Promise(resolve=>pending.push(resolve)),()=>({}),{order:''},fn=>({get value(){return fn()}}))
+ const initial=loadPage()
+ assert.equal(showSkeleton.value,true)
+ pending.shift()({items:[],total:0,facets:{}});await initial
+ const next=loadPage()
+ assert.equal(showSkeleton.value,false)
+ pending.shift()({items:[{id:1}],total:1,facets:{}});await next
+ assert.deepEqual(state.tasks.value,[{id:1}])
 })
 test('history chunks use byte next offset, retain content on error and permit retry',async()=>{
  const js=extract('async function loadExecutionChunk()', '\nonMounted(() => {')
