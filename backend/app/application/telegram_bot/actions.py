@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.application.dto.task_run import RunTaskCommand
+from app.application.container import run_task_use_case
+
 import json
 import re
 from dataclasses import dataclass
@@ -10,7 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from sqlalchemy.orm import Session
 
 from app.application.share_preview import preview_share as post_share_preview
-from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
+from app.application.use_cases.run_task import RunPolicy
 from app.core.errors import ApiError, bad_request, not_found
 from app.application.container import adapter_factory as _acc_AdapterFactory; AdapterFactory = _acc_AdapterFactory()
 from app.application.container import aliyun_adapter_cls as _acc_AliyunAdapter; AliyunAdapter = _acc_AliyunAdapter()
@@ -411,17 +414,8 @@ class TelegramBotActions:
         return _task_to_dict(self.db, task)
 
     def run_task(self, task_id: int) -> dict[str, Any]:
-        task = get_task(self.db, int(task_id))
-        # 执行槽由 Telegram handlers._run_async 提前占用，用例内不再重复占槽。
-        execution = RunTaskUseCase(self.db).run(task, RunPolicy.for_trigger('telegram'))
-        self.db.commit()
-        self.db.refresh(execution)
-        section = build_share_check_section(task, execution)
-        if section:
-            try:
-                send_runtime(self.db, DRAMA_NOTIFY_TITLE, section)
-            except Exception:
-                self.db.rollback()
+        execution = run_task_use_case(self.db).execute(
+            RunTaskCommand(int(task_id)), RunPolicy.for_trigger('telegram'))
         return _task_execution_summary(execution) or {}
 
     def list_task_executions(self, task_id: int, *, limit: int = 5) -> list[dict[str, Any]]:

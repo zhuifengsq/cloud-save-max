@@ -12,10 +12,12 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
+import requests
 from sqlalchemy.orm import Session
+from app.application.search_results import SearchBatch
 
 from app.application.container import resource_search_sources_repo
 from app.core.errors import bad_request, not_found
@@ -176,9 +178,13 @@ def clear_search_plugin_cache(db: Session, key: str) -> dict:
     return {'success': True, 'message': '缓存已清除，下次搜索将重新读取文档'}
 
 
+class SearchResponseValidationError(ValueError):
+    """The plugin returned an unsupported response shape."""
+
+
 def normalize_search_results(plugin: BaseSearchPlugin, raw_results: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_results, list):
-        raise ValueError("search(keyword) 必须返回列表")
+        raise SearchResponseValidationError("search(keyword) 必须返回列表")
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in raw_results:
@@ -214,7 +220,7 @@ def _run_search(plugin: BaseSearchPlugin, keyword: str, *, timeout_seconds: floa
         try:
             result["items"] = normalize_search_results(plugin, plugin.search(keyword))
         except Exception as exc:
-            result["error"] = str(exc)[:300]
+            result["exception"] = exc
         finally:
             _active_searches.release()
             finished.set()
@@ -222,30 +228,61 @@ def _run_search(plugin: BaseSearchPlugin, keyword: str, *, timeout_seconds: floa
     threading.Thread(target=worker, daemon=True, name=f"search-plugin-{plugin.key}").start()
     if not finished.wait(timeout=max(1.0, min(float(timeout_seconds), 30.0))):
         return [], "搜索超时"
-    return result.get("items", []), result.get("error")
+    error = result.get("exception")
+    if isinstance(error, (requests.Timeout, TimeoutError)):
+        return [], "搜索超时"
+    if isinstance(error, (requests.RequestException, OSError, SearchResponseValidationError)):
+        return [], "搜索插件暂不可用"
+    if error is not None:
+        raise error
+    return result.get("items", []), None
 
 
-def search_enabled_plugins(db: Session, keyword: str, *, plugin_dir: Path = PLUGIN_DIR) -> list[dict[str, Any]]:
+def search_enabled_plugins_result(db: Session, keyword: str, *, plugin_dir: Path = PLUGIN_DIR, release_read: Callable[[], None] | None = None) -> SearchBatch:
     keyword = str(keyword or "").strip()
     if len(keyword) < 2:
-        return []
+        return SearchBatch()
     discovered = discover_search_plugins(plugin_dir=plugin_dir)
-    rows = _ensure_rows(db, discovered)
-    active = [item for item in discovered if item["status"] == "ready" and rows[_source_key(item["key"])].enabled]
-    results: list[dict[str, Any]] = []
-    if not active:
-        return results
-    with ThreadPoolExecutor(max_workers=min(len(active), 5)) as executor:
-        futures = {
-            executor.submit(_run_search, item["plugin"], keyword, timeout_seconds=item["plugin"].timeout_seconds): item["key"]
-            for item in active
-        }
+    if release_read is None:
+        rows = _ensure_rows(db, discovered)
+        active = [item for item in discovered if rows[_source_key(item["key"])].enabled]
+    else:
+        # Execution searches must not create/flush disabled discovery rows before IO.
+        rows = {row.key: row for row in resource_search_sources_repo().list_enabled_api_sources(db, key_prefix="plugin:")}
+        active = [item for item in discovered if _source_key(item["key"]) in rows]
+        for item in active:
+            if item["status"] != "ready":
+                continue
+            try:
+                config = json.loads(rows[_source_key(item["key"])].config_json or "{}")
+                item["plugin"].configure(config if isinstance(config, dict) else {})
+            except (ValueError, TypeError):
+                item["status"] = "error"
+    result = SearchBatch(sources=len(active))
+    ready = [item for item in active if item["status"] == "ready"]
+    result.warnings.extend("搜索插件加载失败" for item in active if item["status"] != "ready")
+    if release_read is not None:
+        release_read()
+    if not ready:
+        return result
+    with ThreadPoolExecutor(max_workers=min(len(ready), 5)) as executor:
+        futures = [
+            executor.submit(_run_search, item["plugin"], keyword, timeout_seconds=item["plugin"].timeout_seconds)
+            for item in ready
+        ]
         for future in as_completed(futures):
             matches, error = future.result()
             if error:
-                logger.warning("搜索插件执行失败: %s: %s", futures[future], error)
-            results.extend(matches)
-    return results
+                result.warnings.append(error)
+                result.timed_out += int(error == "搜索超时")
+            else:
+                result.succeeded += 1
+                result.items.extend(matches)
+    return result
+
+
+def search_enabled_plugins(db: Session, keyword: str, *, plugin_dir: Path = PLUGIN_DIR) -> list[dict[str, Any]]:
+    return search_enabled_plugins_result(db, keyword, plugin_dir=plugin_dir).items
 
 
 def test_search_plugin(db: Session, key: str, keyword: str, *, plugin_dir: Path = PLUGIN_DIR) -> dict[str, Any]:

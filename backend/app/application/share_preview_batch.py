@@ -5,7 +5,7 @@ import os
 import random
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +244,7 @@ def fetch_share_file_list(
     folder_exclude: str = "",
     folder_filter_mode: str = "",
     folder_exclude_mode: str = "",
+    *, release_read: Callable[[], None] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """获取分享链接的完整文件列表（只遍历前几层目录）"""
     from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
@@ -270,6 +271,9 @@ def fetch_share_file_list(
     adapter = manager.get_adapter_for_task(task_payload, allow_inactive=True)
     if adapter is None:
         return [], False
+
+    if release_read is not None:
+        release_read()
 
     if not bool(getattr(adapter, "is_active", False)):
         try:
@@ -355,6 +359,7 @@ def fetch_share_file_list_grouped(
     folder_exclude_mode: str = "",
     folder_priority: str = "",
     folder_priority_mode: str = "",
+    *, release_read: Callable[[], None] | None = None,
 ) -> list[tuple[list[dict[str, Any]], str, Any, str]]:
     """按子目录分组返回文件列表和目录标识。
     链接有 fid 时返回一组，无 fid 时每个子目录一组。"""
@@ -382,6 +387,9 @@ def fetch_share_file_list_grouped(
     adapter = manager.get_adapter_for_task(task_payload, allow_inactive=True)
     if adapter is None:
         return []
+
+    if release_read is not None:
+        release_read()
 
     if not bool(getattr(adapter, "is_active", False)):
         try:
@@ -784,7 +792,7 @@ def preview_share_batch(db: Session, payload: SharePreviewBatchIn) -> tuple[Shar
     return SharePreviewBatchOut(items=items), bool(invalid_changed or cache_changed)
 
 
-def validate_share_links_streaming(db: Session, shareurls: list[str]):
+def validate_share_links_streaming(db: Session, shareurls: list[str], *, release_read: Callable[[], None] | None = None):
     """生成器版本：验证完一个链接立即返回结果，不等全部完成。"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from app.application.dto.task_browse import ShareValidateItemOut
@@ -835,22 +843,25 @@ def validate_share_links_streaming(db: Session, shareurls: list[str]):
         return
 
     # 预先查询所有可用账号（避免线程内访问数据库）
-    accounts_by_drive: dict[str, list[DriveAccount]] = {}
+    accounts_by_drive: dict[str, list[str]] = {}
     for drive_type in per_drive:
-        try:
-            rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
-            rows.sort(
-                key=lambda x: (
-                    0 if bool(getattr(x, "is_default", False)) else 1,
-                    0 if str(getattr(x, "runtime_status", "") or "") == "active" else 1,
-                    int(getattr(x, "id", 0) or 0),
-                )
-            )
-            accounts_by_drive[drive_type] = rows
-        except Exception:
-            accounts_by_drive[drive_type] = []
+        rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
+        rows.sort(key=lambda x: (
+            0 if bool(getattr(x, "is_default", False)) else 1,
+            0 if str(getattr(x, "runtime_status", "") or "") == "active" else 1,
+            int(getattr(x, "id", 0) or 0),
+        ))
+        accounts_by_drive[drive_type] = [str(row.name or "").strip() for row in rows]
 
     manager = DatabaseAccountManager(db, no_login=True)
+
+    try:
+        batch_size = int(str(_get_setting(db, "validate_batch_size") or "5").strip())
+    except (TypeError, ValueError):
+        batch_size = 5
+    batch_size = max(1, min(batch_size, 20))
+    if release_read is not None:
+        release_read()
 
     def _validate_single_url(url: str, drive_type: str) -> ShareValidateItemOut:
         """验证单个链接"""
@@ -861,8 +872,7 @@ def validate_share_links_streaming(db: Session, shareurls: list[str]):
         ok = False
         author_name = ""
         last_error: str | None = None
-        for account in candidates:
-            name = str(getattr(account, "name", "") or "").strip()
+        for name in candidates:
             if not name:
                 last_error = "账号名称为空"
                 continue
@@ -929,13 +939,6 @@ def validate_share_links_streaming(db: Session, shareurls: list[str]):
             _validate_cache[url] = result
         return result
 
-    # 读取并行数配置
-    try:
-        batch_size = int(str(_get_setting(db, "validate_batch_size") or "5").strip())
-    except Exception:
-        batch_size = 5
-    batch_size = max(1, min(batch_size, 20))
-
     # 并行验证，完成一个立即返回一个
     for drive_type, dt_urls in per_drive.items():
         if not accounts_by_drive.get(drive_type):
@@ -953,13 +956,13 @@ def validate_share_links_streaming(db: Session, shareurls: list[str]):
                     yield ShareValidateItemOut(shareurl=url, ok=False, message=_safe_error(e))
 
 
-def validate_share_links(db: Session, shareurls: list[str]) -> ShareValidateOut:
+def validate_share_links(db: Session, shareurls: list[str], *, release_read: Callable[[], None] | None = None) -> ShareValidateOut:
     """轻量级验证：只检查链接有效性 + 提取分享者信息，不做视频解析。"""
     from app.application.dto.task_browse import ShareValidateOut
-    items = list(validate_share_links_streaming(db, shareurls))
+    items = list(validate_share_links_streaming(db, shareurls, **({"release_read": release_read} if release_read is not None else {})))
     return ShareValidateOut(items=items)
 
-def fetch_share_root_dirs(db: Session, shareurl: str, account_name: str | None = None) -> list[tuple[str, str]]:
+def fetch_share_root_dirs(db: Session, shareurl: str, account_name: str | None = None, *, release_read: Callable[[], None] | None = None) -> list[tuple[str, str]]:
     """返回分享根目录下的第一层子目录 [(fid, name)]，用于文件夹对比模式定位层级。"""
     from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
 
@@ -986,6 +989,9 @@ def fetch_share_root_dirs(db: Session, shareurl: str, account_name: str | None =
     )
     if adapter is None:
         return []
+    if release_read is not None:
+        release_read()
+
     if not bool(getattr(adapter, "is_active", False)):
         try:
             adapter.init()

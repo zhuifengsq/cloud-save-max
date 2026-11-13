@@ -37,7 +37,11 @@ from app.schemas.drama_lead_in import (
     DramaLeadInRecordOut,
     DramaLeadInSettingsUpdateIn,
 )
-from app.application import drama_lead_in as svc
+import app.application.lead_in.settings as lead_settings
+import app.application.lead_in.tokens as lead_tokens
+import app.application.lead_in.materials as lead_materials
+import app.application.lead_in.records as lead_records
+import app.application.use_cases.task_lead_in as lead_usecase
 from app.api.presenters.task import task_out
 from app.application.queries.task_views import task_view
 
@@ -383,7 +387,7 @@ class DramaLeadInOwnFileE2ETests(unittest.TestCase):
         self.assertEqual(ctx.exception.http_status, 400)
         self.assertIn("暂不支持本账号文件引流", ctx.exception.message)
         # 未写库
-        self.assertFalse(svc.get_drama_lead_in_materials(self.db))
+        self.assertFalse(lead_settings.get_drama_lead_in_materials(self.db))
 
     def test_settings_own_file_resolve_endpoint_returns_file_info(self) -> None:
         result = self._invoke_resolve_endpoint(
@@ -435,7 +439,7 @@ class DramaLeadInOwnFileE2ETests(unittest.TestCase):
         self.assertEqual(material["account_name"], MATERIAL_ACCOUNT)
         self.assertEqual(material["path"], OWN_FILE_PATH)
         # 预览令牌携带素材模式/账号/路径，供确认阶段校验。
-        token_payload = svc.parse_preview_token(preview.preview_token)
+        token_payload = lead_tokens.parse_preview_token(preview.preview_token)
         self.assertEqual(token_payload["material_mode"], "own_file")
         self.assertEqual(token_payload["material_account"], MATERIAL_ACCOUNT)
         self.assertEqual(token_payload["material_path"], OWN_FILE_PATH)
@@ -477,7 +481,7 @@ class DramaLeadInOwnFileE2ETests(unittest.TestCase):
         token = self._preview_token(self.task)
         self._confirm(self.task, token)
 
-        summary_map = svc.load_lead_in_summary_map(self.db, [self.task.id])
+        summary_map = lead_records.load_lead_in_summary_map(self.db, [self.task.id])
         task_dump = task_out(task_view(self.db, self.task, lead_in_map=summary_map)).model_dump()
         self.assertEqual(set(task_dump["lead_in"].keys()), {"state", "last_added_at"})
         self.assertEqual(task_dump["lead_in"]["state"], "added")

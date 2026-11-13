@@ -41,6 +41,15 @@ MODEL_PAIRS = [
     ("SharePreviewBatchResponse", "app.application.dto.task_browse", "SharePreviewBatchOut"),
     ("DriveBrowseItem", "app.application.dto.task_browse", "DriveBrowseItemOut"),
     ("DriveBrowseResponse", "app.application.dto.task_browse", "DriveBrowseOut"),
+    ("TaskExecutionSummary", "app.schemas.task_reads", "TaskExecutionSummaryOut"),
+    ("TaskSummary", "app.schemas.task_reads", "TaskSummaryOut"),
+    ("TaskOverview", "app.schemas.task_reads", "TaskOverviewOut"),
+    ("TaskDetail", "app.schemas.task_reads", "TaskSummaryOut"),
+    ("TaskFacets", "app.schemas.task_reads", "TaskFacetsOut"),
+    ("TaskPage", "app.schemas.task_reads", "TaskPageOut"),
+    ("TaskOrderIndexItem", "app.schemas.task_reads", "TaskOrderIndexItemOut"),
+    ("TaskExecutionPage", "app.schemas.task_reads", "TaskExecutionPageOut"),
+    ("TaskExecutionDetail", "app.schemas.task_reads", "TaskExecutionDetailOut"),
 ]
 
 # 「后端有、前端没有」的已确认差异：字段 -> 理由。空理由视为未登记。
@@ -84,31 +93,64 @@ def _backend_models() -> dict[str, dict[str, str]]:
 
 
 def _ts_types(path: Path = TS_TASKS) -> dict[str, list[str]]:
+    """Resolve the object/Pick/Omit/intersection contracts used in tasks.ts.
+
+    Fields may be separated by semicolons or newlines. Nested object members
+    are deliberately excluded; aliases must remain visible to contract checks.
+    """
     text = path.read_text(encoding="utf-8")
-    out: dict[str, list[str]] = {}
-    for match in re.finditer(r"export type (\w+) = \{", text):
-        name = match.group(1)
-        i = match.end()
-        depth = 1
-        while i < len(text) and depth:
-            char = text[i]
+    starts = list(re.finditer(r"export type (\w+)\s*=\s*", text))
+    expressions = {m.group(1): text[m.end(): starts[i + 1].start() if i + 1 < len(starts) else len(text)]
+                   for i, m in enumerate(starts)}
+    resolved: dict[str, list[str]] = {}
+
+    def object_fields(expression: str) -> set[str]:
+        fields: set[str] = set()
+        depth = 0
+        boundary = 0
+        for i, char in enumerate(expression):
             if char == "{":
                 depth += 1
+                if depth == 1:
+                    boundary = i + 1
             elif char == "}":
+                if depth == 1:
+                    part = expression[boundary:i].strip()
+                    match = re.match(r"^(\w+)\??\s*:", part)
+                    if match:
+                        fields.add(match.group(1))
                 depth -= 1
-            i += 1
-        body = text[match.end() : i - 1]
-        fields: list[str] = []
-        level = 0
-        for line in body.splitlines():
-            stripped = line.strip()
-            if level == 0:
-                field = re.match(r"^(\w+)(\?)?:", stripped)
-                if field:
-                    fields.append(field.group(1))
-            level += line.count("{") - line.count("}")
-        out[name] = sorted(fields)
-    return out
+            elif depth == 1 and char in ";\n":
+                part = expression[boundary:i].strip()
+                match = re.match(r"^(\w+)\??\s*:", part)
+                if match:
+                    fields.add(match.group(1))
+                boundary = i + 1
+        return fields
+
+    def resolve(name: str, visiting: frozenset[str] = frozenset()) -> list[str]:
+        if name in resolved:
+            return resolved[name]
+        if name in visiting:
+            raise AssertionError(f"cyclic frontend contract: {name}")
+        expression = expressions[name]
+        fields = object_fields(expression)
+        utility = re.match(r"(Omit|Pick)<(\w+),\s*([^>]+)>", expression)
+        if utility:
+            operation, base, keys = utility.groups()
+            base_fields = set(resolve(base, visiting | {name}))
+            chosen = set(re.findall(r"['\"](\w+)['\"]", keys))
+            fields |= base_fields - chosen if operation == "Omit" else base_fields & chosen
+        else:
+            base = re.match(r"(\w+)\s*&", expression)
+            if base and base.group(1) in expressions:
+                fields |= set(resolve(base.group(1), visiting | {name}))
+        resolved[name] = sorted(fields)
+        return resolved[name]
+
+    for name in expressions:
+        resolve(name)
+    return resolved
 
 
 def _sse_chunks(init_payload: dict, items: list[tuple[str, object]]) -> list[str]:

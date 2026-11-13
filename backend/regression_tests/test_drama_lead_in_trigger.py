@@ -41,7 +41,11 @@ from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.infrastructure.persistence.models.task import Task
 from app.infrastructure.persistence.models.task_execution import TaskExecution
 from app.infrastructure.persistence.models.task_lead_in import TaskLeadInRecord
-from app.application import drama_lead_in as svc
+import app.application.lead_in.settings as lead_settings
+import app.application.lead_in.tokens as lead_tokens
+import app.application.lead_in.materials as lead_materials
+import app.application.lead_in.records as lead_records
+import app.application.use_cases.task_lead_in as lead_usecase
 from app.application.task_share_links import get_task_share_link
 
 # 触发所有模型注册到 Base.metadata（sqlite 建表用）。
@@ -163,10 +167,10 @@ class DramaLeadInTriggerRegressionTests(unittest.TestCase):
         self.db.commit()
 
         # 开启总开关并配置素材：保证执行/分享链路是在“功能已开启”的前提下被回归验证。
-        svc._set_setting(self.db, svc.SETTING_KEY_ENABLED, "1")
-        svc._set_setting(
+        lead_settings._set_setting(self.db, lead_materials.SETTING_KEY_ENABLED, "1")
+        lead_settings._set_setting(
             self.db,
-            svc.SETTING_KEY_MATERIALS,
+            lead_materials.SETTING_KEY_MATERIALS,
             json.dumps(
                 {
                     "mockdrive": {
@@ -182,8 +186,8 @@ class DramaLeadInTriggerRegressionTests(unittest.TestCase):
             ),
         )
         self.db.commit()
-        self.assertTrue(svc.get_drama_lead_in_enabled(self.db))
-        self.assertIsNotNone(svc.get_drama_lead_in_material(self.db, "mockdrive"))
+        self.assertTrue(lead_settings.get_drama_lead_in_enabled(self.db))
+        self.assertIsNotNone(lead_settings.get_drama_lead_in_material(self.db, "mockdrive"))
 
         AdapterFactory.register_adapter("mockdrive", FakeShareDrive)
         AdapterFactory.clear_cache()
@@ -286,30 +290,17 @@ class DramaLeadInTriggerRegressionTests(unittest.TestCase):
     def test_run_route_handler_does_not_touch_lead_in(self) -> None:
         calls: list[int] = []
 
-        class RecordingExecutor:
-            def __init__(self, db):
-                self.db = db
-
-            def run_task(self, task, **kwargs):
-                calls.append(int(task.id))
-                execution = TaskExecution(
-                    task_id=int(task.id),
-                    status="success",
-                    started_at=datetime.now(),
-                    finished_at=datetime.now(),
-                    message="执行完成",
-                    stage="end",
-                    run_log="ok",
-                )
-                self.db.add(execution)
-                self.db.flush()
-                return execution
+        from app.application.dto.task_run import TaskRunResult
+        from app.application.use_cases.run_task import RunTaskUseCase
+        class RecordingEngine:
+            def execute(self, plan, policy, log, recover):
+                calls.append(int(plan.task.id))
+                return TaskRunResult(task_id=int(plan.task.id), status='success',
+                    finished_at=datetime.now(), message='执行完成', stage='end', run_log='ok')
 
         current = CurrentUser(user=SimpleNamespace(id=7), roles=[], permissions={TASK_RUN})
         with (
-            patch("app.api.routes.tasks.TaskExecutor", RecordingExecutor),
-            patch("app.api.routes.tasks.build_task_section", return_value=(None, False)),
-            patch("app.api.routes.tasks.send_runtime"),
+            patch("app.api.routes.tasks.run_task_use_case", side_effect=lambda db: RunTaskUseCase(db, engine=RecordingEngine())),
         ):
             out1 = post_run_task(self._request(), int(self.task.id), current=current, db=self.db)
             out2 = post_run_task(self._request(), int(self.task2.id), current=current, db=self.db)
@@ -350,18 +341,18 @@ class DramaLeadInTriggerRegressionTests(unittest.TestCase):
     def test_share_creation_does_not_touch_lead_in_or_leak_material(self) -> None:
         adapter = Mock()
         adapter.is_active = True
-        adapter.create_share_link.return_value = {
-            "share_url": "https://pan.example.com/s/generated",
-            "share_id": "share-1",
-            "title": "测试剧",
-            "passcode": "9999",
-            "expires_in_days": 7,
-        }
+        from app.domain.drive_types import DriveCapabilities, ShareLinkResult
+        from app.application.use_cases.create_task_share import CreateTaskShareUseCase
+        adapter.capabilities = DriveCapabilities(supports_share=True)
+        adapter.create_share_link.return_value = ShareLinkResult(
+            url="https://pan.example.com/s/generated", share_id="share-1", title="测试剧",
+            passcode="9999", expires_in_days=7, supported=True,
+        )
         current = CurrentUser(user=SimpleNamespace(id=7), roles=[], permissions={TASK_WRITE})
 
         with patch(
-            "app.api.routes.tasks.DatabaseAccountManager",
-            side_effect=lambda db: FakeAccountManager(db, adapter),
+            "app.api.routes.tasks.create_task_share_use_case",
+            side_effect=lambda db: CreateTaskShareUseCase(db, gateway_factory=lambda plan: adapter),
         ):
             out = post_create_task_share(
                 self._request(), int(self.task.id), current=current, db=self.db

@@ -14,15 +14,17 @@ from typing import Any, Protocol, runtime_checkable
 
 @runtime_checkable
 class TaskRunUseCasePort(Protocol):
-    """任务执行用例：接收已加载的任务行与运行策略，返回执行结果。"""
+    """Command/value-based application entry; callers never pass an ORM task row."""
 
-    def run(
-        self,
-        task: Any,
-        policy: Any,
-        log: Any = None,
-        *,
-        account_manager: Any = None,
-        init_account_for_task: bool = True,
-    ) -> Any:
-        """执行任务；返回执行结果（含 status，供触发方映射响应）。"""
+    def execute(self, command: Any, policy: Any, log: Any = None) -> Any:
+        """Run staged execution and return an application result value."""
+
+
+class TaskRunStorePort(Protocol):
+    def prepare(self, command: Any) -> Any: ...
+    def save(self, plan: Any, result: Any) -> None: ...
+    def save_task(self, task: Any) -> None: ...
+
+
+class TaskExecutionEnginePort(Protocol):
+    def execute(self, plan: Any, policy: Any, log: Any, recover: Any) -> Any: ...

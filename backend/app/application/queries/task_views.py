@@ -19,7 +19,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.application.drama_lead_in import load_lead_in_summary_map
+from app.application.lead_in.records import load_lead_in_summary_map
 from app.application.media_category import categorize
 from app.application.drama_update_progress import build_drama_update_progress
 from app.application.drama_schedule import resolve_item_run_schedule, resolve_run_schedule
@@ -41,6 +41,8 @@ _EMPTY_LEAD_IN: dict[str, Any] = {"state": "none", "last_added_at": None}
 
 def _load_json_dict(raw: Any) -> dict[str, Any]:
     """容错解析 *_json 文本列；解析失败按空字典处理（与改造前行为一致）。"""
+    if isinstance(raw, dict):
+        return dict(raw)
     if not raw:
         return {}
     try:
@@ -111,7 +113,7 @@ def execution_view(item: Any) -> TaskExecutionView:
         message=getattr(item, "message", None),
         stage=getattr(item, "stage", None),
         run_log=getattr(item, "run_log", None),
-        adapter_snapshot=_load_json_dict(getattr(item, "adapter_snapshot", None)),
+        adapter_snapshot=(getattr(item, "adapter_snapshot", None) if isinstance(getattr(item, "adapter_snapshot", None), dict) else _load_json_dict(getattr(item, "adapter_snapshot", None))),
     )
 
 

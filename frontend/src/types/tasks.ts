@@ -204,3 +204,21 @@ export type MagicRegexRule = {
 export type MagicRegexResponse = {
   rules: MagicRegexRule[]
 }
+
+// Bounded read contracts are distinct from legacy mutation/full collection responses.
+export type TaskExecutionSummary = Omit<TaskExecutionItem, 'run_log' | 'tree_summary'>
+export type TaskSummaryExtra = Pick<TaskExtraConfig, 'saved_latest' | 'auto_update_shareurl' | 'auto_update_115_shareurl' | 'share_link'> & {runweek?: unknown; runweek_mode?: unknown; allow_once?: unknown}
+export type TaskSummaryAddition = {update_subdir?: string | null; save_subdir?: string | null; weekdays?: number[] | null}
+export type TaskSummary = Omit<TaskItem, 'executions' | 'addition' | 'extra'> & { drive_type: string; executions: TaskExecutionSummary[]; addition: TaskSummaryAddition; extra: TaskSummaryExtra }
+export type TaskOverview = Omit<TaskSummary, 'addition' | 'extra'> & {addition: TaskSummaryAddition; extra: TaskSummaryExtra}
+export type TaskDetail = Omit<TaskSummary, 'addition' | 'extra'> & {addition: Record<string, any>; extra: TaskExtraConfig}
+export type TaskFacets = { categories: string[]; drives: string[]; failed_count: number }
+export type TaskPage = { items: TaskSummary[]; total: number; page: number; page_size: number; facets: TaskFacets }
+export type TaskReadFilters = { q?: string; task_type?: string; enabled?: boolean; drive_type?: string; media_category?: string; failed_only?: boolean }
+export type TaskPageQuery = TaskReadFilters & { page: number; page_size: number; name_order?: 'ascending' | 'descending' | '' }
+export type TaskOrderIndexItem = { id: number; taskname: string; drive_type: string }
+export type TaskExecutionPage = { items: TaskExecutionSummary[]; total: number; page: number; page_size: number }
+export type TaskExecutionDetail = TaskExecutionSummary & {
+  tree_summary: string; run_log: string; log_next_offset: number; log_complete: boolean
+  log_truncated: boolean; log_dropped_bytes: number; tree_truncated: boolean
+}

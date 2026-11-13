@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 from typing import Any
 
 from app.application.generated_share_check import read_share_check
@@ -63,7 +64,15 @@ def _build_transfer_section(task: Any, execution: Any) -> tuple[str, bool]:
     message = str(getattr(execution, "message", "") or "").strip()
 
     if status == "success":
-        names = extract_root_new_files(getattr(execution, "tree_summary", None))
+        snapshot = getattr(execution, 'adapter_snapshot', None) or {}
+        if isinstance(snapshot, str):
+            try:
+                snapshot = json.loads(snapshot)
+            except (TypeError, ValueError):
+                snapshot = {}
+        names = snapshot.get('new_files') if isinstance(snapshot, dict) else None
+        if not isinstance(names, list):
+            names = extract_root_new_files(getattr(execution, "tree_summary", None))
         if not names:
             return "", False
         savepath = _normalize_savepath(str(getattr(task, "savepath", "") or ""))

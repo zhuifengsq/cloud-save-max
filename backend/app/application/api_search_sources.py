@@ -4,7 +4,7 @@ import json
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
 import jmespath
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.application.container import resource_search_sources_repo
 from app.core.errors import bad_request, not_found
+from app.application.search_results import SearchBatch
 
 
 API_KEY_PREFIX = "api:"
@@ -209,17 +210,27 @@ def search_api_source(config: dict[str, Any], keyword: str) -> list[dict[str, An
     return results
 
 
-def search_enabled_api_sources(db: Session, keyword: str) -> list[dict[str, Any]]:
+def search_enabled_api_sources_result(db: Session, keyword: str, *, release_read: Callable[[], None] | None = None) -> SearchBatch:
     rows = resource_search_sources_repo().list_enabled_api_sources(db, key_prefix=API_KEY_PREFIX)
     configs = [_config(row) for row in rows]
-    results: list[dict[str, Any]] = []
+    if release_read is not None:
+        release_read()
+    result = SearchBatch(sources=len(configs))
     if not configs:
-        return results
+        return result
     with ThreadPoolExecutor(max_workers=min(len(configs), 5)) as executor:
         futures = [executor.submit(search_api_source, config, keyword) for config in configs]
         for future in as_completed(futures):
             try:
-                results.extend(future.result())
-            except Exception:
-                continue
-    return results
+                result.items.extend(future.result())
+                result.succeeded += 1
+            except requests.Timeout:
+                result.timed_out += 1
+                result.warnings.append("API 搜索源请求超时")
+            except (requests.RequestException, jmespath.exceptions.JMESPathError):
+                result.warnings.append("API 搜索源暂不可用")
+    return result
+
+
+def search_enabled_api_sources(db: Session, keyword: str) -> list[dict[str, Any]]:
+    return search_enabled_api_sources_result(db, keyword).items

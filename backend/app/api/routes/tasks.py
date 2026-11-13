@@ -1,3 +1,5 @@
+from app.application.dto.task_run import RunTaskCommand
+from app.application.container import run_task_use_case
 """任务管理端点：任务 CRUD、执行、调度设置、模板与建议。
 
 拆分说明：SSE 流式端点在 app.api.routes.tasks_stream，分享预览/验证在 tasks_share，
@@ -6,22 +8,19 @@ drive_payload / drive_accounts）。本模块通过 include_router 组合子路�
 """
 
 import logging
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
+from app.application.use_cases.run_task import RunPolicy
 from app.api.deps import CurrentUser, get_current_user, require_permissions
-from app.core.errors import bad_request, not_found
 from app.core.permissions import TASK_READ, TASK_RUN, TASK_WRITE
 from app.application.container import commit, get_db, system_settings_repo, tasks_repo, transaction
-from app.application.container import adapter_factory as _acc_AdapterFactory; AdapterFactory = _acc_AdapterFactory()
-from app.application.container import base_adapter_cls as _acc_BaseCloudDriveAdapter; BaseCloudDriveAdapter = _acc_BaseCloudDriveAdapter()
-from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
-from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
+from app.application.container import create_task_share_use_case
+from app.application.dto.task_share import CreateTaskShareCommand
 from app.application.container import task_scheduler as _acc_task_scheduler_manager; task_scheduler_manager = _acc_task_scheduler_manager()
 from app.application.container import task_admission_service as _acc_task_admission; task_admission = _acc_task_admission()
-from app.application.container import task_executor_cls as _acc_TaskExecutor; TaskExecutor = _acc_TaskExecutor()
 from app.schemas.task_magic_regex import MagicRegexOut, MagicRegexRuleOut
 from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn
 from app.schemas.task import (
@@ -35,16 +34,12 @@ from app.schemas.task import (
 )
 from app.schemas.resource_search import TaskSuggestionListOut
 from app.application import audit
-from app.application.notifications.sender import send_runtime
-from app.application.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
 from app.application.task_scheduler import get_or_create_task_scheduler_setting, load_task_scheduler_setting, update_task_scheduler_setting
 from app.application.resource_search import fetch_task_suggestions
 from app.application.tasks import create_task, delete_task, get_task, set_task_enabled, update_task
-from app.application.task_share_links import save_task_share_link
 from app.application.tmdb_settings import get_tmdb_lang_pair
 
 from app.api.routes import tasks_drive, tasks_share, tasks_stream
-from app.application.drive_accounts import get_active_account, pick_default_account_name
 from app.api.presenters.task import execution_out, scheduler_out, task_out
 from app.application.queries.task_views import (
     execution_view,
@@ -72,28 +67,28 @@ def list_magic_regex(db: Session = Depends(get_db)) -> MagicRegexOut:
 
 @router.get("/suggestions", response_model=TaskSuggestionListOut, dependencies=[Depends(require_permissions(TASK_READ))])
 def get_task_suggestions(q: str = "", d: int = 0, drive_type: str = "", sf: str = "", se: str = "", df: str = "", sfm: str = "", sem: str = "", show_blocked: bool = False, db: Session = Depends(get_db)) -> TaskSuggestionListOut:
-    try:
-        dt = str(drive_type or "").strip() or None
-        items, changed, msg = fetch_task_suggestions(db, keyword=q, deep=d, drive_type=dt, search_filter=sf, search_exclude=se, search_date_from=df, search_filter_mode=sfm, search_exclude_mode=sem)
-        if changed:
-            commit(db)
-        # 标记屏蔽分享者（不过滤，只标记）
-        if items:
-            blocked_value = system_settings_repo().get_value(db, "blocked_sharers", "")
-            blocked_set = {name.strip() for name in blocked_value.split("|") if name.strip()}
-            if blocked_set:
-                for item in items:
-                    author = str(item.get("share_author_name") or "").strip()
-                    if author and author in blocked_set:
-                        item["is_blocked_sharer"] = True
-                    else:
-                        item["is_blocked_sharer"] = False
-            else:
-                for item in items:
+    from app.application.resource_search import fetch_task_suggestions_result
+
+    dt = str(drive_type or "").strip() or None
+    result = fetch_task_suggestions_result(db, keyword=q, deep=d, drive_type=dt, search_filter=sf, search_exclude=se, search_date_from=df, search_filter_mode=sfm, search_exclude_mode=sem)
+    items = result.items
+    if result.changed:
+        commit(db)
+    # 标记屏蔽分享者（不过滤，只标记）
+    if items:
+        blocked_value = system_settings_repo().get_value(db, "blocked_sharers", "")
+        blocked_set = {name.strip() for name in blocked_value.split("|") if name.strip()}
+        if blocked_set:
+            for item in items:
+                author = str(item.get("share_author_name") or "").strip()
+                if author and author in blocked_set:
+                    item["is_blocked_sharer"] = True
+                else:
                     item["is_blocked_sharer"] = False
-        return TaskSuggestionListOut(success=True, data=items, message=msg)
-    except Exception as e:
-        return TaskSuggestionListOut(success=True, message=f"error: {str(e)}", data=[])
+        else:
+            for item in items:
+                item["is_blocked_sharer"] = False
+    return TaskSuggestionListOut(success=True, data=items, message=result.message, partial=result.partial, warnings=result.warnings)
 
 
 
@@ -170,91 +165,20 @@ def delete_task_by_id(request: Request, task_id: int, current: CurrentUser = Dep
 @router.post('/{task_id:int}/run', response_model=TaskExecutionOut, dependencies=[Depends(require_permissions(TASK_RUN))])
 def post_run_task(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     with task_admission.reserve(task_id):
-        task = get_task(db, task_id)
-        execution = RunTaskUseCase(db, executor_cls=TaskExecutor).run(task, RunPolicy.for_trigger('http'))
-        audit.write_audit_log(db, actor_user_id=current.user.id, action='task.run', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=execution.status == 'success', detail=execution.message)
-        commit(db)
-        db.refresh(execution)
-        if str(getattr(task, "task_type", "") or "") == "drama":
-            try:
-                section, should_notify = build_task_section(task, execution)
-                if should_notify:
-                    send_runtime(db, DRAMA_NOTIFY_TITLE, section)
-            except Exception:
-                pass
+        command = RunTaskCommand(task_id, actor_user_id=current.user.id,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get('user-agent'))
+        execution = run_task_use_case(db).execute(command, RunPolicy.for_trigger('http'))
         return execution_out(execution_view(execution))
 
 
 @router.post('/{task_id:int}/share', response_model=TaskShareLinkOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
 def post_create_task_share(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = get_task(db, task_id)
-    if task.account_name:
-        account = get_active_account(db, task.account_name)
-        if account is None:
-            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '任务指定的网盘账号不存在或不可用')
-    else:
-        drive_type = AdapterRegistry.detect_drive_type(task.shareurl)
-        if not drive_type:
-            raise bad_request('TASK_SHAREURL_INVALID', '无法识别任务使用的网盘类型')
-        account_name = pick_default_account_name(db, drive_type)
-        account = get_active_account(db, account_name) if account_name else None
-        if account is None:
-            raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '没有可用的网盘账号')
-
-    adapter_class = AdapterFactory.ADAPTER_MAP.get(str(account.drive_type))
-    if adapter_class is None or adapter_class.create_share_link is BaseCloudDriveAdapter.create_share_link:
-        raise bad_request('TASK_SHARE_UNSUPPORTED', f'{account.drive_type}暂不支持生成分享链接')
-
-    task_payload = {'shareurl': task.shareurl, 'account_name': account.name}
-    manager = DatabaseAccountManager(db)
-    manager.init_for_tasks([task_payload])
-    adapter = manager.get_adapter_for_task(task_payload)
-    if adapter is None or not adapter.is_active:
-        raise bad_request('DRIVE_ACCOUNT_UNAVAILABLE', '网盘账号登录失败，请检查账号状态')
-
-    try:
-        result = adapter.create_share_link(task.savepath, task.taskname)
-    except ValueError as exc:
-        raise bad_request('TASK_SHARE_PATH_INVALID', str(exc)) from exc
-    except NotImplementedError as exc:
-        raise bad_request('TASK_SHARE_UNSUPPORTED', str(exc)) from exc
-    except Exception as exc:
-        logger.exception('生成任务分享链接失败 task_id=%s drive_type=%s', task_id, account.drive_type)
-        raise bad_request('TASK_SHARE_FAILED', str(exc) or '生成分享链接失败') from exc
-
-    share_url = str(result.get('share_url') or '').strip()
-    if not share_url:
-        raise bad_request('TASK_SHARE_FAILED', '网盘没有返回分享链接')
-    title = str(result.get('title') or task.taskname)
-    passcode = str(result.get('passcode') or '') or None
-    expires_in_days = int(result['expires_in_days']) if result.get('expires_in_days') is not None else None
-    # 生成的分享链接永久记录在任务上，下次直接查看/复制，不必重新生成。
-    saved = save_task_share_link(
-        task,
-        share_url=share_url,
-        share_id=str(result.get('share_id') or ''),
-        title=title,
-        drive_type=str(account.drive_type),
-        account_name=str(account.name),
-        passcode=passcode,
-        expires_in_days=expires_in_days,
+    command = CreateTaskShareCommand(
+        task_id=task_id, actor_user_id=current.user.id,
+        ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'),
     )
-    audit.write_audit_log(
-        db, actor_user_id=current.user.id, action='task.share.create', target_type='task', target_id=str(task_id),
-        ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True,
-        detail=f'drive_type={account.drive_type}',
-    )
-    commit(db)
-    return TaskShareLinkOut(
-        share_url=share_url,
-        share_id=str(result.get('share_id') or ''),
-        title=title,
-        drive_type=str(account.drive_type),
-        account_name=str(account.name),
-        passcode=passcode,
-        expires_in_days=expires_in_days,
-        saved_at=str(saved.get('saved_at') or '') or None,
-    )
+    return TaskShareLinkOut(**asdict(create_task_share_use_case(db).execute(command)))
 
 
 @router.get('/scheduler', response_model=TaskSchedulerSettingOut, dependencies=[Depends(require_permissions(TASK_READ))])

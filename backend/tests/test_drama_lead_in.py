@@ -30,7 +30,11 @@ from app.schemas.drama_lead_in import (
     DramaLeadInRecordOut,
     TaskLeadInSummaryOut,
 )
-from app.application import drama_lead_in as svc
+import app.application.lead_in.settings as lead_settings
+import app.application.lead_in.tokens as lead_tokens
+import app.application.lead_in.materials as lead_materials
+import app.application.lead_in.records as lead_records
+import app.application.use_cases.task_lead_in as lead_usecase
 from app.api.presenters.task import task_out
 from app.application.queries.task_views import task_view
 
@@ -304,11 +308,11 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         }
 
     def _write_settings(self, *, enabled: bool = True, materials: dict | None = None) -> None:
-        svc._set_setting(self.db, svc.SETTING_KEY_ENABLED, "1" if enabled else "0", "测试")
+        lead_settings._set_setting(self.db, lead_materials.SETTING_KEY_ENABLED, "1" if enabled else "0", "测试")
         payload = self._materials() if materials is None else materials
-        svc._set_setting(
+        lead_settings._set_setting(
             self.db,
-            svc.SETTING_KEY_MATERIALS,
+            lead_materials.SETTING_KEY_MATERIALS,
             json.dumps(payload, ensure_ascii=False),
             "测试",
         )
@@ -318,7 +322,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         self._write_settings(materials=self._materials(config_version=config_version))
 
     def _preview(self, task: Task) -> dict:
-        return svc.build_task_lead_in_preview(self.db, task)
+        return lead_usecase.TaskLeadInUseCase(None)._preview(self.db, task)
 
     def _preview_token(self, task: Task) -> str:
         preview = self._preview(task)
@@ -328,7 +332,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         return token
 
     def _confirm(self, task: Task, token: str | None = None, **kwargs) -> dict:
-        return svc.confirm_task_lead_in(self.db, task, token or self._preview_token(task), **kwargs)
+        return lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, task, token or self._preview_token(task), **kwargs)
 
     def _records(self, task: Task | None = None) -> list[TaskLeadInRecord]:
         query = self.db.query(TaskLeadInRecord)
@@ -339,6 +343,30 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
     # ------------------------------------------------------------------
     # 1. 夸克/百度正常添加链路
     # ------------------------------------------------------------------
+
+    def test_public_usecase_commit_failure_never_replays_external_add(self):
+        task_id = self.quark_task.id
+        usecase = lead_usecase.TaskLeadInUseCase(self.db)
+        preview = usecase.preview(lead_usecase.LeadInCommand(task_id))
+        command = lead_usecase.LeadInCommand(task_id, preview.data['preview_token'])
+        original_commit = self.db.commit
+
+        def commit():
+            if self.adapter.lead_in_add.call_count:
+                raise RuntimeError('record commit failed')
+            return original_commit()
+
+        original_add = self.adapter.lead_in_add.return_value
+        def add(*args):
+            self.assertFalse(self.db.in_transaction())
+            return original_add
+
+        self.adapter.lead_in_add.side_effect = add
+        with patch.object(self.db, 'commit', side_effect=commit):
+            with self.assertRaisesRegex(RuntimeError, 'record commit failed'):
+                usecase.confirm(command)
+        self.adapter.lead_in_add.assert_called_once()
+        self.assertEqual(self.db.query(TaskLeadInRecord).count(), 0)
 
     def test_quark_add_flow_writes_selected_file_to_task_directory(self) -> None:
         preview = self._preview(self.quark_task)
@@ -354,7 +382,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         self.assertIsInstance(preview["expires_at"], datetime)
         self.assertTrue(preview["preview_token"])
 
-        result = svc.confirm_task_lead_in(
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(
             self.db,
             self.quark_task,
             preview["preview_token"],
@@ -419,7 +447,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         self.assertEqual(preview["directory"]["path"], BAIDU_DIR)
         self.assertEqual(preview["material"], {"name": BAIDU_MATERIAL["name"], "fid": "bmat1"})
 
-        result = svc.confirm_task_lead_in(self.db, self.baidu_task, preview["preview_token"])
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.baidu_task, preview["preview_token"])
         self.assertEqual(result["status"], "added")
         self.assertEqual(result["material"]["fid"], "bmat1")
         self.assertEqual(result["directory"]["path"], BAIDU_DIR)
@@ -457,7 +485,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         preview = self._preview(self.quark_task)
         self.assertEqual(preview["state"], "exists")
 
-        result = svc.confirm_task_lead_in(self.db, self.quark_task, preview["preview_token"])
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, preview["preview_token"])
         self.assertEqual(result["status"], "exists")
         self.assertIn("已存在", result["message"])
         self.assertIsNone(result["added_at"])
@@ -479,7 +507,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
 
         preview = self._preview(self.quark_task)
         self.assertEqual(preview["state"], "exists")
-        second = svc.confirm_task_lead_in(self.db, self.quark_task, preview["preview_token"])
+        second = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, preview["preview_token"])
         self.assertEqual(second["status"], "exists")
         # 重复点击不得重复写入
         self.assertEqual(self.adapter.lead_in_add.call_count, 1)
@@ -496,7 +524,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         preview = self._preview(self.quark_task)
         self.assertEqual(preview["state"], "conflict")
 
-        result = svc.confirm_task_lead_in(self.db, self.quark_task, preview["preview_token"])
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, preview["preview_token"])
         self.assertEqual(result["status"], "conflict")
         self.assertIn("同名", result["message"])
         self.adapter.lead_in_add.assert_not_called()
@@ -511,11 +539,11 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
 
     def test_confirm_when_lock_held_returns_in_progress(self) -> None:
         token = self._preview_token(self.quark_task)
-        lock = svc.lead_in_lock("quark", "quark-account", QUARK_DIR, QUARK_MATERIAL["name"])
+        lock = lead_usecase.lead_in_lock("quark", "quark-account", QUARK_DIR, QUARK_MATERIAL["name"])
         self.assertTrue(lock.acquire(blocking=False))
         try:
             with self.assertRaises(ApiError) as ctx:
-                svc.confirm_task_lead_in(self.db, self.quark_task, token)
+                lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, token)
         finally:
             lock.release()
 
@@ -546,13 +574,13 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
             # 模拟「写入进行中，另一个任务同目录同名确认」的并发路径。
             if not nested_errors:
                 try:
-                    svc.confirm_task_lead_in(self.db, twin, token_twin)
+                    lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, twin, token_twin)
                 except ApiError as exc:
                     nested_errors.append(exc)
             return {"code": 0, "message": "", "data": {"handle": {"id": "handle-1"}}}
 
         self.adapter.lead_in_add.side_effect = fake_add
-        result = svc.confirm_task_lead_in(self.db, self.quark_task, token_main)
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, token_main)
 
         self.assertEqual(result["status"], "added")
         self.assertEqual(len(nested_errors), 1)
@@ -585,7 +613,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         # 再次操作：预览查重 absent（未写入）→ 允许重新添加
         preview = self._preview(self.quark_task)
         self.assertEqual(preview["state"], "absent")
-        second = svc.confirm_task_lead_in(self.db, self.quark_task, preview["preview_token"])
+        second = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, preview["preview_token"])
         self.assertEqual(second["status"], "added")
         self.assertEqual(self.adapter.lead_in_add.call_count, 2)
         records = self._records(self.quark_task)
@@ -624,11 +652,11 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         self.assertEqual(preview["state"], "absent")
         self.assertIsNone(preview["last_added_at"])
         self.assertEqual(self._records(self.quark_task), [])
-        summary_map = svc.load_lead_in_summary_map(self.db, [self.quark_task.id])
+        summary_map = lead_records.load_lead_in_summary_map(self.db, [self.quark_task.id])
         self.assertEqual(summary_map[self.quark_task.id]["state"], "none")
         self.assertIsNone(summary_map[self.quark_task.id]["last_added_at"])
 
-        second = svc.confirm_task_lead_in(self.db, self.quark_task, preview["preview_token"])
+        second = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, preview["preview_token"])
         self.assertEqual(second["status"], "added")
         self.assertEqual(self.adapter.lead_in_add.call_count, 2)
         records = self._records(self.quark_task)
@@ -643,7 +671,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         token = self._preview_token(self.quark_task)
         self._configure_materials(config_version=2)
         with self.assertRaises(ApiError) as ctx:
-            svc.confirm_task_lead_in(self.db, self.quark_task, token)
+            lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, token)
 
         self.assertEqual(ctx.exception.code, "LEAD_IN_STALE_PREVIEW")
         self.assertEqual(ctx.exception.http_status, 409)
@@ -651,12 +679,39 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         self.adapter.lead_in_add.assert_not_called()
         self.assertEqual(self._records(self.quark_task), [])
 
+    def test_stale_preview_after_same_drive_account_change(self):
+        task_id = self.quark_task.id
+        usecase = lead_usecase.TaskLeadInUseCase(self.db)
+        token = usecase.preview(lead_usecase.LeadInCommand(task_id)).data['preview_token']
+        self.db.add(DriveAccount(name='another-quark', drive_type='quark', cookie='private', enabled=True))
+        self.quark_task.account_name = 'another-quark'
+        self.db.commit()
+        with self.assertRaises(ApiError) as caught:
+            usecase.confirm(lead_usecase.LeadInCommand(task_id, token))
+        self.assertEqual(caught.exception.code, 'LEAD_IN_STALE_PREVIEW')
+        self.adapter.lead_in_add.assert_not_called()
+        self.assertEqual(self._records(self.quark_task), [])
+
+    def test_stale_preview_after_default_account_change(self):
+        self.quark_task.account_name = None
+        self.db.commit()
+        task_id = self.quark_task.id
+        usecase = lead_usecase.TaskLeadInUseCase(self.db)
+        token = usecase.preview(lead_usecase.LeadInCommand(task_id)).data['preview_token']
+        self.quark_account.is_default = False
+        self.db.add(DriveAccount(name='new-default-quark', drive_type='quark', cookie='private', enabled=True, is_default=True, runtime_status='active'))
+        self.db.commit()
+        with self.assertRaises(ApiError) as caught:
+            usecase.confirm(lead_usecase.LeadInCommand(task_id, token))
+        self.assertEqual(caught.exception.code, 'LEAD_IN_STALE_PREVIEW')
+        self.adapter.lead_in_add.assert_not_called()
+
     def test_stale_preview_after_task_savepath_change(self) -> None:
         token = self._preview_token(self.quark_task)
         self.quark_task.savepath = "追剧/换了的目录"
         self.db.commit()
         with self.assertRaises(ApiError) as ctx:
-            svc.confirm_task_lead_in(self.db, self.quark_task, token)
+            lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, token)
 
         self.assertEqual(ctx.exception.code, "LEAD_IN_STALE_PREVIEW")
         self.assertEqual(ctx.exception.http_status, 409)
@@ -741,7 +796,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_settings_payload_masks_link_and_hides_passcode(self) -> None:
-        payload = svc.build_settings_payload(self.db)
+        payload = lead_settings.build_settings_payload(self.db)
         drives = {item["drive_type"]: item for item in payload["drives"]}
         quark = drives["quark"]
         self.assertTrue(quark["supported"])
@@ -759,7 +814,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         confirm_result = self._confirm(self.quark_task)
         self.assertEqual(confirm_result["status"], "added")
 
-        summary_map = svc.load_lead_in_summary_map(self.db, [self.quark_task.id])
+        summary_map = lead_records.load_lead_in_summary_map(self.db, [self.quark_task.id])
         task_payload = task_out(task_view(self.db, self.quark_task, lead_in_map=summary_map))
         dumped = task_payload.model_dump()
         lead_in = dumped["lead_in"]
@@ -771,7 +826,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
             self.assertNotIn(secret, lead_in_text)
         self.assertEqual(set(TaskLeadInSummaryOut(**lead_in).model_dump()), {"state", "last_added_at"})
 
-        record_state = svc.get_task_lead_in_state(self.db, self.quark_task)
+        record_state = lead_records.get_task_lead_in_state(self.db, self.quark_task)
         self.assertEqual(
             set(DramaLeadInRecordOut(**record_state).model_dump()),
             {"state", "message", "last_added_at", "material_name"},
@@ -794,20 +849,20 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         AdapterFactory.register_adapter("mockthird", MockThirdAdapterClass)
         AdapterFactory.register_adapter("mockdisabled", MockDisabledAdapterClass)
         try:
-            capabilities = {item["drive_type"]: item for item in svc.list_drive_capabilities()}
+            capabilities = {item["drive_type"]: item for item in lead_materials.list_drive_capabilities()}
             self.assertTrue(capabilities["mockthird"]["supported"])
             self.assertEqual(capabilities["mockthird"]["drive_name"], "第三方网盘")
             self.assertFalse(capabilities["mockdisabled"]["supported"])
             self.assertIn("暂不支持引流", capabilities["mockdisabled"]["reason"])
 
-            drives = {item["drive_type"]: item for item in svc.build_settings_payload(self.db)["drives"]}
+            drives = {item["drive_type"]: item for item in lead_settings.build_settings_payload(self.db)["drives"]}
             self.assertIn("mockthird", drives)
             self.assertTrue(drives["mockthird"]["supported"])
             self.assertFalse(drives["mockdisabled"]["supported"])
 
             preview = self._preview(self.third_task)
             self.assertTrue(preview["available"], preview.get("reason"))
-            result = svc.confirm_task_lead_in(self.db, self.third_task, preview["preview_token"])
+            result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.third_task, preview["preview_token"])
             self.assertEqual(result["status"], "added")
             self.assertEqual(self.adapter.lead_in_resolve_dir.call_args[0][0], THIRD_DIR)
             self.assertEqual(self.adapter.lead_in_add.call_args[0][0]["fid"], "tmat1")
@@ -819,24 +874,24 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
             AdapterFactory.ADAPTER_MAP.pop("mockdisabled", None)
 
         # 恢复注册表后能力清单同步消失，证明完全由注册表驱动
-        self.assertNotIn("mockthird", {item["drive_type"] for item in svc.list_drive_capabilities()})
+        self.assertNotIn("mockthird", {item["drive_type"] for item in lead_materials.list_drive_capabilities()})
 
     # ------------------------------------------------------------------
     # 10. 配置保存
     # ------------------------------------------------------------------
 
     def test_update_settings_toggle_only_keeps_materials(self) -> None:
-        before = svc.get_drama_lead_in_materials(self.db)
-        result = svc.update_drama_lead_in_settings(self.db, {"enabled": False, "materials": []})
+        before = lead_settings.get_drama_lead_in_materials(self.db)
+        result = lead_settings.update_drama_lead_in_settings(self.db, {"enabled": False, "materials": []})
 
         self.assertFalse(result["enabled"])
-        self.assertFalse(svc.get_drama_lead_in_enabled(self.db))
-        self.assertEqual(svc.get_drama_lead_in_materials(self.db), before)
+        self.assertFalse(lead_settings.get_drama_lead_in_enabled(self.db))
+        self.assertEqual(lead_settings.get_drama_lead_in_materials(self.db), before)
         self.assertEqual(before["quark"]["config_version"], 1)
         self.adapter.lead_in_resolve_material.assert_not_called()
 
     def test_update_settings_blank_passcode_keeps_original(self) -> None:
-        result = svc.update_drama_lead_in_settings(
+        result = lead_settings.update_drama_lead_in_settings(
             self.db,
             {
                 "enabled": True,
@@ -855,7 +910,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
             self.adapter.lead_in_resolve_material.call_args[0],
             ("https://pan.quark.cn/s/newurl", "qpass", "qmat1"),
         )
-        stored = svc.get_drama_lead_in_materials(self.db)
+        stored = lead_settings.get_drama_lead_in_materials(self.db)
         self.assertEqual(stored["quark"]["passcode"], "qpass")
         self.assertEqual(stored["quark"]["config_version"], 2)
         self.assertEqual(stored["quark"]["shareurl"], "https://pan.quark.cn/s/newurl")
@@ -866,8 +921,8 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         self.assertEqual(drives["quark"]["config_version"], 2)
 
     def test_update_settings_invalid_link_keeps_db(self) -> None:
-        before_materials = svc.get_drama_lead_in_materials(self.db)
-        self.assertTrue(svc.get_drama_lead_in_enabled(self.db))
+        before_materials = lead_settings.get_drama_lead_in_materials(self.db)
+        self.assertTrue(lead_settings.get_drama_lead_in_enabled(self.db))
         self.adapter.lead_in_resolve_material.side_effect = None
         self.adapter.lead_in_resolve_material.return_value = {
             "code": "LEAD_IN_MATERIAL_UNAVAILABLE",
@@ -875,7 +930,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
             "data": None,
         }
         with self.assertRaises(ApiError) as ctx:
-            svc.update_drama_lead_in_settings(
+            lead_settings.update_drama_lead_in_settings(
                 self.db,
                 {
                     "enabled": False,
@@ -894,8 +949,8 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "LEAD_IN_MATERIAL_UNAVAILABLE")
         self.assertEqual(ctx.exception.http_status, 400)
         self.assertIn("链接", ctx.exception.message)
-        self.assertEqual(svc.get_drama_lead_in_materials(self.db), before_materials)
-        self.assertTrue(svc.get_drama_lead_in_enabled(self.db))
+        self.assertEqual(lead_settings.get_drama_lead_in_materials(self.db), before_materials)
+        self.assertTrue(lead_settings.get_drama_lead_in_enabled(self.db))
 
     # ------------------------------------------------------------------
     # 11. 失败不得误报 added
@@ -909,7 +964,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
             "message": "目录不存在",
             "data": None,
         }
-        result = svc.confirm_task_lead_in(self.db, self.quark_task, token)
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, token)
 
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["message"], "任务保存目录不存在")
@@ -922,7 +977,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
     def test_confirm_account_init_failure_marks_failed(self) -> None:
         token = self._preview_token(self.quark_task)
         self.adapter.ensure_initialized.side_effect = RuntimeError("login failed")
-        result = svc.confirm_task_lead_in(self.db, self.quark_task, token)
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.quark_task, token)
 
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["message"], "网盘账号不可用")

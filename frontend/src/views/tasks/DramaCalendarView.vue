@@ -13,7 +13,7 @@ import {
 } from '@/stores/tmdbDetailCache'
 import { loadSharedTasks } from '@/stores/taskCache'
 import type { TMDBDetail } from '@/types/media'
-import type { TaskItem } from '@/types/tasks'
+import type { TaskOverview } from '@/types/tasks'
 import { DRIVE_TYPE_META, detectDriveTypeByUrl, type DriveType } from '@/utils/driveType'
 import { resolveDramaEpisodeProgress, tvAiredEpisodesFromDetail, tvTotalEpisodesFromDetail } from '@/utils/dramaEpisodeProgress'
 import { getDramaSchedule } from '@/utils/dramaSchedule'
@@ -27,7 +27,7 @@ type CalendarEntry = {
   weekday: WeekdayKey
   taskId: number
   tmdbId: number | null
-  task: TaskItem
+  task: TaskOverview
   title: string
   posterUrl: string
   progressText: string
@@ -64,7 +64,7 @@ function posterSource(url: string) {
 }
 
 const loading = ref(false)
-const tasks = ref<TaskItem[]>([])
+const tasks = ref<TaskOverview[]>([])
 // 详情与工作台共用一份缓存；这里只维护由它派生出的日历映射
 const detailsById = tmdbDetailsById
 const derivedVersion: Record<number, number> = {}
@@ -133,7 +133,7 @@ function tvProgressPercentFromDetail(detail: any) {
   return Math.max(0, Math.min(100, pct))
 }
 
-function displayTitle(task: TaskItem, detail: TMDBDetail | null) {
+function displayTitle(task: TaskOverview, detail: TMDBDetail | null) {
   const data = detail?.data || {}
   const name = String(data?.name || data?.title || '').trim()
   if (name) return name
@@ -146,7 +146,7 @@ function nextAirDateFromDetail(detail: TMDBDetail | null) {
   return air || null
 }
 
-function progressFromDetail(task: TaskItem, detail: TMDBDetail | null) {
+function progressFromDetail(task: TaskOverview, detail: TMDBDetail | null) {
   const mt = String(task.tmdb_media_type || '').toLowerCase()
   if (mt !== 'tv') return ''
   const data = detail?.data || null
@@ -548,7 +548,7 @@ const schedules = computed(() => {
   // “下次更新/还有几天”依赖当天日期，跨午夜后要重算
   void todayKeyRef.value
   const list: Array<{
-    task: TaskItem
+    task: TaskOverview
     tmdbId: number | null
     title: string
     posterUrl: string
@@ -667,7 +667,7 @@ const schedules = computed(() => {
 })
 
 const unknownTasks = computed(() => {
-  const list: TaskItem[] = []
+  const list: TaskOverview[] = []
   for (const task of enabledDramaTasks.value) {
     const tmdbId = Number(task.tmdb_id) || 0
     const mt = String(task.tmdb_media_type || '').toLowerCase()
@@ -705,14 +705,14 @@ function scheduleGroupKey(s: { tmdbId: number | null; title: string }): string {
   return s.tmdbId ? `tmdb:${s.tmdbId}` : `title:${String(s.title || '').toLowerCase()}`
 }
 
-function driveRankOf(task: TaskItem): number {
+function driveRankOf(task: TaskOverview): number {
   const drive = detectDriveTypeByUrl(String(task.shareurl || ''))
   if (!drive) return 99
   const idx = DRIVE_ORDER.indexOf(drive)
   return idx < 0 ? 98 : idx
 }
 
-function driveLabelOf(task: TaskItem): string {
+function driveLabelOf(task: TaskOverview): string {
   const drive = detectDriveTypeByUrl(String(task.shareurl || ''))
   return drive ? DRIVE_TYPE_META[drive].label : '网盘'
 }

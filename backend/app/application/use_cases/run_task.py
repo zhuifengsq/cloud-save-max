@@ -1,27 +1,26 @@
-"""统一任务执行入口（application 用例层）。
+"""Task run orchestration: detached read plan, external engine, short writes, notification.
 
-背景：改造前 TaskExecutor 直连有 6 处——HTTP 路由、SSE worker 线程、
-APScheduler 追剧轮询、Telegram bot、分享预览、以及 services/tasks.py 里的死代码。
-每处各自决定"是否强制分享检测通知 / 是否落 TaskExecution 记录 / 是否传 ExecutionLog"，
-任何参数调整都要改多个地方。
-
-本用例把这些"触发方差异"收敛为 RunPolicy，并保证行为与改造前逐参数一致；
-开关 settings.use_unified_run_use_case=False 时走 _legacy_execute()，逐字复刻旧参数，
-便于灰度回退（见 docs/architecture-evolution-plan.md 的 S1）。
-
-边界：执行槽（task_admission.reserve）**仍留在各调用点**，不在本用例内占用——
-SSE 端点的 409/429 同步响应是既有 API 契约，不能因为收敛入口而改变；准入的统一
-抽到用例层属于后续 S2+（需先定义准入的端口），本次不涉及。
-
-分层说明：实现类通过 app.application.factories.task_executor_class() 取得（composition root）。
-因此本模块顶层不 import infrastructure / persistence，不新增跨层违规边。
-
+Production uses execute(command, policy). Admission remains at the entry so HTTP/SSE
+reject 409/429 before starting work. The deprecated run(task, ...) compatibility
+adapter retains the legacy grey-flag argument truth table for older integrations;
+production execute never restores network IO inside a database transaction when
+use_unified_run_use_case is false. Both flag values use the safe staged boundary.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import logging
+import time
+from app.application.dto.task_run import RunTaskCommand, TaskRunResult
+from app.core.runtime.tx import end_read_tx
+from app.core.errors import ApiError
+from app.domain.ports.task import TaskRunStorePort, TaskExecutionEnginePort
+from app.domain.ports.notify import NotifierPort
+from app.application import audit
+from app.application.notifications.task_notify import build_task_section, build_share_check_section, DRAMA_NOTIFY_TITLE
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 
@@ -71,18 +70,91 @@ _TRIGGER_POLICIES: dict[str, RunPolicy] = {
 
 
 class RunTaskUseCase:
-    """唯一的任务执行入口：调 TaskExecutor -> 返回 TaskExecution。
+    """Own run/recovery persistence, audit and post-commit notification decisions."""
 
-    事务仍然由调用方负责（HTTP 路由在用例返回后 commit + refresh；SSE worker 自行 commit；
-    调度器按重试语义 commit/rollback），本用例只 flush，不 commit。
-    准入（执行槽）仍由调用点负责，见模块 docstring。
-    """
-
-    def __init__(self, db: Session, *, executor_cls=None):
+    def __init__(self, db: Session, *, store: TaskRunStorePort | None = None, engine: TaskExecutionEnginePort | None = None, notifier: NotifierPort | None = None, executor_cls=None):
         self.db = db
-        # 测试注入缝：既有回归测试通过 monkeypatch 调用点模块的 TaskExecutor 注入假执行器，
-        # 调用点因此把 TaskExecutor 作为类对象传入；生产路径不传，默认用真实实现。
-        self.executor_cls = executor_cls or task_executor_class()
+        from app.application.container import task_run_store, task_execution_engine, task_run_notifier
+        self.store = store if store is not None else task_run_store(db)
+        self.engine = engine if engine is not None else task_execution_engine()
+        self.notifier = notifier if notifier is not None else task_run_notifier(db)
+        # Deprecated compatibility seam; production execute only uses assembled port instances.
+        self.executor_cls = executor_cls
+
+    def _release_read(self):
+        if self.db.new or self.db.dirty or self.db.deleted:
+            raise RuntimeError('Execution read phase contains uncommitted writes')
+        end_read_tx(self.db)
+
+    def execute(self, command: RunTaskCommand, policy: RunPolicy, log=None) -> TaskRunResult:
+        plan = self.store.prepare(command)
+        self._release_read()
+        result = self.engine.execute(plan, policy, log,
+            lambda task, execution_log, tried: self._recover(task, execution_log, tried, policy))
+        try:
+            if policy.persist_execution:
+                self.store.save(plan, result)
+            audit.write_audit_log(self.db, actor_user_id=command.actor_user_id,
+                action='task.run.preview_stream' if not policy.persist_execution else 'task.run',
+                target_type='task', target_id=str(command.task_id), ip=command.ip,
+                user_agent=command.user_agent, success=result.status == 'success', detail=result.message)
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+        if policy.persist_execution:
+            if plan.task.task_type == 'drama':
+                try:
+                    section = (build_share_check_section(plan.task, result) if policy.trigger == 'telegram'
+                               else build_task_section(plan.task, result)[0])
+                    if section:
+                        self.notifier.send(DRAMA_NOTIFY_TITLE, section, meta={'task_id':command.task_id, 'config':plan.prepared.get('notification_config', {})})
+                except Exception as exc:
+                    logger.warning('Final notification failed task_id=%s error_type=%s', command.task_id, type(exc).__name__)
+        return result
+
+    def _recover(self, task, log, tried, policy):
+        from app.application.drama_share_autoupdate import resolve_drama_shareurl_update, is_auto_update_task
+        from app.application.shareurl_update_logs import append_shareurl_update_log
+        if not is_auto_update_task(self.db, task):
+            self._release_read()
+            return False
+        self._release_read()
+        tried = tried if tried is not None else set()
+        for round_number in range(1, 5):
+            if round_number > 1:
+                time.sleep(2)
+            old = task.shareurl
+            round_tried = set(tried)
+            failure_message = '未找到可用链接'
+            try:
+                result = resolve_drama_shareurl_update(self.db, task, tried_shareurls=round_tried,
+                    release_read=self._release_read, persist=False)
+            except ApiError as exc:
+                if exc.code not in {'SEARCH_UPSTREAM_FAILED', 'SEARCH_UPSTREAM_TIMEOUT'}:
+                    raise
+                result = {'checked':True, 'updated':False}
+                failure_message = '搜索连接超时' if exc.code == 'SEARCH_UPSTREAM_TIMEOUT' else '搜索来源暂不可用'
+            self._release_read()
+            updated = bool(result.get('updated'))
+            entry = append_shareurl_update_log(task, source='auto', status='success' if updated else 'failed',
+                message='已自动更换源链接' if updated else failure_message, old_shareurl=old,
+                new_shareurl=str(result.get('new_shareurl') or ''), round_number=round_number)
+            log.line(f"自动换链 {round_number}/4: {entry['message']}")
+            if policy.persist_execution:
+                try:
+                    self.store.save_task(task)
+                    self.db.commit()
+                except BaseException:
+                    self.db.rollback()
+                    raise
+            if updated:
+                tried.update(round_tried)
+                log.line(f"OK: 自动换链成功 new={task.shareurl}")
+                return True
+            if not result.get('checked'):
+                break
+        return False
 
     def run(
         self,
@@ -103,7 +175,7 @@ class RunTaskUseCase:
                 account_manager=account_manager,
                 init_account_for_task=init_account_for_task,
             )
-        executor = self.executor_cls(self.db)
+        executor = (self.executor_cls or task_executor_class())(self.db)
         return executor.run_task(
             task,
             log=log,
@@ -116,7 +188,7 @@ class RunTaskUseCase:
 
     def _legacy_execute(self, task, policy, *, log, account_manager, init_account_for_task):
         """灰度开关为 False 时的回退路径：逐字复刻改造前 6 个调用点的实参。"""
-        executor = self.executor_cls(self.db)
+        executor = (self.executor_cls or task_executor_class())(self.db)
         trigger = policy.trigger
         if trigger in {"http", "telegram"}:
             # 旧：routes/tasks.py:220、telegram_bot/actions.py:480

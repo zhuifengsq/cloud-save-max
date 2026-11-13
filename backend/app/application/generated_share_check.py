@@ -19,8 +19,11 @@ FAILURE_STAGE = "generated_share_check"
 
 
 def read_share_check(snapshot: str | None) -> dict:
+    if isinstance(snapshot, dict):
+        check = snapshot.get(SNAPSHOT_KEY)
+        return dict(check) if isinstance(check, dict) else {}
     try:
-        data = json.loads(snapshot or "{}")
+        data = snapshot if isinstance(snapshot, dict) else json.loads(snapshot or "{}")
     except (TypeError, ValueError):
         return {}
     check = data.get(SNAPSHOT_KEY) if isinstance(data, dict) else None
@@ -81,37 +84,44 @@ def _probe(record: dict, manager) -> tuple[str, str]:
     return _map_kind(result.kind, result.message, fallback)
 
 
-def check_generated_share(db: Session, task, manager, *, always_notify: bool = False) -> dict | None:
-    """检测任务生成出来的分享链接是否还有效。
-
-    always_notify=True 时（手动点「执行」的场景），只要检测到失效就标记通知，
-    不再受「上次已判定失效就不重复提醒」的去重限制；定时任务保持去重，避免每天刷屏。
-    """
+def prepare_generated_share_check(db: Session, task) -> dict | None:
     record = get_task_share_link(task)
     if record is None:
         return None
-
     identity = {key: str(record.get(key) or "") for key in ("share_id", "saved_at")}
     last_definitive = None
+    snapshots = task_executions_repo().list_recent_adapter_snapshots(db, task_id=task.id, limit=history_limit())
+    for snapshot in snapshots:
+        previous = read_share_check(snapshot)
+        if all(previous.get(key) == value for key, value in identity.items()):
+            last_definitive = previous.get("last_definitive")
+            if last_definitive in {"valid", "invalid"}:
+                break
+    return {"record": dict(record), "identity": identity, "last_definitive": last_definitive,
+            "task_id": task.id}
+
+
+def probe_generated_share_check(plan, manager, *, always_notify=False):
+    if plan is None:
+        return None
+    last_definitive = plan["last_definitive"]
     try:
-        snapshots = task_executions_repo().list_recent_adapter_snapshots(db, task_id=task.id, limit=history_limit())
-        for snapshot in snapshots:
-            previous = read_share_check(snapshot)
-            if all(previous.get(key) == value for key, value in identity.items()):
-                last_definitive = previous.get("last_definitive")
-                if last_definitive in {"valid", "invalid"}:
-                    break
-        status, message = _probe(record, manager)
+        status, message = _probe(plan["record"], manager)
     except (OSError, TimeoutError):
         status, message = "error", "连接网盘失败或超时，稍后重试"
     except Exception:
-        logger.warning("生成的分享链接检测未完成 task_id=%s", task.id)
+        logger.warning("生成的分享链接检测未完成 task_id=%s", plan['task_id'])
         status, message = "error", "网盘暂时无法完成分享链接检测"
     return {
-        **identity,
-        "status": status,
-        "message": message,
+        **plan["identity"], "status": status, "message": message,
         "checked_at": datetime.now().astimezone().isoformat(),
         "last_definitive": status if status in {"valid", "invalid"} else last_definitive,
         "notify": status == "invalid" and (always_notify or last_definitive != "invalid"),
     }
+
+
+def check_generated_share(db: Session, task, manager, *, always_notify: bool = False):
+    from app.core.runtime.tx import end_read_tx
+    plan = prepare_generated_share_check(db, task)
+    end_read_tx(db)
+    return probe_generated_share_check(plan, manager, always_notify=always_notify)

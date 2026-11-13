@@ -33,7 +33,7 @@ def test_share_expiry_notifies_even_when_transfer_has_no_new_files():
     assert "嫁金钗" in message and "分享链接已失效" in message
 
 
-def test_history_failure_is_a_check_error():
+def test_history_database_failure_propagates():
     task = SimpleNamespace(id=12, extra_json=None)
     save_task_share_link(task, share_url="https://pan.quark.cn/s/public")
 
@@ -41,8 +41,8 @@ def test_history_failure_is_a_check_error():
         raise RuntimeError("database is locked")
 
     db = SimpleNamespace(no_autoflush=nullcontext(), scalars=unavailable)
-    check = check_generated_share(db, task, None)
-    assert check["status"] == "error" and not check["notify"]
+    with __import__("pytest").raises(RuntimeError, match="database is locked"):
+        check_generated_share(db, task, None)
 
 
 def test_baidu_probe_keeps_verify_expiry_code(monkeypatch):

@@ -47,22 +47,18 @@ def test_pending_is_never_mapped_to_invalid():
     assert _map_kind("pending", "", "fallback")[0] != "invalid"
 
 
-def test_pending_review_detected_by_adapter_classification():
-    fake_self = SimpleNamespace(adapter=_PendingAdapter())
-    assert DramaTaskExecutor._is_share_pending_review(
-        fake_self, {"status": 200, "code": -7, "message": ""}
-    ) is True
-    assert DramaTaskExecutor._is_share_pending_review(
-        fake_self, {"status": 200, "code": -1, "message": "分享链接不存在"}
-    ) is False
+def test_pending_review_detected_at_baidu_transfer_boundary():
+    from app.infrastructure.drive.transfer import _failed
+    result = _failed(_PendingAdapter(), {"status": 200, "code": -7}, review_errno=True)
+    assert result.state == "pending" and result.kind == "pending"
+    result = _failed(_PendingAdapter(), {"code": -1, "message": "分享链接不存在"}, review_errno=True)
+    assert result.state == "failed"
 
 
-def test_pending_review_falls_back_to_message_when_adapter_raises():
-    fake_self = SimpleNamespace(adapter=_BrokenAdapter())
-    assert DramaTaskExecutor._is_share_pending_review(
-        fake_self, {"message": "分享文件夹等待审核中"}
-    ) is True
-    assert DramaTaskExecutor._is_share_pending_review(fake_self, {"message": "转存失败"}) is False
+def test_pending_review_falls_back_when_adapter_raises():
+    from app.infrastructure.drive.transfer import _failed
+    assert _failed(_BrokenAdapter(), {"message": "分享文件夹等待审核中"}, review_errno=True).state == "pending"
+    assert _failed(_BrokenAdapter(), {"message": "转存失败"}, review_errno=True).state == "failed"
 
 
 def test_pending_share_check_does_not_notify():

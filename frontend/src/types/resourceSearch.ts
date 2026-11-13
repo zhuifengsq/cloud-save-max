@@ -56,6 +56,8 @@ export type TaskSuggestionItem = {
 
 export type TaskSuggestionResponse = {
   success: boolean
+  partial: boolean
+  warnings: string[]
   data: TaskSuggestionItem[]
   message?: string | null
 }

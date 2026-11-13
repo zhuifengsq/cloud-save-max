@@ -320,3 +320,63 @@ def drama_parse_size():
     from app.infrastructure.execution.drama_executor import _parse_size
 
     return _parse_size
+
+
+def task_share_store(db):
+    from app.infrastructure.drive.task_share import SqlTaskShareStore
+    return SqlTaskShareStore(db)
+
+
+def task_share_gateway(plan):
+    from app.infrastructure.drive.task_share import open_task_share_gateway
+    return open_task_share_gateway(plan)
+
+
+def create_task_share_use_case(db):
+    from app.application.use_cases.create_task_share import CreateTaskShareUseCase
+    return CreateTaskShareUseCase(db)
+
+
+def task_reads_repo():
+    from app.infrastructure.persistence.repositories import task_reads
+    return task_reads
+
+
+def execution_reads_repo():
+    from app.infrastructure.persistence.repositories import task_executions
+    return task_executions
+
+
+def task_lead_in_use_case(db):
+    from app.application.use_cases.task_lead_in import TaskLeadInUseCase
+    return TaskLeadInUseCase(db)
+
+
+def lead_in_provider():
+    from app.infrastructure.drive.lead_in_provider import LeadInProvider
+    return LeadInProvider()
+
+
+def task_run_store(db):
+    from app.infrastructure.execution.task_run_stages import SqlTaskRunStore
+    return SqlTaskRunStore(db)
+
+
+def task_execution_engine():
+    from app.infrastructure.execution.task_run_stages import PreparedTaskEngine
+    return PreparedTaskEngine()
+
+
+def task_run_notifier(db):
+    from app.infrastructure.execution.task_run_notifier import TaskRunNotifier
+    return TaskRunNotifier(db)
+
+
+def run_task_use_case(db, *, notifier=None):
+    from app.application.use_cases.run_task import RunTaskUseCase
+    return RunTaskUseCase(db, notifier=notifier)
+
+
+def task_run_notification_batch():
+    from app.application.notifications.task_batch import TaskNotificationBatch
+    return TaskNotificationBatch(task_run_notifier(None))

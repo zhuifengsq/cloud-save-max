@@ -19,3 +19,5 @@ class TaskSuggestionListOut(BaseModel):
     success: bool = True
     data: list[TaskSuggestionItemOut] = []
     message: str | None = None
+    partial: bool = False
+    warnings: list[str] = Field(default_factory=list)

@@ -67,7 +67,7 @@ export async function uploadPythonSearchPlugin(file: File) {
   return data
 }
 
-export async function fetchTaskSuggestions(q: string, d: number, drive_type?: string | null, search_filter?: string, search_exclude?: string, search_date_from?: string, search_filter_mode?: string, search_exclude_mode?: string, show_blocked?: boolean) {
+export async function fetchTaskSuggestions(q: string, d: number, drive_type?: string | null, search_filter?: string, search_exclude?: string, search_date_from?: string, search_filter_mode?: string, search_exclude_mode?: string, show_blocked?: boolean): Promise<TaskSuggestionResponse> {
   const params: any = { q, d }
   const dt = String(drive_type || '').trim()
   if (dt) params.drive_type = dt

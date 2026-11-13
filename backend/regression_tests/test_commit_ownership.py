@@ -28,21 +28,27 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 # file(相对 app/) -> (预算, 归属类别, 为什么必须由它提交)
 COMMIT_BUDGET: dict[str, tuple[int, str, str]] = {
-    "infrastructure/persistence/session.py": (1, "infra", "commit_with_locked_retry 的实现本体"),
-    "core/runtime/tx.py": (1, "infra", "end_read_tx 的实现本体（platform 层，零 ORM 依赖）"),
-    "main.py": (2, "app-lifecycle", "lifespan: 权限种子初始化、启动时执行记录清理"),
-    "scripts/ensure_admin.py": (1, "app-lifecycle", "运维脚本：创建管理员后落盘"),
-    "scripts/init_db.py": (1, "app-lifecycle", "运维脚本：初始化建表后落盘"),
-    "infrastructure/scheduling/task_scheduler.py": (14, "background-owned", "后台调度任务各自拥有工作单元"),
-    "infrastructure/execution/task_executor.py": (1, "background-owned", "自动换链每轮独立落盘，刷新卡片且不占写锁"),
-    "infrastructure/notifications/telegram_bot_manager.py": (1, "background-owned", "轮询线程启停状态落盘"),
-    "application/telegram_bot/handlers.py": (50, "progressive", "每次 update 一个工作单元，入口提交+中间渐进持久化"),
-    "application/telegram_bot/actions.py": (20, "progressive", "同上，动作执行后立即持久化以便卡片刷新"),
-    "application/drama_lead_in.py": (2, "progressive", "清理过期记录、_store_result 保存记录并隔离异常"),
-    "application/share_preview_batch.py": (1, "progressive", "_short_tx 使用独立会话，避免拖长调用方的读事务"),
+    'infrastructure/persistence/session.py': (1, 'infra', 'commit_with_locked_retry 的实现本体'),
+    'core/runtime/tx.py': (1, 'infra', 'end_read_tx 的实现本体（platform 层，零 ORM 依赖）'),
+    'main.py': (2, 'app-lifecycle', 'lifespan: 权限种子初始化、启动时执行记录清理'),
+    'scripts/ensure_admin.py': (1, 'app-lifecycle', '运维脚本：创建管理员后落盘'),
+    'scripts/init_db.py': (1, 'app-lifecycle', '运维脚本：初始化建表后落盘'),
+    'infrastructure/scheduling/task_scheduler.py': (13, 'background-owned', '后台调度任务各自拥有工作单元'),
+    'infrastructure/notifications/telegram_bot_manager.py': (1, 'background-owned', '轮询线程启停状态落盘'),
+    'application/telegram_bot/actions.py': (19, 'progressive', '同上，动作执行后立即持久化以便卡片刷新'),
+    'application/share_preview_batch.py': (1, 'progressive', '_short_tx 使用独立会话，避免拖长调用方的读事务'),
+    'application/telegram_bot/account_handlers.py': (4, 'progressive', 'Telegram 交互会话状态分阶段落盘，职责从 handlers 迁移'),
+    'application/telegram_bot/dispatch.py': (2, 'progressive', 'Telegram 交互会话状态分阶段落盘，职责从 handlers 迁移'),
+    'application/telegram_bot/editor.py': (26, 'progressive', 'Telegram 交互会话状态分阶段落盘，职责从 handlers 迁移'),
+    'application/telegram_bot/search_handlers.py': (10, 'progressive', 'Telegram 交互会话状态分阶段落盘，职责从 handlers 迁移'),
+    'application/telegram_bot/settings_handlers.py': (3, 'progressive', 'Telegram 交互会话状态分阶段落盘，职责从 handlers 迁移'),
+    'application/telegram_bot/task_handlers.py': (3, 'progressive', 'Telegram 交互会话状态分阶段落盘，职责从 handlers 迁移'),
+    'application/telegram_bot/transport.py': (2, 'progressive', 'Telegram 交互会话状态分阶段落盘，职责从 handlers 迁移'),
+    'application/use_cases/task_lead_in.py': (2, 'progressive', '引流配置/确认用例的短事务边界，从旧服务迁移'),
+    'application/use_cases/run_task.py': (2, 'progressive', '执行用例拥有最终结果与自动换链逐轮短事务，迁移旧执行器/调度/TG提交'),
 }
 
-TOTAL_BUDGET = 95
+TOTAL_BUDGET = 94
 
 # 允许直接实例化 SessionLocal 的文件（旁路会话必须登记理由；路由层只允许 SSE 流）。
 SESSION_LOCAL_ALLOWED: dict[str, str] = {

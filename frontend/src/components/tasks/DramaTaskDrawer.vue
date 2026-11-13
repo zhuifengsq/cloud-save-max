@@ -3,7 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 
 import { fetchTMDBCredits, fetchTMDBDetail, searchTMDB } from '@/api/media'
-import { browseDrive, deleteDriveFiles, fetchMagicRegex, fetchTasks, mkdirDrive, previewShare, validateShareLinksStream } from '@/api/tasks'
+import { browseDrive, deleteDriveFiles, fetchMagicRegex, mkdirDrive, previewShare, validateShareLinksStream } from '@/api/tasks'
 import { fetchTMDBConfig } from '@/api/tmdb'
 import { fetchTaskSuggestions } from '@/api/resourceSearch'
 import { fetchSharerFilterSettings } from '@/api/systemSettings'
@@ -12,7 +12,9 @@ import type { TaskTemplate } from '@/api/taskTemplates'
 import type { DriveAccountItem } from '@/types/extensions'
 import type { TMDBBrief } from '@/types/media'
 import type { TaskSuggestionItem } from '@/types/resourceSearch'
-import type { DriveBrowseItem, MagicRegexRule, SharePreviewItem, TaskItem } from '@/types/tasks'
+import { loadSharedTasks } from '@/stores/taskCache'
+import type { TaskOverview, TaskDetail } from '@/types/tasks'
+import type { DriveBrowseItem, MagicRegexRule, SharePreviewItem } from '@/types/tasks'
 import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 import { resolveDramaEpisodeProgress } from '@/utils/dramaEpisodeProgress'
@@ -45,7 +47,7 @@ type TaskFormPayload = {
 const props = withDefaults(
   defineProps<{
     modelValue: boolean
-    task?: TaskItem | null
+    task?: TaskDetail | null
     accounts: DriveAccountItem[]
     submitting?: boolean
     presetTaskname?: string
@@ -137,6 +139,7 @@ const taskSuggestions = reactive({
   searchTimer: null as any,
   focused: false,
   notice: '' as string,
+  error: false,
   lastQuery: '' as string,
   lastDeep: 0 as 0 | 1,
   selectedItem: null as TaskSuggestionItemExt | null,
@@ -231,7 +234,7 @@ const saveAuto = reactive({
   touched: false,
   lastApplied: '' as string,
   tasksLoading: false,
-  tasks: null as TaskItem[] | null,
+  tasks: null as TaskOverview[] | null,
   tmdbDetailCache: {} as Record<string, any>,
   folderNameCache: {} as Record<string, string>,
 })
@@ -312,6 +315,7 @@ function resetSuggestions() {
   taskSuggestions.items = []
   taskSuggestions.focused = false
   taskSuggestions.notice = ''
+  taskSuggestions.error = false
   taskSuggestions.lastQuery = ''
   taskSuggestions.lastDeep = 0
   taskSuggestions.selectedItem = null
@@ -600,6 +604,7 @@ async function searchSuggestions(deep: 0 | 1) {
   taskSuggestions.lastQuery = q
   taskSuggestions.lastDeep = deep
   taskSuggestions.notice = ''
+  taskSuggestions.error = false
   taskSuggestions.runId += 1
   const runId = taskSuggestions.runId
   try {
@@ -610,7 +615,7 @@ async function searchSuggestions(deep: 0 | 1) {
     const data = await fetchTaskSuggestions(q, deep, driveType, state.addition?.search_filter || '', state.addition?.search_exclude || '', state.addition?.search_date_from || '', state.addition?.search_filter_mode || '', state.addition?.search_exclude_mode || '', state.addition?.show_blocked)
     if (runId !== taskSuggestions.runId) return
     const rawItems = (data.data || []).filter((x) => x && x.shareurl)
-    taskSuggestions.notice = String((data as any)?.message || '').trim()
+    taskSuggestions.notice = [data.partial ? '部分来源暂不可用' : '', data.message || ''].filter(Boolean).join('；')
     // 先不显示结果，等验证完才增量显示有效的（和夸克自动转存一致）
     taskSuggestions.items = []
     taskSuggestions.visible = true
@@ -619,6 +624,13 @@ async function searchSuggestions(deep: 0 | 1) {
     } else {
       taskSuggestions.visible = true
     }
+  } catch {
+    if (runId !== taskSuggestions.runId) return
+    taskSuggestions.items = []
+    taskSuggestions.verifying = false
+    taskSuggestions.error = true
+    taskSuggestions.notice = '搜索失败，请稍后重试'
+    taskSuggestions.visible = true
   } finally {
     if (runId === taskSuggestions.runId) {
       taskSuggestions.loading = false
@@ -857,7 +869,7 @@ async function openCopywriting() {
   const baseName = String(state.taskname || '').trim()
   try {
     if (baseName) {
-      const all = await fetchTasks()
+      const all = await loadSharedTasks({maxAgeMs: 30000})
       const sameName = all.filter(
         (item) => item.task_type === 'drama' && String(item.taskname || '').trim() === baseName,
       )
@@ -1043,7 +1055,7 @@ function driveTypeForAccountName(name: string | null | undefined) {
   return found ? String(found.drive_type || '').trim() || null : null
 }
 
-function driveTypeForTask(task: TaskItem) {
+function driveTypeForTask(task: TaskOverview) {
   const byAccount = driveTypeForAccountName(task.account_name)
   if (byAccount) return byAccount
   const byUrl = detectDriveTypeByUrl(task.shareurl)
@@ -1101,7 +1113,7 @@ function categoryFromSavepath(savepath: string) {
 
 // 历史任务的分类以它自己关联的 TMDB 条目为准（目录名不固定，不能靠名字判断），
 // 拿不到详情时再退回路径名、最后退回 tmdb_media_type
-async function taskCategory(task: TaskItem) {
+async function taskCategory(task: TaskOverview) {
   const mt = String(task.tmdb_media_type || '').toLowerCase()
   const id = Number(task.tmdb_id) || 0
   if (id > 0 && (mt === 'movie' || mt === 'tv')) {
@@ -1120,7 +1132,7 @@ async function ensureTasksLoaded() {
   if (saveAuto.tasksLoading) return saveAuto.tasks || []
   saveAuto.tasksLoading = true
   try {
-    const data = await fetchTasks()
+    const data = await loadSharedTasks({maxAgeMs: 30000})
     saveAuto.tasks = Array.isArray(data) ? data : []
     return saveAuto.tasks
   } catch {
@@ -2042,6 +2054,10 @@ async function submitSaveTemplate() {
           <div v-if="taskSuggestions.visible" class="task-suggestions">
             <div class="task-suggestions__tip">
               <span v-if="taskSuggestions.verifying">正在检查链接有效性...</span>
+              <span v-else-if="taskSuggestions.error">
+                {{ taskSuggestions.notice }}
+                <el-button link type="primary" :disabled="taskSuggestions.loading" @mousedown.prevent @click="searchSuggestions(taskSuggestions.lastDeep)">重试</el-button>
+              </span>
               <span v-else>
                 {{
                   taskSuggestions.notice

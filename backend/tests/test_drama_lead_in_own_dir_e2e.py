@@ -34,7 +34,11 @@ from app.schemas.drama_lead_in import (
     DramaLeadInMaterialIn,
     DramaLeadInSettingsUpdateIn,
 )
-from app.application import drama_lead_in as svc
+import app.application.lead_in.settings as lead_settings
+import app.application.lead_in.tokens as lead_tokens
+import app.application.lead_in.materials as lead_materials
+import app.application.lead_in.records as lead_records
+import app.application.use_cases.task_lead_in as lead_usecase
 
 DRIVE_TYPE = "mockbrowse"
 NO_BROWSE_DRIVE_TYPE = "mocknobrowse"
@@ -284,7 +288,7 @@ class DramaLeadInOwnDirE2ETests(unittest.TestCase):
         return adapter
 
     def _list_dir(self, dir_path: str, *, drive_type: str = DRIVE_TYPE, account_name: str = ACCOUNT):
-        return svc.list_drama_lead_in_own_dir(self.db, drive_type, account_name, dir_path)
+        return lead_materials.list_drama_lead_in_own_dir(self.db, drive_type, account_name, dir_path)
 
     def _invoke_list_endpoint(self, payload_data: dict):
         route = _routes_by_path(settings_route.router).get(("/drama-lead-in/own-file/list", "POST"))
@@ -325,7 +329,7 @@ class DramaLeadInOwnDirE2ETests(unittest.TestCase):
         return settings_route.put_drama_lead_in_settings(payload, _request(), _current_user(), self.db)
 
     def _settings_snapshot(self) -> str:
-        return json.dumps(svc.get_drama_lead_in_materials(self.db), ensure_ascii=False, sort_keys=True)
+        return json.dumps(lead_settings.get_drama_lead_in_materials(self.db), ensure_ascii=False, sort_keys=True)
 
     def _audit_actions(self) -> list[str]:
         return [row.action for row in self.db.query(AuditLog).all()]
@@ -390,7 +394,7 @@ class DramaLeadInOwnDirE2ETests(unittest.TestCase):
         # 前端回填后调用现有 own-file resolve 校验。
         resolve_route = _routes_by_path(settings_route.router).get(("/drama-lead-in/own-file/resolve", "POST"))
         self.assertIsNotNone(resolve_route, "目录浏览不得移除现有 own-file resolve 接口")
-        file_info = svc.resolve_drama_lead_in_own_file(self.db, DRIVE_TYPE, ACCOUNT, selected["path"])
+        file_info = lead_materials.resolve_drama_lead_in_own_file(self.db, DRIVE_TYPE, ACCOUNT, selected["path"])
         self.assertFalse(file_info["file"]["dir"])
         self.assertEqual(file_info["file"]["path"], selected["path"])
 
@@ -506,7 +510,7 @@ class DramaLeadInOwnDirE2ETests(unittest.TestCase):
         self.db.add(account)
         self.db.commit()
 
-        file_info = svc.resolve_drama_lead_in_own_file(
+        file_info = lead_materials.resolve_drama_lead_in_own_file(
             self.db, NO_BROWSE_DRIVE_TYPE, "nobrowse-account", EXISTING_MATERIAL_PATH
         )
         self.assertEqual(file_info["file"]["path"], EXISTING_MATERIAL_PATH)

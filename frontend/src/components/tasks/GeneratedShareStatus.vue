@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-import type { TaskExecutionItem, TaskShareLink } from '@/types/tasks'
+import type { TaskExecutionSummary, TaskShareLink } from '@/types/tasks'
 
 const props = defineProps<{
   link: TaskShareLink | null
-  executions?: TaskExecutionItem[]
+  executions?: TaskExecutionSummary[]
 }>()
 
 const check = computed(() => {

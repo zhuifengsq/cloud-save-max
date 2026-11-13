@@ -8,6 +8,10 @@
 
 from __future__ import annotations
 
+from app.application.dto.task_run import RunTaskCommand
+from app.application.container import run_task_use_case
+
+
 import asyncio
 import json
 import logging
@@ -19,17 +23,14 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
+from app.application.use_cases.run_task import RunPolicy
 from app.api.deps import CurrentUser, get_current_user_scoped, require_permissions_scoped
 from app.core.permissions import TASK_RUN
 from app.application.container import SessionLocal, commit, tasks_repo
 from app.application.container import execution_log_cls as _acc_ExecutionLog; ExecutionLog = _acc_ExecutionLog()
 from app.application.container import task_admission_service as _acc_task_admission; task_admission = _acc_task_admission()
-from app.application.container import task_executor_cls as _acc_TaskExecutor; TaskExecutor = _acc_TaskExecutor()
 from app.schemas.task import TaskCreateIn
 from app.application import audit
-from app.application.notifications.sender import send_runtime
-from app.application.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
 from app.api.presenters.task import execution_out
 from app.application.queries.task_views import execution_view
 from app.application.tasks import get_task
@@ -132,6 +133,9 @@ def _stream_response(q: _SseQueue, init_payload: dict) -> StreamingResponse:
 
 @router.post('/{task_id:int}/run/stream', dependencies=[Depends(require_permissions_scoped(TASK_RUN))])
 async def post_run_task_stream(request: Request, task_id: int, current: CurrentUser = Depends(get_current_user_scoped)):
+    actor_id = int(current.user.id)
+    request_ip = request.client.host if request.client else None
+    request_agent = request.headers.get('user-agent')
     def _prepare() -> dict:
         with SessionLocal() as adb:
             task = get_task(adb, task_id)
@@ -140,17 +144,6 @@ async def post_run_task_stream(request: Request, task_id: int, current: CurrentU
                 "taskname": str(task.taskname),
                 "started_at": datetime.now().isoformat(),
             }
-            audit.write_audit_log(
-                adb,
-                actor_user_id=current.user.id,
-                action='task.run.stream',
-                target_type='task',
-                target_id=str(payload["task_id"]),
-                ip=request.client.host if request.client else None,
-                user_agent=request.headers.get('user-agent'),
-                success=True,
-            )
-            commit(adb)
             return payload
 
     slot = task_admission.reserve(task_id)
@@ -172,17 +165,11 @@ async def post_run_task_stream(request: Request, task_id: int, current: CurrentU
         with SessionLocal() as wdb:
             log = ExecutionLog(emit_line=emit_line, emit_stage=emit_stage)
             try:
-                wtask = get_task(wdb, task_id)
-                execution = RunTaskUseCase(wdb, executor_cls=TaskExecutor).run(wtask, RunPolicy.for_trigger('sse'), log=log)
-                commit(wdb)
-                wdb.refresh(execution)
-                if str(getattr(wtask, "task_type", "") or "") == "drama":
-                    try:
-                        section, should_notify = build_task_section(wtask, execution)
-                        if should_notify:
-                            send_runtime(wdb, DRAMA_NOTIFY_TITLE, section)
-                    except Exception:
-                        pass
+                execution = run_task_use_case(wdb).execute(
+                    RunTaskCommand(task_id, actor_user_id=actor_id,
+                        ip=request_ip,
+                        user_agent=request_agent),
+                    RunPolicy.for_trigger('sse'), log=log)
                 q.put(
                     (
                         "done",
@@ -229,6 +216,9 @@ async def post_run_task_stream(request: Request, task_id: int, current: CurrentU
 
 @router.post('/run/stream', dependencies=[Depends(require_permissions_scoped(TASK_RUN))])
 async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateIn, current: CurrentUser = Depends(get_current_user_scoped)):
+    actor_id = int(current.user.id)
+    request_ip = request.client.host if request.client else None
+    request_agent = request.headers.get('user-agent')
     import uuid
 
     def _prepare() -> dict:
@@ -239,18 +229,6 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
                 "started_at": datetime.now().isoformat(),
                 "preview": True,
             }
-            audit.write_audit_log(
-                adb,
-                actor_user_id=current.user.id,
-                action='task.run.preview_stream',
-                target_type='task',
-                target_id='0',
-                ip=request.client.host if request.client else None,
-                user_agent=request.headers.get('user-agent'),
-                success=True,
-                detail=str(payload.taskname or ""),
-            )
-            commit(adb)
             return payload_out
 
     slot = task_admission.reserve(None)
@@ -273,7 +251,7 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
             log = ExecutionLog(emit_line=emit_line, emit_stage=emit_stage)
             try:
                 task_uid = (str(payload.task_uid or "").strip() or f"preview-{uuid.uuid4().hex}")
-                wtask = tasks_repo().build_task_row(
+                preview = dict(
                     task_uid=task_uid,
                     task_type=str(payload.task_type or "generic"),
                     taskname=str(payload.taskname or ""),
@@ -289,8 +267,9 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
                     addition_json=json.dumps(payload.addition or {}, ensure_ascii=False),
                     extra_json=json.dumps(payload.extra or {}, ensure_ascii=False),
                 )
-                wtask.id = 0
-                execution = RunTaskUseCase(wdb, executor_cls=TaskExecutor).run(wtask, RunPolicy.for_trigger('preview'), log=log)
+                execution = run_task_use_case(wdb).execute(
+                    RunTaskCommand(0, preview=preview, actor_user_id=actor_id, ip=request_ip, user_agent=request_agent),
+                    RunPolicy.for_trigger('preview'), log=log)
                 q.put(
                     (
                         "done",

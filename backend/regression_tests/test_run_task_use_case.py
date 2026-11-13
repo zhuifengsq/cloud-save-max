@@ -142,22 +142,8 @@ def test_unified_path_derives_arguments_from_policy(fake_deps, monkeypatch):
     }
 
 
-def test_default_executor_is_task_executor():
-    """生产路径不传 executor_cls 时使用真实 TaskExecutor（调用点仍可注入假实现）。"""
-    from app.infrastructure.execution.task_executor import TaskExecutor
-
+def test_default_execution_dependency_is_an_assembled_port_instance():
+    from app.infrastructure.execution.task_run_stages import PreparedTaskEngine
     use_case = RunTaskUseCase(db=object())
-    assert use_case.executor_cls is TaskExecutor
-
-
-def test_legacy_and_unified_share_one_entry(fake_deps, monkeypatch):
-    """灰度开关只切换参数来源，执行入口唯一：两种模式都必须命中同一个假执行器。"""
-    _set_flag(monkeypatch, True)
-    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
-        fake_deps.task, RunPolicy.for_trigger("http")
-    )
-    _set_flag(monkeypatch, False)
-    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
-        fake_deps.task, RunPolicy.for_trigger("http")
-    )
-    assert len(_RecordingExecutor.calls) == 2
+    assert isinstance(use_case.engine, PreparedTaskEngine)
+    assert use_case.executor_cls is None

@@ -12,7 +12,7 @@ from app.api.routes.tasks_stream import _SseQueue
 from app.core.errors import ApiError
 from app.infrastructure.scheduling import task_scheduler
 from app.infrastructure.scheduling.task_admission import TaskAdmission
-from app.application.telegram_bot import handlers
+from app.application.telegram_bot import task_handlers
 
 
 def test_slots_reject_duplicates_and_previews_when_full_then_release_after_failure():
@@ -52,7 +52,7 @@ def test_background_worker_holds_slot_until_it_finishes():
 
 def test_sse_disconnect_keeps_shared_slot_and_blocks_other_entries(monkeypatch):
     admission = TaskAdmission(max_active=1)
-    for module in (tasks_stream, tasks, task_scheduler, handlers):
+    for module in (tasks_stream, tasks, task_scheduler, task_handlers):
         monkeypatch.setattr(module, "task_admission", admission)
 
     started = Event()
@@ -68,9 +68,10 @@ def test_sse_disconnect_keeps_shared_slot_and_blocks_other_entries(monkeypatch):
         def execute(self, stmt):
             return SimpleNamespace(all=lambda: [(17, "uid", "", "")])
 
-    class Executor:
+    class UseCase:
         def __init__(self, db): pass
-        def run_task(self, task, log=None, **kwargs):
+        def execute(self, command, policy, log=None):
+            task = SimpleNamespace(id=command.task_id)
             effects.append(task.id)
             started.set()
             assert finish.wait(2)
@@ -83,7 +84,7 @@ def test_sse_disconnect_keeps_shared_slot_and_blocks_other_entries(monkeypatch):
     monkeypatch.setattr(tasks_stream, "SessionLocal", lambda: nullcontext(FakeDB()))
     monkeypatch.setattr(tasks_stream, "get_task", lambda db, task_id: task)
     monkeypatch.setattr(tasks_stream.audit, "write_audit_log", lambda *args, **kwargs: None)
-    monkeypatch.setattr(tasks_stream, "TaskExecutor", Executor)
+    monkeypatch.setattr(tasks_stream, "run_task_use_case", lambda db, **kwargs: UseCase(db))
     monkeypatch.setattr(tasks_stream, "execution_out", lambda row: SimpleNamespace(model_dump=lambda **kw: {}))
     monkeypatch.setattr(task_scheduler, "SessionLocal", lambda: nullcontext(FakeDB()))
     monkeypatch.setattr(task_scheduler, "DatabaseAccountManager", lambda db: None)
@@ -97,8 +98,9 @@ def test_sse_disconnect_keeps_shared_slot_and_blocks_other_entries(monkeypatch):
             tasks.post_run_task(request, 17, user, FakeDB())
         task_scheduler.run_drama_tasks()
         telegram_messages = []
-        bot = SimpleNamespace(_edit_or_send=lambda chat, text, **kwargs: telegram_messages.append(text))
-        handlers.TelegramBotHandler._run_async(bot, 1, 1, 18, "pending", lambda db: effects.append(18), "done")
+        transport = SimpleNamespace(edit_or_send=lambda chat, text, **kwargs: telegram_messages.append(text))
+        bot = task_handlers.TaskHandlers(SimpleNamespace(transport=transport))
+        bot.run_async(1, 1, 18, "pending", lambda db: effects.append(18), "done")
         assert telegram_messages == ["正在执行的任务过多，请稍后再试"]
         assert effects == [17]
         finish.set()
@@ -130,17 +132,18 @@ def test_scheduler_does_not_repeat_cloud_effect_after_a_database_lock(monkeypatc
         def rollback(self):
             pass
 
-    class Executor:
+    class UseCase:
         def __init__(self, db):
             pass
 
-        def run_task(self, task, **kwargs):
+        def execute(self, command, policy, log=None):
+            task = SimpleNamespace(id=command.task_id)
             effects.append(task.id)
             raise OperationalError(None, None, RuntimeError("database is locked"))
 
     monkeypatch.setattr(task_scheduler, "SessionLocal", lambda: nullcontext(FakeDB()))
     monkeypatch.setattr(task_scheduler, "DatabaseAccountManager", lambda db: None)
-    monkeypatch.setattr(task_scheduler, "TaskExecutor", Executor)
+    monkeypatch.setattr(task_scheduler, "run_task_use_case", lambda db, **kwargs: UseCase(db))
     monkeypatch.setattr(task_scheduler, "task_admission", TaskAdmission(max_active=1))
     task_scheduler.run_drama_tasks()
     assert effects == [17]

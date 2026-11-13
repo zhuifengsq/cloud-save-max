@@ -19,7 +19,10 @@ async function generateDraft({ saved, detail = {}, mediaType = 'tv', detailFails
     ...progress,
     state: { tmdb_id: 123, tmdb_media_type: mediaType, taskname: '测试剧', extra: { saved_latest: { episode: saved } } },
     fetchTMDBDetail: async () => { if (detailFails) throw new Error('offline'); return { data: detail } },
-    fetchTasks: async () => [],
+    loadSharedTasks: async () => [],
+    categoryFromTmdb: () => '国剧',
+    categoryFromSavepath: () => '国剧',
+    fetchTMDBCredits: async () => [],
     props: { accounts: [] },
     detectDriveTypeByUrl: () => '',
     sessionStorage: { setItem: (_, value) => { draft = JSON.parse(value) } },
@@ -70,6 +73,7 @@ function weiboTitle(episode) {
     computed: (fn) => ({ value: fn() }),
     draft: { title: '测试剧', taskname: '', episode },
     weiboQuality: { value: '4K' },
+    episodeUnit: { value: '集' },
   })
 }
 

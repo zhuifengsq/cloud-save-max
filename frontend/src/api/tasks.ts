@@ -1,3 +1,4 @@
+import type { TaskOverview, TaskDetail, TaskPage, TaskReadFilters, TaskOrderIndexItem, TaskExecutionPage, TaskExecutionDetail } from '@/types/tasks'
 import { http } from '@/api/http'
 import { useAuthStore } from '@/stores/auth'
 import type {
@@ -316,4 +317,24 @@ export function validateShareLinksStream(
       if (err.name !== 'AbortError') onError(err)
     })
   return controller
+}
+
+
+export async function fetchTaskPage(params: TaskReadFilters & { page: number; page_size: number; ids?: string }): Promise<TaskPage> {
+  return (await http.get<TaskPage>('/tasks/page', { params })).data
+}
+export async function fetchTaskOrderIndex(params: TaskReadFilters): Promise<TaskOrderIndexItem[]> {
+  return (await http.get<{items: TaskOrderIndexItem[]}>('/tasks/order-index', { params })).data.items
+}
+export async function fetchTaskOverview(): Promise<TaskOverview[]> {
+  return (await http.get<TaskOverview[]>('/tasks/overview')).data
+}
+export async function fetchTaskDetail(taskId: number): Promise<TaskDetail> {
+  return (await http.get<TaskDetail>(`/tasks/${taskId}`)).data
+}
+export async function fetchTaskExecutions(taskId: number, page = 1): Promise<TaskExecutionPage> {
+  return (await http.get<TaskExecutionPage>(`/tasks/${taskId}/executions`, {params: {page, page_size: 20}})).data
+}
+export async function fetchTaskExecutionDetail(taskId: number, executionId: number, log_offset = 0): Promise<TaskExecutionDetail> {
+  return (await http.get<TaskExecutionDetail>(`/tasks/${taskId}/executions/${executionId}`, {params: {log_offset, log_limit: 65536}})).data
 }

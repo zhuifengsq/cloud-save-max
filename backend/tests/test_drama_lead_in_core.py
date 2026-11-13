@@ -25,7 +25,11 @@ from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.infrastructure.persistence.models.task import Task
 from app.infrastructure.persistence.models.task_lead_in import TaskLeadInRecord
 from app.schemas.drama_lead_in import DramaLeadInConfirmIn
-from app.application import drama_lead_in as svc
+import app.application.lead_in.settings as lead_settings
+import app.application.lead_in.tokens as lead_tokens
+import app.application.lead_in.materials as lead_materials
+import app.application.lead_in.records as lead_records
+import app.application.use_cases.task_lead_in as lead_usecase
 from app.api.presenters.task import task_out
 from app.application.queries.task_views import task_view
 
@@ -170,17 +174,17 @@ class DramaLeadInCoreTests(unittest.TestCase):
         }
 
     def _configure_material(self, *, config_version: int = 1, passcode: str = "abcd") -> None:
-        svc._set_setting(self.db, svc.SETTING_KEY_ENABLED, "1", "测试")
-        svc._set_setting(
+        lead_settings._set_setting(self.db, lead_materials.SETTING_KEY_ENABLED, "1", "测试")
+        lead_settings._set_setting(
             self.db,
-            svc.SETTING_KEY_MATERIALS,
+            lead_materials.SETTING_KEY_MATERIALS,
             json.dumps(self._materials(config_version=config_version, passcode=passcode), ensure_ascii=False),
             "测试",
         )
         self.db.commit()
 
     def _preview_token(self) -> str:
-        preview = svc.build_task_lead_in_preview(self.db, self.task)
+        preview = lead_usecase.TaskLeadInUseCase(None)._preview(self.db, self.task)
         self.assertTrue(preview["available"], preview.get("reason"))
         token = preview["preview_token"]
         self.assertTrue(token)
@@ -205,7 +209,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_get_settings_masks_shareurl_and_lists_dynamic_drives(self) -> None:
-        payload = svc.build_settings_payload(self.db)
+        payload = lead_settings.build_settings_payload(self.db)
         self.assertTrue(payload["enabled"])
         self.assertEqual(payload["version"], 1)
         drives = {item["drive_type"]: item for item in payload["drives"]}
@@ -233,7 +237,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_put_settings_resolves_material_and_keeps_passcode(self) -> None:
-        result = svc.update_drama_lead_in_settings(
+        result = lead_settings.update_drama_lead_in_settings(
             self.db,
             {
                 "enabled": True,
@@ -254,11 +258,11 @@ class DramaLeadInCoreTests(unittest.TestCase):
         drive = {item["drive_type"]: item for item in result["drives"]}["mockdrive"]
         self.assertEqual(drive["config_version"], 2)
         self.assertEqual(drive["file_name"], MATERIAL_NAME)
-        stored = svc.get_drama_lead_in_materials(self.db)["mockdrive"]
+        stored = lead_settings.get_drama_lead_in_materials(self.db)["mockdrive"]
         self.assertEqual(stored["config_version"], 2)
         self.assertEqual(stored["passcode"], "abcd")
 
-        result2 = svc.update_drama_lead_in_settings(
+        result2 = lead_settings.update_drama_lead_in_settings(
             self.db,
             {
                 "enabled": True,
@@ -275,12 +279,12 @@ class DramaLeadInCoreTests(unittest.TestCase):
         )
         drive2 = {item["drive_type"]: item for item in result2["drives"]}["mockdrive"]
         self.assertEqual(drive2["config_version"], 3)
-        stored2 = svc.get_drama_lead_in_materials(self.db)["mockdrive"]
+        stored2 = lead_settings.get_drama_lead_in_materials(self.db)["mockdrive"]
         self.assertEqual(stored2["passcode"], "new-code")
 
     def test_put_settings_rejects_unsupported_drive(self) -> None:
         with self.assertRaises(ApiError) as ctx:
-            svc.update_drama_lead_in_settings(
+            lead_settings.update_drama_lead_in_settings(
                 self.db,
                 {
                     "enabled": True,
@@ -314,7 +318,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
                 "material": None,
             },
         }
-        result = svc.scan_drama_lead_in_material(
+        result = lead_materials.scan_drama_lead_in_material(
             self.db, "mockdrive", "https://pan.example.com/s/abc", "abcd"
         )
         self.assertEqual(len(result["files"]), 2)
@@ -326,7 +330,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_preview_returns_contract_fields_and_signed_token(self) -> None:
-        preview = svc.build_task_lead_in_preview(self.db, self.task)
+        preview = lead_usecase.TaskLeadInUseCase(None)._preview(self.db, self.task)
         self.assertTrue(preview["available"])
         self.assertEqual(preview["reason"], "")
         self.assertEqual(preview["drive"]["drive_type"], "mockdrive")
@@ -339,7 +343,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
         self.assertIsNone(preview["last_added_at"])
         self.assertGreater(preview["expires_at"].timestamp(), time.time())
 
-        payload = svc.parse_preview_token(preview["preview_token"])
+        payload = lead_tokens.parse_preview_token(preview["preview_token"])
         self.assertIsNotNone(payload)
         assert payload is not None
         self.assertEqual(payload["task_id"], int(self.task.id))
@@ -352,16 +356,16 @@ class DramaLeadInCoreTests(unittest.TestCase):
         self.assertEqual(payload["config_version"], 1)
 
     def test_preview_disabled_when_switch_off(self) -> None:
-        svc._set_setting(self.db, svc.SETTING_KEY_ENABLED, "0", "测试")
+        lead_settings._set_setting(self.db, lead_materials.SETTING_KEY_ENABLED, "0", "测试")
         self.db.commit()
-        preview = svc.build_task_lead_in_preview(self.db, self.task)
+        preview = lead_usecase.TaskLeadInUseCase(None)._preview(self.db, self.task)
         self.assertFalse(preview["available"])
         self.assertEqual(preview["reason"], "引流功能已关闭")
 
     def test_preview_reason_when_material_not_configured(self) -> None:
-        svc._set_setting(self.db, svc.SETTING_KEY_MATERIALS, "{}", "测试")
+        lead_settings._set_setting(self.db, lead_materials.SETTING_KEY_MATERIALS, "{}", "测试")
         self.db.commit()
-        preview = svc.build_task_lead_in_preview(self.db, self.task)
+        preview = lead_usecase.TaskLeadInUseCase(None)._preview(self.db, self.task)
         self.assertFalse(preview["available"])
         self.assertEqual(preview["reason"], "该网盘未配置引流素材")
 
@@ -371,7 +375,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
             "message": "目录不存在",
             "data": None,
         }
-        preview = svc.build_task_lead_in_preview(self.db, self.task)
+        preview = lead_usecase.TaskLeadInUseCase(None)._preview(self.db, self.task)
         self.assertFalse(preview["available"])
         self.assertEqual(preview["reason"], "任务保存目录不存在")
 
@@ -387,7 +391,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
         )
         self.db.add(task)
         self.db.commit()
-        preview = svc.build_task_lead_in_preview(self.db, task)
+        preview = lead_usecase.TaskLeadInUseCase(None)._preview(self.db, task)
         self.assertFalse(preview["available"])
         self.assertEqual(preview["reason"], "该网盘暂不支持引流")
 
@@ -397,7 +401,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
 
     def test_confirm_added_writes_record_and_audit(self) -> None:
         token = self._preview_token()
-        result = svc.confirm_task_lead_in(
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(
             self.db, self.task, token, actor_user_id=1, ip="127.0.0.1", user_agent="test"
         )
         self.assertEqual(result["status"], "added")
@@ -429,7 +433,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
             "message": "",
             "data": {"state": "exists", "existing": {"fid": "x"}, "message": ""},
         }
-        result = svc.confirm_task_lead_in(self.db, self.task, token)
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
         self.assertEqual(result["status"], "exists")
         self.adapter.lead_in_add.assert_not_called()
         self.adapter.lead_in_verify.assert_not_called()
@@ -438,21 +442,21 @@ class DramaLeadInCoreTests(unittest.TestCase):
         token = self._preview_token()
         self._configure_material(config_version=2, passcode="abcd")
         with self.assertRaises(ApiError) as ctx:
-            svc.confirm_task_lead_in(self.db, self.task, token)
+            lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
         self.assertEqual(ctx.exception.code, "LEAD_IN_STALE_PREVIEW")
         self.assertEqual(ctx.exception.http_status, 409)
 
         with self.assertRaises(ApiError) as ctx2:
-            svc.confirm_task_lead_in(self.db, self.task, "v1.bad.bad")
+            lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, "v1.bad.bad")
         self.assertEqual(ctx2.exception.code, "LEAD_IN_STALE_PREVIEW")
 
     def test_confirm_rejects_concurrent_same_target(self) -> None:
         token = self._preview_token()
-        lock = svc.lead_in_lock("mockdrive", "mock-account", DIR_PATH, MATERIAL_NAME)
+        lock = lead_usecase.lead_in_lock("mockdrive", "mock-account", DIR_PATH, MATERIAL_NAME)
         self.assertTrue(lock.acquire(blocking=False))
         try:
             with self.assertRaises(ApiError) as ctx:
-                svc.confirm_task_lead_in(self.db, self.task, token)
+                lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
             self.assertEqual(ctx.exception.code, "LEAD_IN_IN_PROGRESS")
             self.assertEqual(ctx.exception.http_status, 409)
         finally:
@@ -461,7 +465,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
     def test_confirm_reports_pending_when_verify_times_out(self) -> None:
         token = self._preview_token()
         self.adapter.lead_in_verify.side_effect = TimeoutError("timeout")
-        result = svc.confirm_task_lead_in(self.db, self.task, token)
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
         self.assertEqual(result["status"], "pending")
         self.assertEqual(result["message"], "网盘响应超时，添加结果待确认")
         record = (
@@ -523,7 +527,7 @@ class DramaLeadInCoreTests(unittest.TestCase):
         event.listen(self.engine, "before_cursor_execute", _before_cursor_execute)
         self.addCleanup(event.remove, self.engine, "before_cursor_execute", _before_cursor_execute)
 
-        summary = svc.load_lead_in_summary_map(self.db, [int(self.task.id), int(second.id)])
+        summary = lead_records.load_lead_in_summary_map(self.db, [int(self.task.id), int(second.id)])
         selects = [
             item
             for item in statements
@@ -541,13 +545,13 @@ class DramaLeadInCoreTests(unittest.TestCase):
         self.assertIsNone(empty.lead_in.last_added_at)
 
         token = self._preview_token()
-        svc.confirm_task_lead_in(self.db, self.task, token)
-        summary = svc.load_lead_in_summary_map(self.db, [int(self.task.id)])
+        lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
+        summary = lead_records.load_lead_in_summary_map(self.db, [int(self.task.id)])
         serialized = task_out(task_view(self.db, self.task, executions=[], lead_in_map=summary))
         self.assertEqual(serialized.lead_in.state, "added")
         self.assertIsNotNone(serialized.lead_in.last_added_at)
 
-        state = svc.get_task_lead_in_state(self.db, self.task)
+        state = lead_records.get_task_lead_in_state(self.db, self.task)
         self.assertEqual(state["state"], "added")
         self.assertEqual(state["material_name"], MATERIAL_NAME)
 

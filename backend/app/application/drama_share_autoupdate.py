@@ -119,6 +119,7 @@ def _search_candidates(
     search_date_from: str = "",
     search_filter_mode: str = "",
     search_exclude_mode: str = "",
+    release_read=None,
 ) -> tuple[list[dict], bool, dict]:
     all_items: list[dict] = []
     db_changed = False
@@ -134,6 +135,7 @@ def _search_candidates(
             search_filter_mode=search_filter_mode,
             search_exclude_mode=search_exclude_mode,
             force_refresh=True,
+            **({"release_read": release_read} if release_read else {}),
         )
         if changed:
             db_changed = True
@@ -162,7 +164,7 @@ def _search_candidates(
     return filtered, db_changed, stats
 
 
-def _prepare_candidates(db: Session, *, suggestions: list[dict], addition: dict) -> tuple[list[dict], dict]:
+def _prepare_candidates(db: Session, *, suggestions: list[dict], addition: dict, release_read=None) -> tuple[list[dict], dict]:
     """过滤失效链接、优选/屏蔽分享者，并按“优选优先 + 发布时间新到旧”排序。"""
     from app.application.share_preview_batch import validate_share_links_streaming
 
@@ -172,7 +174,7 @@ def _prepare_candidates(db: Session, *, suggestions: list[dict], addition: dict)
     if urls:
         valid_urls: set[str] = set()
         author_map: dict[str, str] = {}
-        for row in validate_share_links_streaming(db, urls):
+        for row in validate_share_links_streaming(db, urls, **({"release_read": release_read} if release_read else {})):
             if row.ok:
                 valid_urls.add(row.shareurl)
                 author = str(row.share_author_name or "").strip()
@@ -250,6 +252,8 @@ def resolve_drama_shareurl_update(
     *,
     respect_toggle: bool = True,
     tried_shareurls: set[str] | None = None,
+    release_read=None,
+    persist: bool = True,
 ) -> dict:
     """失效链接修复：搜到一条可用的新链接就写回任务（不比较集数/内容）。"""
     if not is_auto_update_task(db, task, respect_toggle=respect_toggle):
@@ -281,7 +285,7 @@ def resolve_drama_shareurl_update(
     tmdb_id = int(getattr(task, "tmdb_id", 0) or 0)
     if tmdb_id > 0:
         try:
-            configured, detail, _u, _e, _r = get_tmdb_detail_cached(db, media_type="tv", tmdb_id=tmdb_id)
+            configured, detail, _u, _e, _r = get_tmdb_detail_cached(db, media_type="tv", tmdb_id=tmdb_id, **({"close_read_tx": True} if release_read else {}))
             if configured and isinstance(detail, dict):
                 tmdb_names = _dedupe_preserve_order(
                     [str(detail.get("name") or "").strip(), str(detail.get("original_name") or "").strip()]
@@ -289,7 +293,8 @@ def resolve_drama_shareurl_update(
                 if tmdb_names:
                     names = tmdb_names
         except Exception:
-            pass
+            if release_read:
+                raise
     if not names:
         return {"checked": False, "updated": False, "reason": "no_search_keyword"}
 
@@ -302,6 +307,7 @@ def resolve_drama_shareurl_update(
         search_date_from=search_date_from,
         search_filter_mode=search_filter_mode,
         search_exclude_mode=search_exclude_mode,
+        **({"release_read": release_read} if release_read else {}),
     )
     if not suggestions:
         return {
@@ -312,7 +318,7 @@ def resolve_drama_shareurl_update(
             "db_changed": bool(db_changed),
         }
 
-    candidates, filter_stats = _prepare_candidates(db, suggestions=suggestions, addition=addition)
+    candidates, filter_stats = _prepare_candidates(db, suggestions=suggestions, addition=addition, **({"release_read": release_read} if release_read else {}))
     if not candidates:
         return {
             "checked": True,
@@ -346,6 +352,7 @@ def resolve_drama_shareurl_update(
             folder_exclude_mode=folder_exclude_mode,
             folder_priority=folder_priority,
             folder_priority_mode=folder_priority_mode,
+            **({"release_read": release_read} if release_read else {}),
         )
         if not groups:
             preview_stats["skip_unpreviewable"] = int(preview_stats["skip_unpreviewable"]) + 1
@@ -358,8 +365,10 @@ def resolve_drama_shareurl_update(
             try:
                 from app.application.share_preview_batch import fetch_share_root_dirs
 
-                root_dirs = fetch_share_root_dirs(db, shareurl)
+                root_dirs = fetch_share_root_dirs(db, shareurl, **({"release_read": release_read} if release_read else {}))
             except Exception:
+                if release_read:
+                    raise
                 root_dirs = []
             if root_dirs:
                 lowered_names = [str(n).strip().lower() for n in names if str(n).strip()]
@@ -383,7 +392,8 @@ def resolve_drama_shareurl_update(
             continue
 
         task.shareurl = new_shareurl
-        db.flush()
+        if persist:
+            db.flush()
         logger.info("自动换链（死链修复）：成功 old=%s new=%s", old_shareurl, new_shareurl)
         return {
             "checked": True,

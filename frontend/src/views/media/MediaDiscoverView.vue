@@ -4,14 +4,15 @@ import { ArrowLeft, Search } from '@element-plus/icons-vue'
 
 import { fetchDoubanCategories, fetchDoubanList, fetchTMDBDetail, searchTMDB } from '@/api/media'
 import DramaTaskDrawer from '@/components/tasks/DramaTaskDrawer.vue'
-import { createTask, fetchTasks, updateTask } from '@/api/tasks'
+import { createTask, fetchTaskDetail, updateTask } from '@/api/tasks'
 import { fetchDriveAccounts } from '@/api/extensions'
 import { TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
 import type { DriveAccountItem } from '@/types/extensions'
 import type { DoubanCategory, DoubanListItem, TMDBBrief } from '@/types/media'
-import type { TaskItem } from '@/types/tasks'
+import { loadSharedTasks } from '@/stores/taskCache'
+import type { TaskOverview, TaskDetail } from '@/types/tasks'
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342'
 
@@ -57,7 +58,7 @@ const searchPager = reactive({
 const viewMode = ref<'douban' | 'tmdb'>('douban')
 
 const accounts = ref<DriveAccountItem[]>([])
-const tasksCache = ref<TaskItem[]>([])
+const tasksCache = ref<TaskOverview[]>([])
 const tasksLoading = ref(false)
 
 const runLogDialog = reactive({
@@ -74,7 +75,7 @@ let runLogController: AbortController | null = null
 const taskDrawer = reactive({
   visible: false,
   submitting: false,
-  currentTask: null as TaskItem | null,
+  currentTask: null as TaskDetail | null,
   presetTaskname: '' as string,
   presetTmdb: null as { tmdb_id: number; tmdb_media_type: 'movie' | 'tv' } | null,
 })
@@ -82,7 +83,7 @@ const taskDrawer = reactive({
 const existingTaskDialog = reactive({
   visible: false,
   count: 0,
-  target: null as TaskItem | null,
+  target: null as TaskOverview | null,
   tmdb: null as { tmdb_id: number; tmdb_media_type: 'movie' | 'tv' } | null,
   presetTaskname: '' as string,
 })
@@ -145,7 +146,7 @@ async function ensureTaskDepsLoaded() {
   if (tasksLoading.value) return
   tasksLoading.value = true
   try {
-    const [acc, ts] = await Promise.all([fetchDriveAccounts(), fetchTasks()])
+    const [acc, ts] = await Promise.all([fetchDriveAccounts(), loadSharedTasks({maxAgeMs: 30000})])
     accounts.value = acc || []
     tasksCache.value = ts || []
   } finally {
@@ -153,7 +154,7 @@ async function ensureTaskDepsLoaded() {
   }
 }
 
-function pickLatestTask(items: TaskItem[]) {
+function pickLatestTask(items: TaskOverview[]) {
   return [...items].sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))[0] || null
 }
 
@@ -165,21 +166,26 @@ function findExistingDramaTasks(tmdb_id: number, tmdb_media_type: 'movie' | 'tv'
   })
 }
 
+let editVersion = 0
 async function openNewDramaTask(presetTaskname: string, tmdb_id: number, tmdb_media_type: 'movie' | 'tv') {
+  editVersion++
   taskDrawer.currentTask = null
   taskDrawer.presetTaskname = String(presetTaskname || '').trim()
   taskDrawer.presetTmdb = { tmdb_id, tmdb_media_type }
   taskDrawer.visible = true
 }
 
-async function openEditDramaTask(task: TaskItem) {
-  taskDrawer.currentTask = task
+async function openEditDramaTask(task: TaskOverview) {
+  const version = ++editVersion
+  const detail = await fetchTaskDetail(task.id)
+  if (version !== editVersion) return
+  taskDrawer.currentTask = detail
   taskDrawer.presetTaskname = ''
   taskDrawer.presetTmdb = null
   taskDrawer.visible = true
 }
 
-function openExistingTaskDialog(target: TaskItem, count: number, tmdb: { tmdb_id: number; tmdb_media_type: 'movie' | 'tv' }, presetTaskname: string) {
+function openExistingTaskDialog(target: TaskOverview, count: number, tmdb: { tmdb_id: number; tmdb_media_type: 'movie' | 'tv' }, presetTaskname: string) {
   existingTaskDialog.count = Number(count) || 0
   existingTaskDialog.target = target
   existingTaskDialog.tmdb = tmdb
@@ -306,7 +312,7 @@ async function handleTaskSave(payload: any) {
     taskDrawer.currentTask = null
     taskDrawer.presetTaskname = ''
     taskDrawer.presetTmdb = null
-    tasksCache.value = await fetchTasks()
+    tasksCache.value = await loadSharedTasks({maxAgeMs: 30000})
   } finally {
     taskDrawer.submitting = false
   }

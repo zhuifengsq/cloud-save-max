@@ -26,7 +26,11 @@ from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.infrastructure.persistence.models.task import Task
 from app.infrastructure.persistence.models.task_lead_in import TaskLeadInRecord
 from app.schemas.drama_lead_in import DramaLeadInConfirmIn
-from app.application import drama_lead_in as svc
+import app.application.lead_in.settings as lead_settings
+import app.application.lead_in.tokens as lead_tokens
+import app.application.lead_in.materials as lead_materials
+import app.application.lead_in.records as lead_records
+import app.application.use_cases.task_lead_in as lead_usecase
 
 DIR_PATH = "/追剧/测试剧"
 MATERIAL_NAME = "第01集.mp4"
@@ -275,18 +279,18 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         }
 
     def _configure(self, material: dict | None = None) -> None:
-        svc._set_setting(self.db, svc.SETTING_KEY_ENABLED, "1", "测试")
+        lead_settings._set_setting(self.db, lead_materials.SETTING_KEY_ENABLED, "1", "测试")
         materials = {"mockown": material} if material is not None else {}
-        svc._set_setting(
+        lead_settings._set_setting(
             self.db,
-            svc.SETTING_KEY_MATERIALS,
+            lead_materials.SETTING_KEY_MATERIALS,
             json.dumps(materials, ensure_ascii=False),
             "测试",
         )
         self.db.commit()
 
     def _preview(self, task: Task | None = None) -> dict:
-        return svc.build_task_lead_in_preview(self.db, task or self.task)
+        return lead_usecase.TaskLeadInUseCase(None)._preview(self.db, task or self.task)
 
     def _request(self, path: str = "/api/tasks/1/lead-in/preview") -> Request:
         return Request(
@@ -314,7 +318,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_save_own_file_persists_fields_and_settings_payload(self) -> None:
-        result = svc.update_drama_lead_in_settings(
+        result = lead_settings.update_drama_lead_in_settings(
             self.db,
             {
                 "enabled": True,
@@ -330,7 +334,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         )
         self.adapter.lead_in_resolve_own_file.assert_called_with(OWN_FILE_PATH)
 
-        stored = svc.get_drama_lead_in_materials(self.db)["mockown"]
+        stored = lead_settings.get_drama_lead_in_materials(self.db)["mockown"]
         self.assertEqual(stored["mode"], "own_file")
         self.assertEqual(stored["account_name"], "mock-account")
         self.assertEqual(stored["file_path"], OWN_FILE_PATH)
@@ -351,7 +355,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
 
     def test_save_own_file_rejects_unknown_account(self) -> None:
         with self.assertRaises(ApiError) as ctx:
-            svc.update_drama_lead_in_settings(
+            lead_settings.update_drama_lead_in_settings(
                 self.db,
                 {
                     "enabled": True,
@@ -367,7 +371,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, "LEAD_IN_ACCOUNT_UNAVAILABLE")
         self.assertEqual(ctx.exception.http_status, 400)
-        self.assertNotIn("mockown", svc.get_drama_lead_in_materials(self.db))
+        self.assertNotIn("mockown", lead_settings.get_drama_lead_in_materials(self.db))
 
     def test_save_own_file_rejects_invalid_path_without_writing(self) -> None:
         self.adapter.lead_in_resolve_own_file.return_value = {
@@ -376,7 +380,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
             "data": None,
         }
         with self.assertRaises(ApiError) as ctx:
-            svc.update_drama_lead_in_settings(
+            lead_settings.update_drama_lead_in_settings(
                 self.db,
                 {
                     "enabled": True,
@@ -392,12 +396,12 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, "LEAD_IN_DIR_INVALID")
         self.assertEqual(ctx.exception.http_status, 400)
-        materials = svc.get_drama_lead_in_materials(self.db)
+        materials = lead_settings.get_drama_lead_in_materials(self.db)
         self.assertNotIn("mockown", materials)
 
     def test_save_own_file_with_empty_path_clears_config(self) -> None:
         self._configure(self._own_file_material())
-        svc.update_drama_lead_in_settings(
+        lead_settings.update_drama_lead_in_settings(
             self.db,
             {
                 "enabled": True,
@@ -411,15 +415,15 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
                 ],
             },
         )
-        self.assertNotIn("mockown", svc.get_drama_lead_in_materials(self.db))
-        payload = svc.build_settings_payload(self.db)
+        self.assertNotIn("mockown", lead_settings.get_drama_lead_in_materials(self.db))
+        payload = lead_settings.build_settings_payload(self.db)
         drive = {item["drive_type"]: item for item in payload["drives"]}["mockown"]
         self.assertFalse(drive["configured"])
         self.assertEqual(drive["mode"], "share")
 
     def test_save_own_file_rejects_drive_without_own_file_support(self) -> None:
         with self.assertRaises(ApiError) as ctx:
-            svc.update_drama_lead_in_settings(
+            lead_settings.update_drama_lead_in_settings(
                 self.db,
                 {
                     "enabled": True,
@@ -442,7 +446,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_resolve_own_file_service_and_route(self) -> None:
-        result = svc.resolve_drama_lead_in_own_file(self.db, "mockown", "mock-account", OWN_FILE_PATH)
+        result = lead_materials.resolve_drama_lead_in_own_file(self.db, "mockown", "mock-account", OWN_FILE_PATH)
         self.assertEqual(result["file"]["fid"], OWN_FILE_FID)
         self.assertEqual(result["file"]["name"], MATERIAL_NAME)
         self.assertEqual(result["file"]["path"], OWN_FILE_PATH)
@@ -475,7 +479,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
             "data": None,
         }
         with self.assertRaises(ApiError) as ctx:
-            svc.resolve_drama_lead_in_own_file(self.db, "mockown", "mock-account", OWN_FILE_PATH)
+            lead_materials.resolve_drama_lead_in_own_file(self.db, "mockown", "mock-account", OWN_FILE_PATH)
         self.assertEqual(ctx.exception.code, "LEAD_IN_MATERIAL_UNAVAILABLE")
         self.assertEqual(ctx.exception.message, "文件不存在或已被移动")
 
@@ -506,7 +510,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         self.assertEqual(preview["state"], "absent")
         self.adapter.lead_in_resolve_own_file.assert_called_with(OWN_FILE_PATH)
 
-        payload = svc.parse_preview_token(preview["preview_token"])
+        payload = lead_tokens.parse_preview_token(preview["preview_token"])
         self.assertIsNotNone(payload)
         assert payload is not None
         self.assertEqual(payload["material_mode"], "own_file")
@@ -519,7 +523,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         self.assertGreater(preview["expires_at"].timestamp(), time.time())
 
         # 设置载荷必须回显 own_file 相关字段，且不返回完整链接/提取码。
-        drive = {item["drive_type"]: item for item in svc.build_settings_payload(self.db)["drives"]}["mockown"]
+        drive = {item["drive_type"]: item for item in lead_settings.build_settings_payload(self.db)["drives"]}["mockown"]
         self.assertTrue(drive["own_file_supported"])
         self.assertEqual(drive["mode"], "own_file")
         self.assertEqual(drive["account_name"], "mock-account")
@@ -564,9 +568,9 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         task.account_name = "shareonly-account"
         self.db.commit()
         self._configure(self._own_file_material())
-        svc._set_setting(
+        lead_settings._set_setting(
             self.db,
-            svc.SETTING_KEY_MATERIALS,
+            lead_materials.SETTING_KEY_MATERIALS,
             json.dumps({"mockshareonly": self._own_file_material()}, ensure_ascii=False),
             "测试",
         )
@@ -583,7 +587,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         self._configure(self._own_file_material())
         preview = self._preview()
         token = preview["preview_token"]
-        result = svc.confirm_task_lead_in(
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(
             self.db, self.task, token, actor_user_id=1, ip="127.0.0.1", user_agent="test"
         )
         self.assertEqual(result["status"], "added")
@@ -611,7 +615,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         self._configure(self._own_file_material())
         token = self._preview()["preview_token"]
         self.adapter.lead_in_add_own_file.side_effect = TimeoutError("timeout")
-        result = svc.confirm_task_lead_in(self.db, self.task, token)
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
         self.assertEqual(result["status"], "pending")
         self.assertEqual(result["message"], "网盘响应超时，添加结果待确认")
         record = self._record()
@@ -626,7 +630,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
             "message": "",
             "data": {"state": "exists", "existing": {"fid": "x"}, "message": ""},
         }
-        result = svc.confirm_task_lead_in(self.db, self.task, token)
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
         self.assertEqual(result["status"], "exists")
         self.adapter.lead_in_add_own_file.assert_not_called()
         self.adapter.lead_in_add.assert_not_called()
@@ -639,7 +643,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
             "message": "",
             "data": {"state": "conflict", "existing": {"fid": "x"}, "message": "同名文件"},
         }
-        result = svc.confirm_task_lead_in(self.db, self.task, token)
+        result = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
         self.assertEqual(result["status"], "conflict")
         self.adapter.lead_in_add_own_file.assert_not_called()
         self.adapter.lead_in_add.assert_not_called()
@@ -650,7 +654,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         changed = self._own_file_material(file_path="/追剧/源2/" + MATERIAL_NAME, config_version=2)
         self._configure(changed)
         with self.assertRaises(ApiError) as ctx:
-            svc.confirm_task_lead_in(self.db, self.task, token)
+            lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
         self.assertEqual(ctx.exception.code, "LEAD_IN_STALE_PREVIEW")
         self.assertEqual(ctx.exception.http_status, 409)
 
@@ -659,7 +663,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         token = self._preview()["preview_token"]
         self._configure(self._own_file_material())
         with self.assertRaises(ApiError) as ctx:
-            svc.confirm_task_lead_in(self.db, self.task, token)
+            lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, token)
         self.assertEqual(ctx.exception.code, "LEAD_IN_STALE_PREVIEW")
         self.assertEqual(ctx.exception.http_status, 409)
 
@@ -668,7 +672,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_share_mode_preview_and_confirm_still_work(self) -> None:
-        result = svc.update_drama_lead_in_settings(
+        result = lead_settings.update_drama_lead_in_settings(
             self.db,
             {
                 "enabled": True,
@@ -686,20 +690,20 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         drive = {item["drive_type"]: item for item in result["drives"]}["mockown"]
         self.assertEqual(drive["mode"], "share")
         self.assertEqual(drive["config_version"], 1)
-        stored = svc.get_drama_lead_in_materials(self.db)["mockown"]
+        stored = lead_settings.get_drama_lead_in_materials(self.db)["mockown"]
         self.assertEqual(stored["mode"], "share")
         self.assertEqual(stored["passcode"], "abcd")
 
         preview = self._preview()
         self.assertTrue(preview["available"], preview.get("reason"))
         self.assertEqual(preview["material"], {"name": MATERIAL_NAME, "fid": "mat1"})
-        payload = svc.parse_preview_token(preview["preview_token"])
+        payload = lead_tokens.parse_preview_token(preview["preview_token"])
         assert payload is not None
         self.assertEqual(payload["material_mode"], "share")
         self.assertEqual(payload["material_path"], "")
         self.assertEqual(payload["material_name"], MATERIAL_NAME)
 
-        confirmed = svc.confirm_task_lead_in(self.db, self.task, preview["preview_token"])
+        confirmed = lead_usecase.TaskLeadInUseCase(None)._confirm(self.db, self.task, preview["preview_token"])
         self.assertEqual(confirmed["status"], "added")
         self.adapter.lead_in_add.assert_called_once()
         self.adapter.lead_in_add_own_file.assert_not_called()
@@ -746,7 +750,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_list_own_dir_returns_entries(self) -> None:
-        result = svc.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", "/素材")
+        result = lead_materials.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", "/素材")
         self.assertEqual(result["path"], "/素材")
         self.assertEqual(result["fid"], "dir-materials")
         self.assertEqual(len(result["entries"]), 2)
@@ -762,7 +766,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
             "message": "",
             "data": {"path": "/", "fid": "0", "entries": []},
         }
-        result = svc.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", "")
+        result = lead_materials.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", "")
         self.assertEqual(result["path"], "/")
         self.assertEqual(result["fid"], "0")
         self.assertEqual(result["entries"], [])
@@ -772,7 +776,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         for bad_path in ("素材", "../素材", "http://example.com/x"):
             with self.subTest(path=bad_path):
                 with self.assertRaises(ApiError) as ctx:
-                    svc.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", bad_path)
+                    lead_materials.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", bad_path)
                 self.assertEqual(ctx.exception.code, "LEAD_IN_DIR_INVALID")
                 self.assertEqual(ctx.exception.http_status, 400)
                 self.assertTrue(ctx.exception.message)
@@ -780,19 +784,19 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
 
     def test_list_own_dir_account_unavailable(self) -> None:
         with self.assertRaises(ApiError) as ctx:
-            svc.list_drama_lead_in_own_dir(self.db, "mockown", "missing-account", "/")
+            lead_materials.list_drama_lead_in_own_dir(self.db, "mockown", "missing-account", "/")
         self.assertEqual(ctx.exception.code, "LEAD_IN_ACCOUNT_UNAVAILABLE")
         self.assertIn("账号", ctx.exception.message)
         self.adapter.lead_in_list_own_dir.assert_not_called()
 
     def test_list_own_dir_unsupported_drives(self) -> None:
         with self.assertRaises(ApiError) as ctx:
-            svc.list_drama_lead_in_own_dir(self.db, "mocknobrowse", "mock-account", "/")
+            lead_materials.list_drama_lead_in_own_dir(self.db, "mocknobrowse", "mock-account", "/")
         self.assertEqual(ctx.exception.code, "LEAD_IN_UNSUPPORTED")
         self.assertIn("暂不支持浏览本账号目录", ctx.exception.message)
 
         with self.assertRaises(ApiError) as ctx:
-            svc.list_drama_lead_in_own_dir(self.db, "unknown-drive", "mock-account", "/")
+            lead_materials.list_drama_lead_in_own_dir(self.db, "unknown-drive", "mock-account", "/")
         self.assertEqual(ctx.exception.code, "LEAD_IN_UNSUPPORTED")
         self.adapter.lead_in_list_own_dir.assert_not_called()
 
@@ -808,14 +812,14 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
                     "data": None,
                 }
                 with self.assertRaises(ApiError) as ctx:
-                    svc.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", "/素材")
+                    lead_materials.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", "/素材")
                 self.assertEqual(ctx.exception.code, code)
                 self.assertEqual(ctx.exception.message, message)
 
     def test_list_own_dir_timeout_maps_to_lead_in_timeout(self) -> None:
         self.adapter.lead_in_list_own_dir.side_effect = TimeoutError("read timeout")
         with self.assertRaises(ApiError) as ctx:
-            svc.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", "/")
+            lead_materials.list_drama_lead_in_own_dir(self.db, "mockown", "mock-account", "/")
         self.assertEqual(ctx.exception.code, "LEAD_IN_TIMEOUT")
 
     def test_list_own_dir_route_writes_redacted_audit(self) -> None:
@@ -852,7 +856,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
         self.assertIn(TASK_WRITE, _collect_permission_codes(route))
 
     def test_settings_payload_exposes_own_file_browse_supported(self) -> None:
-        payload = svc.build_settings_payload(self.db)
+        payload = lead_settings.build_settings_payload(self.db)
         drives = {item["drive_type"]: item for item in payload["drives"]}
         self.assertTrue(drives["mockown"]["own_file_browse_supported"])
         self.assertFalse(drives["mockshareonly"]["own_file_browse_supported"])

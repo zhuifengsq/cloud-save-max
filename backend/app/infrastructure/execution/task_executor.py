@@ -15,7 +15,8 @@ from treelib import Tree
 from app.core.errors import bad_request
 from app.infrastructure.drive.account_manager import DatabaseAccountManager
 from app.infrastructure.execution.drama_executor import DramaTaskExecutor, SkipTask
-from app.infrastructure.execution.execution_log import ExecutionLog
+from app.infrastructure.execution.execution_log import ExecutionLog, bounded_text
+from app.core.settings import settings
 from app.infrastructure.persistence.models.task import Task
 from app.infrastructure.persistence.models.task_execution import TaskExecution
 from app.application.drama_share_autoupdate import is_auto_update_task, resolve_drama_shareurl_update
@@ -27,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 SHARE_SEARCH_ROUNDS = 4
 SHARE_SEARCH_RETRY_DELAY = 2
+
+
+def _new_files_from_tree(tree: Tree) -> list[str]:
+    names = []
+    for node in tree.all_nodes_itr():
+        data = node.data
+        if isinstance(data, dict) and not data.get('is_dir') and data.get('file_name_re'):
+            names.append(str(data['file_name_re']))
+    return names
 
 
 def _truncate(s: str, max_len: int) -> str:
@@ -105,6 +115,8 @@ class TaskExecutor:
         _auto_update_depth: int = 0,
         _tried_shareurls: set[str] | None = None,
         _generated_share_check: dict | None = None,
+        prepared_data: dict | None = None,
+        recover=None,
     ) -> TaskExecution:
         if not task.enabled:
             raise bad_request('TASK_DISABLED', '任务已禁用')
@@ -125,43 +137,47 @@ class TaskExecutor:
             _generated_share_check = check_generated_share(
                 self.db, task, account_manager, always_notify=share_check_always_notify
             )
-            if _generated_share_check:
-                log.section("分享链接检测")
-                log.line(_generated_share_check["message"])
+        if _generated_share_check:
+            log.section("分享链接检测")
+            log.line(_generated_share_check["message"])
         share_snapshot = {SNAPSHOT_KEY: _generated_share_check} if _generated_share_check else {}
         task_data = self._task_to_dict(task)
-        try:
-            from app.application.magic_regex import get_enabled_magic_regex_map
+        if prepared_data is not None:
+            task_data = dict(prepared_data, shareurl=task.shareurl)
+            task_data['manual_run'] = bool(manual_run)
+        else:
+            try:
+                from app.application.magic_regex import get_enabled_magic_regex_map
 
-            task_data["magic_regex"] = get_enabled_magic_regex_map(self.db)
-        except Exception:
-            task_data["magic_regex"] = {}
+                task_data["magic_regex"] = get_enabled_magic_regex_map(self.db)
+            except Exception:
+                task_data["magic_regex"] = {}
 
-        if str(getattr(task, "task_type", "") or "") == "drama":
-            # 手动触发（点「执行」/ Telegram / 试运行）不受运行星期限制，由 DramaTaskExecutor 放行；
-            # 只有 scheduler 定时轮询会带着 False 进来（见 RunPolicy.for_trigger 真值表）。
-            task_data["manual_run"] = bool(manual_run)
-            extra = task_data.get("extra") or {}
-            runweek_mode = str(extra.get("runweek_mode") or "manual").strip().lower()
-            tmdb_id = int(task_data.get("tmdb_id") or 0)
-            tmdb_media_type = str(task_data.get("tmdb_media_type") or "").strip().lower()
-            task_data["tmdb_configured"] = False
-            task_data["tmdb_update_weekdays"] = []
-            task_data["tmdb_episode_weekdays"] = []
-            if runweek_mode == "auto" and tmdb_id > 0 and tmdb_media_type == "tv":
-                try:
-                    from app.application.tmdb_cache import get_tmdb_detail_cached
+            if str(getattr(task, "task_type", "") or "") == "drama":
+                # 手动触发（点「执行」/ Telegram / 试运行）不受运行星期限制，由 DramaTaskExecutor 放行；
+                # 只有 scheduler 定时轮询会带着 False 进来（见 RunPolicy.for_trigger 真值表）。
+                task_data["manual_run"] = bool(manual_run)
+                extra = task_data.get("extra") or {}
+                runweek_mode = str(extra.get("runweek_mode") or "manual").strip().lower()
+                tmdb_id = int(task_data.get("tmdb_id") or 0)
+                tmdb_media_type = str(task_data.get("tmdb_media_type") or "").strip().lower()
+                task_data["tmdb_configured"] = False
+                task_data["tmdb_update_weekdays"] = []
+                task_data["tmdb_episode_weekdays"] = []
+                if runweek_mode == "auto" and tmdb_id > 0 and tmdb_media_type == "tv":
+                    try:
+                        from app.application.tmdb_cache import get_tmdb_detail_cached
 
-                    configured, _detail, update_weekdays, episode_weekdays, _row = get_tmdb_detail_cached(
-                        self.db, media_type="tv", tmdb_id=tmdb_id
-                    )
-                    task_data["tmdb_configured"] = bool(configured)
-                    task_data["tmdb_update_weekdays"] = update_weekdays or []
-                    task_data["tmdb_episode_weekdays"] = episode_weekdays or []
-                except Exception:
-                    task_data["tmdb_configured"] = False
-                    task_data["tmdb_update_weekdays"] = []
-                    task_data["tmdb_episode_weekdays"] = []
+                        configured, _detail, update_weekdays, episode_weekdays, _row = get_tmdb_detail_cached(
+                            self.db, media_type="tv", tmdb_id=tmdb_id
+                        )
+                        task_data["tmdb_configured"] = bool(configured)
+                        task_data["tmdb_update_weekdays"] = update_weekdays or []
+                        task_data["tmdb_episode_weekdays"] = episode_weekdays or []
+                    except Exception:
+                        task_data["tmdb_configured"] = False
+                        task_data["tmdb_update_weekdays"] = []
+                        task_data["tmdb_episode_weekdays"] = []
 
 
 
@@ -193,7 +209,7 @@ class TaskExecutor:
                 message='没有可用的驱动账号',
                 stage=log.stage,
                 run_log=log.render(),
-                adapter_snapshot=json.dumps(share_snapshot, ensure_ascii=False),
+                adapter_snapshot=json.dumps({**share_snapshot, 'execution_log': log.metadata()}, ensure_ascii=False),
             )
             if not persist_execution:
                 execution.id = 0
@@ -217,7 +233,7 @@ class TaskExecutor:
                 log.set_stage("execute_generic")
                 log.section("转存任务")
                 tree = self._execute_with_adapter(adapter, task_data)
-            if persist_execution and task_id > 0 and task_data.get('task_type') == 'drama':
+            if (persist_execution or prepared_data is not None) and task_id > 0 and task_data.get('task_type') == 'drama':
                 # 已存进度：执行时顺手算出来的最大集数，写进任务 extra（不建快照表）
                 saved_latest = getattr(drama_executor, "saved_latest", None)
                 if isinstance(saved_latest, dict) and saved_latest:
@@ -225,7 +241,8 @@ class TaskExecutor:
                         from app.application.task_share_links import merge_task_extra
 
                         merge_task_extra(task, {"saved_latest": saved_latest})
-                        self.db.flush()
+                        if self.db is not None:
+                            self.db.flush()
                         episode = saved_latest.get("episode")
                         if episode:
                             log.line(f"已存进度: 第{int(episode)}集")
@@ -239,22 +256,28 @@ class TaskExecutor:
             log.line(f"运行时长: {duration_s:.2f}s")
             allow_once = bool((task_data.get("extra") or {}).get("allow_once"))
             if (
-                persist_execution
+                (persist_execution or prepared_data is not None)
                 and task_id > 0
                 and str(task_data.get("task_type") or "") == "drama"
                 and allow_once
                 and bool(getattr(task, "enabled", False))
             ):
                 task.enabled = False
-                self.db.flush()
+                if self.db is not None:
+                    self.db.flush()
                 log.line("运行一次: 本次执行成功，已自动禁用任务")
+            full_tree = str(tree)
+            new_files = _new_files_from_tree(tree)
+            display_tree, tree_truncated = bounded_text(full_tree, settings.execution_tree_max_bytes)
             payload = ExecutionPayload(
                 status='success',
                 message='执行完成',
-                tree_summary=str(tree),
+                tree_summary=display_tree,
                 stage=log.stage,
                 run_log=log.render(),
                 adapter_snapshot={
+                    'new_files': new_files,
+                    'tree_truncated': tree_truncated,
                     'name': getattr(adapter, 'nickname', ''),
                     'drive_type': getattr(adapter, 'DRIVE_TYPE', ''),
                     'active': bool(getattr(adapter, 'is_active', False)),
@@ -265,82 +288,15 @@ class TaskExecutor:
             stage = log.stage or "unknown"
             message = str(exc).strip() or type(exc).__name__
 
-            # 链接失效时先尝试自动换链，而不是直接失败
-            if (
-                status == 'failed'
-                and str(task_data.get("task_type") or "") == "drama"
-                and stage in {"share_parse", "get_stoken", "fetch_share_items"}
-                and is_auto_update_task(self.db, task, respect_toggle=True)
-                and _auto_update_depth < 5
-            ):
+            if recover is not None and status == 'failed' and stage in {"share_parse", "get_stoken", "fetch_share_items"} and _auto_update_depth < 5:
                 if _tried_shareurls is None:
                     _tried_shareurls = set()
-                try:
-                    log.section("链接失效自动换链")
-                    log.line(f"链接失效（阶段={stage}），尝试自动换链")
-                    update_result = {}
-                    for round_number in range(1, SHARE_SEARCH_ROUNDS + 1):
-                        if round_number > 1:
-                            time.sleep(SHARE_SEARCH_RETRY_DELAY)
-                        old_shareurl = str(task.shareurl or '')
-                        # 没换成功的探测结果不跨轮屏蔽，允许临时读取失败的候选重试。
-                        round_tried = set(_tried_shareurls)
-                        try:
-                            update_result = resolve_drama_shareurl_update(
-                                self.db, task, respect_toggle=True, tried_shareurls=round_tried,
-                            )
-                            updated = bool(update_result.get('updated'))
-                            reason = str(update_result.get('reason') or '')
-                            reason_text = {
-                                'no_candidates': '未搜索到候选链接',
-                                'no_valid_candidate': '候选链接均失效或不符合筛选条件',
-                                'no_better_candidate': '未找到可读取的新链接',
-                                'no_search_keyword': '缺少搜索关键词',
-                                'not_applicable': '当前任务不适用自动换链',
-                                'shareurl_empty': '源链接为空',
-                            }.get(reason, reason or '未找到可用链接')
-                            result_message = '已自动更换源链接' if updated else reason_text
-                        except Exception as search_exc:
-                            updated = False
-                            update_result = {'checked': True, 'updated': False}
-                            result_message = f'搜索异常：{str(search_exc).strip() or type(search_exc).__name__}'
-                        entry = append_shareurl_update_log(
-                            task, source='auto', status='success' if updated else 'failed',
-                            message=result_message, old_shareurl=old_shareurl,
-                            new_shareurl=str(update_result.get('new_shareurl') or ''), round_number=round_number,
-                        )
-                        log.line(f"自动换链 {round_number}/{SHARE_SEARCH_ROUNDS}: {entry['message']}")
-                        if persist_execution and task_id > 0:
-                            # 每轮独立落盘，刷新卡片即可看到；下一轮网络请求不占用写锁。
-                            self.db.commit()
-                        else:
-                            self.db.flush()
-                        if updated:
-                            _tried_shareurls.update(round_tried)
-                            break
-                        if not update_result.get('checked'):
-                            break
-                    if bool(update_result.get("updated")):
-                        log.line(f"OK: 自动换链成功 new={str(update_result.get('new_shareurl') or '').strip()}")
-                        if persist_execution and task_id > 0:
-                            self.db.refresh(task)
-                        log.line("换链后立即再次执行任务")
-                        re_execution = self.run_task(
-                            task,
-                            log=log,
-                            persist_execution=persist_execution,
-                            account_manager=account_manager,
-                            init_account_for_task=False,
-                            _auto_update_depth=_auto_update_depth + 1,
-                            _tried_shareurls=_tried_shareurls,
-                            _generated_share_check=_generated_share_check,
-                        )
-                        return re_execution
-                    else:
-                        log.line("本次自动换链搜索结束，未找到可用链接")
-                except Exception as au_exc:
-                    log.line(f"自动换链失败: {str(au_exc).strip() or type(au_exc).__name__}")
-
+                if recover(task, log, _tried_shareurls):
+                    return self.run_task(task, log=log, persist_execution=False,
+                        account_manager=account_manager, init_account_for_task=False,
+                        manual_run=manual_run, _auto_update_depth=_auto_update_depth + 1,
+                        _tried_shareurls=_tried_shareurls, _generated_share_check=_generated_share_check,
+                        prepared_data=prepared_data, recover=recover)
             try:
                 logger.exception(
                     "任务执行异常 task_id=%s task_uid=%s task_type=%s stage=%s err=%s",
@@ -383,7 +339,7 @@ class TaskExecutor:
             message=payload.message,
             stage=payload.stage,
             run_log=payload.run_log,
-            adapter_snapshot=json.dumps({**payload.adapter_snapshot, **share_snapshot}, ensure_ascii=False),
+            adapter_snapshot=json.dumps({**payload.adapter_snapshot, **share_snapshot, 'execution_log': log.metadata()}, ensure_ascii=False),
         )
         if not persist_execution:
             execution.id = 0

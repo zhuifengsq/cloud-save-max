@@ -10,7 +10,9 @@ import {
   createTaskShareLink,
   deleteTask,
   fetchTaskSchedulerSetting,
-  fetchTasks,
+  fetchTaskDetail,
+  fetchTaskExecutions,
+  fetchTaskExecutionDetail,
   stopCompletedDramaTasks,
   setTaskStatus,
   updateTask,
@@ -21,7 +23,9 @@ import { TASK_RUN, TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import type { TaskLeadInSummary } from '@/types/dramaLeadIn'
 import type { DriveAccountItem } from '@/types/extensions'
-import type { TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/tasks'
+import { loadTaskPage, loadTaskOrderIndex, dropSharedTasks } from '@/stores/taskCache'
+import { markTasksChanged, subscribeTasksChanged } from '@/utils/taskChangeBus'
+import type { TaskDetail, TaskExecutionSummary, TaskReadFilters, TaskFacets, TaskSummary as TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/tasks'
 import { validateCrontab5, validateTimezone, describeCrontab, getNextExecutions } from '@/utils/cron'
 import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
@@ -42,7 +46,7 @@ const cronPreviewVisible = ref(false)
 const stopCompletedSaving = ref(false)
 
 const drawerVisible = ref(false)
-const currentTask = ref<TaskItem | null>(null)
+const currentTask = ref<TaskDetail | null>(null)
 
 const runLogDialog = reactive({
   visible: false,
@@ -52,6 +56,7 @@ const runLogDialog = reactive({
   stage: '',
   message: '',
   taskId: 0,
+  executionId: 0, loading: false, error: '', nextOffset: 0, complete: true, truncated: false, treeTruncated: false, tree: '',
 })
 
 type RunAllLogItem = {
@@ -61,6 +66,7 @@ type RunAllLogItem = {
   stage: string
   message: string
   content: string
+  truncated: boolean
 }
 
 const runAllDialog = reactive({
@@ -238,12 +244,7 @@ const DRIVE_FILTER_ORDER: DriveType[] = [
 ]
 
 const driveFilterOptions = computed(() => {
-  const present = new Set<DriveType>()
-  for (const item of tasks.value) {
-    if (item.task_type !== 'drama') continue
-    const drive = taskDriveType(item)
-    if (drive) present.add(drive)
-  }
+  const present = new Set<DriveType>(facets.value.drives as DriveType[])
   const labels: Record<DriveType, string> = {
     quark: '夸克',
     baidu: '百度',
@@ -280,12 +281,7 @@ const CATEGORY_FILTER_ORDER = [
 ] as const
 
 const categoryFilterOptions = computed(() => {
-  const present = new Set<string>()
-  for (const item of tasks.value) {
-    if (item.task_type !== 'drama') continue
-    const category = String(item.media_category || '').trim()
-    if (category) present.add(category)
-  }
+  const present = new Set<string>(facets.value.categories)
   const known = CATEGORY_FILTER_ORDER.filter((category) => present.has(category))
   // 后端以后新增的分类在前端还没登记时也要能筛，否则这些任务会「被消失」
   const extra = Array.from(present)
@@ -301,13 +297,6 @@ const taskSort = reactive({
   order: '' as '' | 'ascending' | 'descending',
 })
 
-function driveSortRank(task: TaskItem): number {
-  const drive = taskDriveType(task)
-  if (!drive) return 99
-  const idx = DRIVE_FILTER_ORDER.indexOf(drive)
-  return idx < 0 ? 98 : idx
-}
-
 function onTaskSortChange({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
   if (!order) {
     taskSort.prop = ''
@@ -318,43 +307,37 @@ function onTaskSortChange({ prop, order }: { prop: string; order: 'ascending' | 
   taskSort.order = order
 }
 
-const filteredTasks = computed(() =>
-  tasks.value
-    .filter((item) => item.task_type === 'drama')
-    .filter((item) => {
-      const matchesKeyword =
-        !filters.keyword ||
-        [item.taskname, item.shareurl, item.savepath, formatAccountLabel(item)]
-          .filter(Boolean)
-          .some((value) => String(value || '').toLowerCase().includes(filters.keyword.toLowerCase()))
-      const matchesStatus =
-        filters.status === 'all' ||
-        (filters.status === 'enabled' && item.enabled) ||
-        (filters.status === 'disabled' && !item.enabled)
-      const matchesFailed = !showFailedOnly.value || item.executions?.[0]?.status === 'failed'
-      const matchesDrive = filters.drive === 'all' || taskDriveType(item) === filters.drive
-      const matchesCategory =
-        filters.category === 'all' || String(item.media_category || '') === filters.category
-      return matchesKeyword && matchesStatus && matchesFailed && matchesDrive && matchesCategory
-    })
-    .sort((a, b) => {
-      if (taskSort.prop !== 'taskname' || !taskSort.order) return 0
-      const factor = taskSort.order === 'descending' ? -1 : 1
-      const byName = String(a.taskname || '').localeCompare(String(b.taskname || ''), 'zh-Hans-CN', {
-        numeric: true,
-        sensitivity: 'base',
-      })
-      if (byName !== 0) return byName * factor
-      // 名字相同：夸克永远在上面，不随升降序翻转
-      const rankA = driveSortRank(a)
-      const rankB = driveSortRank(b)
-      if (rankA !== rankB) return rankA - rankB
-      return Number(a.id) - Number(b.id)
-    }),
-)
-
-const failedTasks = computed(() => filteredTasks.value.filter((item) => item.executions?.[0]?.status === 'failed'))
-const linkInvalidTasks = computed(() => failedTasks.value.filter((item) => isLinkFailure(item)))
+const filteredTasks = computed(() => tasks.value)
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
+const facets = ref<TaskFacets>({categories: [], drives: [], failed_count: 0})
+let readVersion = 0
+const pageError = ref('')
+function readFilters(): TaskReadFilters {
+  return {task_type: 'drama', q: filters.keyword.trim(),
+    ...(filters.status !== 'all' ? {enabled: filters.status === 'enabled'} : {}),
+    ...(filters.drive !== 'all' ? {drive_type: filters.drive} : {}),
+    ...(filters.category !== 'all' ? {media_category: filters.category} : {}), failed_only: showFailedOnly.value}
+}
+async function loadPage() {
+  const version = ++readVersion
+  loading.value = true; pageError.value = ''
+  try {
+    const result = await loadTaskPage({...readFilters(), page: page.value, page_size: pageSize.value, name_order: taskSort.order})
+    if (version !== readVersion) return
+    const last = Math.max(1, Math.ceil(result.total / pageSize.value))
+    if (page.value > last) { page.value = last; return }
+    tasks.value = result.items; total.value = result.total; facets.value = result.facets
+  } catch { if (version === readVersion) pageError.value = '任务加载失败，请重试' }
+  finally { if (version === readVersion) loading.value = false }
+}
+watch(() => [filters.keyword, filters.status, filters.drive, filters.category, showFailedOnly.value, taskSort.prop, taskSort.order, pageSize.value], () => {
+  if (page.value !== 1) page.value = 1
+  else void loadPage()
+})
+watch(page, () => void loadPage())
+const stopTaskChanges = subscribeTasksChanged(() => { void loadPage() })
 
 const showSkeleton = computed(() => loading.value && tasks.value.length === 0)
 
@@ -376,29 +359,27 @@ function resetFilters() {
 }
 
 async function loadData() {
-  loading.value = true
-  try {
-    const [taskData, accountData, schedulerData] = await Promise.all([
-      fetchTasks(),
-      fetchDriveAccounts(),
-      fetchTaskSchedulerSetting(),
-    ])
-    tasks.value = taskData
-    accounts.value = accountData
-    scheduler.value = schedulerData
-  } finally {
-    loading.value = false
-  }
+  dropSharedTasks()
+  await Promise.all([
+    loadPage(),
+    fetchDriveAccounts().then(data => { accounts.value = data }),
+    fetchTaskSchedulerSetting().then(data => { scheduler.value = data }),
+  ])
 }
 
+let editVersion = 0
 async function openCreateDrawer() {
+  editVersion++
   currentTask.value = null
   drawerVisible.value = true
 }
 
 
 async function openEditDrawer(row: TaskItem) {
-  currentTask.value = row
+  const version = ++editVersion
+  const detail = await fetchTaskDetail(row.id)
+  if (version !== editVersion) return
+  currentTask.value = detail
   drawerVisible.value = true
 }
 async function submitTask(payload: any) {
@@ -618,6 +599,9 @@ async function handleRunStream(opts: { title: string; url: string; body?: any; t
   runLogDialog.stage = ''
   runLogDialog.message = ''
   runLogDialog.content = ''
+  logVersion++
+  Object.assign(runLogDialog,{executionId:0,loading:false,error:'',nextOffset:0,complete:true,truncated:false,treeTruncated:false,tree:''})
+  const liveVersion = logVersion
   runLogDialog.title = opts.title
   runLogDialog.visible = true
   runLogDialog.taskId = Number(opts.taskId) || 0
@@ -652,6 +636,7 @@ async function handleRunStream(opts: { title: string; url: string; body?: any; t
       body: opts.body != null ? JSON.stringify(opts.body) : undefined,
       signal: runLogController.signal,
     })
+    if (liveVersion !== logVersion) return
     if (!response.ok) {
       runLogDialog.status = 'failed'
       runLogDialog.message = await readTaskRunError(response)
@@ -669,6 +654,7 @@ async function handleRunStream(opts: { title: string; url: string; body?: any; t
     let buffer = ''
     while (true) {
       const { value, done } = await reader.read()
+      if (liveVersion !== logVersion) return
       if (done) break
       buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
       const parts = buffer.split('\n\n')
@@ -699,6 +685,8 @@ async function handleRunStream(opts: { title: string; url: string; body?: any; t
           runLogDialog.status = String(data?.status || '')
           runLogDialog.message = String(data?.message || '')
           const exe = data?.execution || null
+          runLogDialog.truncated = Boolean(exe?.adapter_snapshot?.execution_log?.truncated)
+          runLogDialog.treeTruncated = Boolean(exe?.adapter_snapshot?.tree_truncated)
           if (!runLogDialog.stage) {
             const s = String(exe?.stage || '')
             if (s) runLogDialog.stage = s
@@ -718,13 +706,13 @@ async function handleRunStream(opts: { title: string; url: string; body?: any; t
           } else {
             ElMessage.error(`${runLogDialog.message || '任务执行失败'}${stageTip}`)
           }
-          if (opts.reloadAfter) await loadData()
+          if (opts.reloadAfter) { markTasksChanged(); await loadData() }
           return
         }
       }
     }
     if (runLogDialog.status === 'running') {
-      if (opts.reloadAfter) await loadData()
+      if (opts.reloadAfter) { markTasksChanged(); await loadData() }
       const id = Number(runLogDialog.taskId) || 0
       if (id > 0) {
         const task = tasks.value.find((t) => t.id === id)
@@ -732,15 +720,16 @@ async function handleRunStream(opts: { title: string; url: string; body?: any; t
         const pick = [...list].sort((a: any, b: any) => Date.parse(String(b.started_at || '')) - Date.parse(String(a.started_at || '')))[0]
         if (pick) {
           if (!runLogDialog.stage) runLogDialog.stage = String(pick.stage || '')
-          if (!String(runLogDialog.content || '').trim()) runLogDialog.content = String(pick.run_log || '')
+          if (!String(runLogDialog.content || '').trim()) runLogDialog.content = String((await fetchTaskExecutionDetail(id, pick.id)).run_log || '')
           runLogDialog.status = String(pick.status || '')
           runLogDialog.message = String(pick.message || '')
         }
       }
     }
   } catch (e: any) {
+    if (liveVersion !== logVersion) return
     if (e?.name === 'AbortError') {
-      if (opts.reloadAfter) await loadData()
+      if (opts.reloadAfter) { markTasksChanged(); await loadData() }
       const id = Number(runLogDialog.taskId) || 0
       if (id > 0) {
         const task = tasks.value.find((t) => t.id === id)
@@ -748,7 +737,7 @@ async function handleRunStream(opts: { title: string; url: string; body?: any; t
         const pick = [...list].sort((a: any, b: any) => Date.parse(String(b.started_at || '')) - Date.parse(String(a.started_at || '')))[0]
         if (pick) {
           if (!runLogDialog.stage) runLogDialog.stage = String(pick.stage || '')
-          if (!String(runLogDialog.content || '').trim()) runLogDialog.content = String(pick.run_log || '')
+          if (!String(runLogDialog.content || '').trim()) runLogDialog.content = String((await fetchTaskExecutionDetail(id, pick.id)).run_log || '')
           runLogDialog.status = String(pick.status || '')
           runLogDialog.message = String(pick.message || '')
         }
@@ -871,7 +860,7 @@ async function saveScheduler() {
 
 async function confirmRunAll() {
   if (runAllDialog.running) return
-  const runnable = filteredTasks.value.filter((task) => task.enabled)
+  const runnable = filters.status === 'disabled' ? [] : await loadTaskOrderIndex({...readFilters(), enabled: true})
   if (!runnable.length) {
     ElMessage.warning('当前没有可执行的追剧任务')
     return
@@ -897,6 +886,7 @@ async function confirmRunAll() {
     stage: '',
     message: '',
     content: '',
+    truncated: false,
   }))
   runAllDialog.activeNames = runnable.map((task) => Number(task.id) || 0)
   runAllDialog.title = `执行全部：日志（${runnable.length} 个任务）`
@@ -990,6 +980,7 @@ async function confirmRunAll() {
               item.status = String(data?.status || '')
               item.message = String(data?.message || '')
               const exe = data?.execution || null
+              item.truncated = Boolean(exe?.adapter_snapshot?.execution_log?.truncated)
               if (!item.stage) {
                 const s = String(exe?.stage || '')
                 if (s) item.stage = s
@@ -1022,6 +1013,7 @@ async function confirmRunAll() {
   } finally {
     runAllDialog.running = false
     runAllDialog.stopRequested = false
+    markTasksChanged()
     await loadData()
   }
 }
@@ -1058,12 +1050,56 @@ async function confirmStopCompleted() {
   }
 }
 
+const history = reactive({visible:false, loading:false, error:'', taskId:0, page:1, total:0, items:[] as TaskExecutionSummary[]})
+let historyVersion = 0
+let logVersion = 0
+async function openHistory(taskId:number) {
+  history.taskId=taskId; history.page=1; history.items=[]; history.visible=true
+  await loadHistory()
+}
+async function loadHistory() {
+  const version=++historyVersion
+  history.loading=true; history.error=''
+  try {
+    const result=await fetchTaskExecutions(history.taskId,history.page)
+    if(version!==historyVersion) return
+    history.items=result.items; history.total=result.total
+  } catch { if(version===historyVersion) history.error='历史加载失败' }
+  finally { if(version===historyVersion) history.loading=false }
+}
+async function openExecution(taskId:number, executionId:number) {
+  logVersion++
+  if (runLogController) runLogController.abort()
+  Object.assign(runLogDialog,{visible:true,title:'历史执行日志',taskId,executionId,content:'',tree:'',nextOffset:0,complete:false,truncated:false,treeTruncated:false,status:'',stage:'',message:'',loading:false,error:''})
+  await loadExecutionChunk()
+}
+async function loadExecutionChunk() {
+  if(runLogDialog.loading || runLogDialog.complete) return
+  const version=logVersion
+  const {taskId,executionId,nextOffset}=runLogDialog
+  runLogDialog.loading=true; runLogDialog.error=''
+  try {
+    const detail=await fetchTaskExecutionDetail(taskId,executionId,nextOffset)
+    if(version!==logVersion) return
+    if(!detail.log_complete && detail.log_next_offset<=nextOffset) throw new Error('Invalid log offset')
+    runLogDialog.content+=detail.run_log
+    runLogDialog.tree=detail.tree_summary
+    runLogDialog.nextOffset=detail.log_next_offset; runLogDialog.complete=detail.log_complete
+    runLogDialog.truncated=detail.log_truncated; runLogDialog.treeTruncated=detail.tree_truncated
+    runLogDialog.status=detail.status; runLogDialog.stage=detail.stage || ''; runLogDialog.message=detail.message || ''
+  } catch { if(version===logVersion) runLogDialog.error='日志加载失败，请重试' }
+  finally { if(version===logVersion) runLogDialog.loading=false }
+}
+
 onMounted(() => {
   loadData()
   window.addEventListener('resize', onResize, { passive: true })
 })
 
 onBeforeUnmount(() => {
+  stopTaskChanges()
+  readVersion += 1; logVersion += 1; historyVersion += 1
+  stopRunLogStream(); stopRunAllStream()
   window.removeEventListener('resize', onResize)
 })
 </script>
@@ -1138,14 +1174,14 @@ onBeforeUnmount(() => {
     <section class="glass-panel dashboard-section task-table-card">
       <div class="task-card-head">
         <div class="task-card-head__title">任务列表</div>
-        <div class="task-card-head__hint">共 {{ filteredTasks.length }} 条</div>
+        <div class="task-card-head__hint">共 {{ total }} 条</div>
       </div>
 
-      <div v-if="failedTasks.length" class="task-alert">
+      <div v-if="facets.failed_count" class="task-alert">
         <span class="task-alert__badge">!</span>
         <span class="task-alert__text">
-          最近执行有 <b>{{ failedTasks.length }}</b> 个任务失败
-          <template v-if="linkInvalidTasks.length">，其中 <b>{{ linkInvalidTasks.length }}</b> 个疑似链接失效</template>
+          最近执行有 <b>{{ facets.failed_count }}</b> 个任务失败
+
         </span>
         <el-button size="small" text @click="showFailedOnly = !showFailedOnly">
           {{ showFailedOnly ? '显示全部' : '只看失败' }}
@@ -1175,7 +1211,7 @@ onBeforeUnmount(() => {
         <el-table-column type="expand">
           <template #default="{ row }">
             <div style="padding: 12px 18px">
-              <div style="font-weight: 600; margin-bottom: 8px">最近执行</div>
+              <div style="font-weight: 600; margin-bottom: 8px">最近执行 <el-button link @click="openHistory(row.id)">全部历史</el-button></div>
               <div v-if="row.executions?.length" class="task-exec">
                 <div v-for="exec in row.executions.slice(0, 3)" :key="exec.id" class="task-exec__item">
                   <div class="task-exec__meta">
@@ -1183,7 +1219,7 @@ onBeforeUnmount(() => {
                     <span class="task-exec__time">{{ exec.started_at }}</span>
                     <span class="task-exec__msg">{{ exec.message }}</span>
                   </div>
-                  <pre v-if="exec.tree_summary" class="task-exec__tree">{{ exec.tree_summary }}</pre>
+                  <el-button link type="primary" @click="openExecution(row.id, exec.id)">查看日志与目录树</el-button>
                 </div>
               </div>
               <div v-else class="empty-copy">暂无执行记录。</div>
@@ -1380,7 +1416,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div v-if="row.executions?.length" class="task-card__exec">
-            <div class="task-card__exec-title">最近执行</div>
+            <div class="task-card__exec-title">最近执行 <el-button link @click="openHistory(row.id)">全部历史</el-button><el-button link @click="openExecution(row.id, row.executions[0].id)">日志与目录树</el-button></div>
             <div class="task-card__exec-row">
               <span class="task-card__exec-status">{{ row.executions[0].status }}</span>
               <span class="task-card__exec-time">{{ row.executions[0].started_at }}</span>
@@ -1409,6 +1445,15 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <el-alert v-if="pageError" :title="pageError" type="error" :closable="false"><el-button @click="loadPage">重试</el-button></el-alert>
+    <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[20,50,100]" :total="total" :pager-count="5" :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next'" />
+    <el-dialog v-model="history.visible" title="执行历史">
+      <el-alert v-if="history.error" :title="history.error" type="error"><el-button @click="loadHistory">重试</el-button></el-alert>
+      <div v-loading="history.loading">
+        <div v-for="execution in history.items" :key="execution.id"><el-button link @click="openExecution(history.taskId, execution.id)">{{ execution.started_at }} · {{ execution.status }}</el-button> {{ execution.message }}</div>
+      </div>
+      <el-pagination v-model:current-page="history.page" :page-size="20" :total="history.total" layout="prev,pager,next" @current-change="loadHistory" />
+    </el-dialog>
     <DramaTaskDrawer
       v-model="drawerVisible"
       :task="currentTask"
@@ -1484,6 +1529,11 @@ onBeforeUnmount(() => {
         <el-button style="margin-left: auto" @click="stopRunLogStream">停止读取</el-button>
         <el-button @click="copyRunLog">复制日志</el-button>
       </div>
+      <el-alert v-if="runLogDialog.truncated" title="保存日志已截断" type="warning" :closable="false" />
+      <el-alert v-if="runLogDialog.treeTruncated" title="目录树已截断" type="warning" :closable="false" />
+      <el-alert v-if="runLogDialog.error" :title="runLogDialog.error" type="error"><el-button @click="loadExecutionChunk">重试</el-button></el-alert>
+      <el-button v-if="!runLogDialog.complete" :loading="runLogDialog.loading" @click="loadExecutionChunk">继续读取日志</el-button>
+      <pre v-if="runLogDialog.tree" style="white-space:pre-wrap">{{ runLogDialog.tree }}</pre>
       <pre ref="runLogPre" style="white-space: pre-wrap; font-size: 12px; line-height: 1.5; background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 16px; padding: 12px; max-height: 65vh; overflow: auto">{{ runLogDialog.content }}</pre>
     </el-dialog>
 
@@ -1502,6 +1552,7 @@ onBeforeUnmount(() => {
 
       <el-collapse v-model="runAllDialog.activeNames">
         <el-collapse-item v-for="item in runAllDialog.items" :key="item.taskId" :name="item.taskId">
+          <el-alert v-if="item.truncated" title="保存日志已截断" type="warning" :closable="false" />
           <template #title>
             <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
               <el-tag

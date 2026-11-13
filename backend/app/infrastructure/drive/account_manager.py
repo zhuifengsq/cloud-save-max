@@ -107,6 +107,15 @@ class DatabaseAccountManager:
         self.manager = AccountManager()
         self.manager.load_accounts(load_accounts_payload(db), no_login=no_login)
 
+    @classmethod
+    def from_payload(cls, payload: dict, *, no_login: bool = False):
+        """Construct adapters after the session used to read the payload is closed."""
+        instance = cls.__new__(cls)
+        instance.db = None
+        instance.manager = AccountManager()
+        instance.manager.load_accounts(payload, no_login=no_login)
+        return instance
+
     def get_adapter_for_task(self, task: dict, *, allow_inactive: bool = False):
         return self.manager.get_adapter_for_task(task, allow_inactive=allow_inactive)
 

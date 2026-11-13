@@ -27,23 +27,29 @@ from app.schemas.drama_lead_in import (
     DramaLeadInSettingsUpdateIn,
 )
 from app.application import audit
-from app.application.drama_lead_in import (
-    build_settings_payload,
-    list_drama_lead_in_own_dir,
-    resolve_drama_lead_in_own_file,
-    scan_drama_lead_in_material,
-    update_drama_lead_in_settings,
-)
+from app.application.lead_in.settings import build_settings_payload
+from app.application.lead_in.materials import list_drama_lead_in_own_dir
+from app.application.lead_in.materials import resolve_drama_lead_in_own_file
+from app.application.lead_in.materials import scan_drama_lead_in_material
+from app.application.lead_in.settings import update_drama_lead_in_settings
 
 router = APIRouter()
 
 
-@router.get("/drama-lead-in", response_model=DramaLeadInSettingsOut, dependencies=[Depends(require_permissions(TASK_READ))])
+@router.get(
+    "/drama-lead-in",
+    response_model=DramaLeadInSettingsOut,
+    dependencies=[Depends(require_permissions(TASK_READ))],
+)
 def get_drama_lead_in_settings(db: Session = Depends(get_db)) -> DramaLeadInSettingsOut:
     return DramaLeadInSettingsOut(**build_settings_payload(db))
 
 
-@router.put("/drama-lead-in", response_model=DramaLeadInSettingsOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
+@router.put(
+    "/drama-lead-in",
+    response_model=DramaLeadInSettingsOut,
+    dependencies=[Depends(require_permissions(TASK_WRITE))],
+)
 def put_drama_lead_in_settings(
     payload: DramaLeadInSettingsUpdateIn,
     request: Request,
@@ -63,7 +69,11 @@ def put_drama_lead_in_settings(
         detail=json.dumps(
             {
                 "enabled": bool(result.get("enabled")),
-                "drives": [item.get("drive_type") for item in result.get("drives") or [] if item.get("configured")],
+                "drives": [
+                    item.get("drive_type")
+                    for item in result.get("drives") or []
+                    if item.get("configured")
+                ],
             },
             ensure_ascii=False,
         )[:1024],
@@ -84,7 +94,9 @@ def post_drama_lead_in_own_file_resolve(
     db: Session = Depends(get_db),
 ) -> DramaLeadInOwnFileResolveOut:
     """解析本账号文件：按账号 + 完整路径实时定位文件，供设置界面确认素材。"""
-    result = resolve_drama_lead_in_own_file(db, payload.drive_type, payload.account_name, payload.file_path)
+    result = resolve_drama_lead_in_own_file(
+        db, payload.drive_type, payload.account_name, payload.file_path
+    )
     audit.write_audit_log(
         db,
         actor_user_id=current.user.id,
@@ -142,14 +154,20 @@ def post_drama_lead_in_own_file_list(
     return DramaLeadInOwnDirOut(**result)
 
 
-@router.post("/drama-lead-in/scan", response_model=DramaLeadInScanOut, dependencies=[Depends(require_permissions(TASK_WRITE))])
+@router.post(
+    "/drama-lead-in/scan",
+    response_model=DramaLeadInScanOut,
+    dependencies=[Depends(require_permissions(TASK_WRITE))],
+)
 def post_drama_lead_in_scan(
     payload: DramaLeadInScanIn,
     request: Request,
     current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DramaLeadInScanOut:
-    result = scan_drama_lead_in_material(db, payload.drive_type, payload.shareurl, payload.passcode)
+    result = scan_drama_lead_in_material(
+        db, payload.drive_type, payload.shareurl, payload.passcode
+    )
     audit.write_audit_log(
         db,
         actor_user_id=current.user.id,
@@ -160,7 +178,10 @@ def post_drama_lead_in_scan(
         user_agent=request.headers.get("user-agent"),
         success=True,
         detail=json.dumps(
-            {"drive_type": payload.drive_type, "file_count": len(result.get("files") or [])},
+            {
+                "drive_type": payload.drive_type,
+                "file_count": len(result.get("files") or []),
+            },
             ensure_ascii=False,
         )[:1024],
     )

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.routes import link_extractor
+from app.api.routes import tasks_read, task_executions
 
 from app.api.routes import audit_logs, auth, cache_management, dashboard, drive_accounts, health, magic_regex, media_discovery, metrics, notifications, permissions, resource_search, roles, search_plugins, setup, system_settings, system_settings_drama_lead_in, task_lead_in, task_templates, tasks, tmdb_cache, tmdb_settings, users
 
@@ -14,6 +15,8 @@ api_router.include_router(roles.router, prefix="/roles", tags=["roles"])
 api_router.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
 api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["audit-logs"])
 api_router.include_router(drive_accounts.router, prefix="/drive-accounts", tags=["drive-accounts"])
+api_router.include_router(tasks_read.router, prefix="/tasks", tags=["tasks"])
+api_router.include_router(task_executions.router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(task_lead_in.router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(link_extractor.router, prefix="/tools", tags=["tools"])

@@ -19,7 +19,7 @@ import {
 } from '@/stores/tmdbDetailCache'
 import { getTasksVersion, subscribeTasksChanged } from '@/utils/taskChangeBus'
 import type { CapacityOverview, DramaOverview } from '@/types/dashboard'
-import type { TaskItem } from '@/types/tasks'
+import type { TaskOverview } from '@/types/tasks'
 import { formatBytes, formatDateTime, formatPercent } from '@/utils/capacity'
 import { findUpcomingAiring } from '@/utils/dramaSchedule'
 
@@ -41,7 +41,7 @@ const dramaDays = ref(30)
 const dramaLoading = ref(false)
 const dramaRefreshing = ref(false)
 const dramaOverview = ref<DramaOverview | null>(null)
-const dramaTasks = ref<TaskItem[]>([])
+const dramaTasks = ref<TaskOverview[]>([])
 const tmdbLoading = ref(false)
 const trendDialogVisible = ref(false)
 const showAllFailures = ref(false)
@@ -189,7 +189,7 @@ function refreshDrama(opts: { silent?: boolean; forceDetails?: boolean } = {}): 
   return dramaRefreshPromise
 }
 
-function nextAiringForTask(task: TaskItem, todayStr: string, maxDateStr: string) {
+function nextAiringForTask(task: TaskOverview, todayStr: string, maxDateStr: string) {
   const tmdbId = Number(task.tmdb_id) || 0
   if (!tmdbId) return null
   const detail = tmdbDetailsById[tmdbId] || null
@@ -223,7 +223,7 @@ const contentSummary = computed(() => {
 
 const activeTaskCount = computed(() => dramaTasks.value.filter((t) => t.enabled).length)
 
-function titleFromTask(task: TaskItem) {
+function titleFromTask(task: TaskOverview) {
   const tmdbId = Number(task.tmdb_id) || 0
   const detail = tmdbId ? tmdbDetailsById[tmdbId] || null : null
   const data: any = detail?.data || null
@@ -335,7 +335,7 @@ const capacitySpaceText = computed(() => {
 const recentSuccesses = computed(() => {
   // 同一部剧只保留最近一条成功记录，避免任务多次执行时重复出现
   const latestByDrama = new Map<number, {
-    task: TaskItem
+    task: TaskOverview
     started_at: string
     adapter_snapshot: Record<string, any>
   }>()
@@ -360,7 +360,7 @@ const upcomingAiring = computed(() => {
   const maxDate = beijingDateStr(addDays(new Date(), 7))
   // 每部剧只保留最近一次播出，避免同一部剧出现多行
   const byDrama = new Map<number, {
-    task: TaskItem
+    task: TaskOverview
     air_date: string
     episode: string
     predicted: boolean
@@ -475,9 +475,6 @@ function scheduleDramaRefresh() {
 }
 
 function onShareLogsCleared() {
-  for (const task of dramaTasks.value) {
-    if (task.extra) delete task.extra.shareurl_update_logs
-  }
   void refreshDrama({ silent: true })
 }
 

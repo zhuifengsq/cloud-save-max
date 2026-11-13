@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.application.dto.task_run import RunTaskCommand
+from app.application.container import run_task_use_case, task_run_notification_batch
+
 import os
 import time
 import logging
@@ -10,7 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
-from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
+from app.application.use_cases.run_task import RunPolicy
 from app.core.settings import settings
 from app.infrastructure.persistence.session import SessionLocal
 from app.infrastructure.persistence.models.task import Task
@@ -25,7 +28,6 @@ from app.application.audit_log_scheduler import get_or_create_audit_log_schedule
 from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.infrastructure.drive.account_manager import DatabaseAccountManager
 from app.infrastructure.scheduling.task_admission import task_admission
-from app.infrastructure.execution.task_executor import TaskExecutor
 from app.core.errors import ApiError
 
 
@@ -219,18 +221,7 @@ def run_drama_tasks() -> None:
             task_ids.append(int(tid))
             task_payloads.append({"task_uid": uid, "account_name": account_name, "shareurl": shareurl})
 
-    account_manager = None
-    if task_payloads:
-        try:
-            with SessionLocal() as adb:
-                account_manager = DatabaseAccountManager(adb)
-            if account_manager is not None:
-                account_manager.init_for_tasks(task_payloads)
-        except Exception:
-            account_manager = None
-
-    sections: list[str] = []
-
+    notifications = task_run_notification_batch()
     for task_id in task_ids:
         try:
             slot = task_admission.reserve(task_id)
@@ -248,22 +239,8 @@ def run_drama_tasks() -> None:
                             break
                         execution_started = True
                         # 执行槽仍由上面 reserve 持有；用例只收敛执行参数（见 application/use_cases/run_task.py）。
-                        execution = RunTaskUseCase(db, executor_cls=TaskExecutor).run(
-                            task,
-                            RunPolicy.for_trigger('scheduler'),
-                            account_manager=account_manager,
-                            init_account_for_task=False,
-                        )
-                        section = None
-                        try:
-                            section, should_notify = build_task_section(task, execution)
-                            if not should_notify:
-                                section = None
-                        except Exception:
-                            pass
-                        db.commit()
-                        if section:
-                            sections.append(section)
+                        run_task_use_case(db, notifier=notifications).execute(RunTaskCommand(int(task_id)),
+                            RunPolicy.for_trigger('scheduler'))
                         break
                     except OperationalError as exc:
                         db.rollback()
@@ -278,13 +255,9 @@ def run_drama_tasks() -> None:
                         logger.warning("追剧任务调度执行失败 task_id=%s err=%s", task_id, str(exc))
                         break
 
-    with SessionLocal() as db:
-        if sections:
-            try:
-                send_runtime(db, DRAMA_NOTIFY_TITLE, "\n\n".join(sections))
-                db.commit()
-            except Exception:
-                db.rollback()
+    notifications.flush()
+
+
 def run_tmdb_cache_refresh() -> None:
     with SessionLocal() as db:
         setting = get_or_create_tmdb_cache_scheduler_setting(db)
