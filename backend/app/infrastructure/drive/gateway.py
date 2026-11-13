@@ -12,12 +12,13 @@
 """
 from __future__ import annotations
 
-import inspect
 import logging
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from app.domain.ports.drive import ShareProbeResult
+from app.domain.drive_types import DriveCapabilities, ShareLinkResult, DriveFile, TransferRequest
+from app.infrastructure.drive.transfer import TransferStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -137,19 +138,45 @@ def _response_ok(response: Any) -> bool:
 class AdapterDriveGateway:
     """`DriveGatewayPort` 的实现：适配器进，领域语义出。"""
 
-    def __init__(self, adapter: Any, *, drive_type: str | None = None) -> None:
+    def __init__(self, adapter: Any, *, drive_type: str | None = None, read_retry=None) -> None:
         if adapter is None:
             raise ValueError("AdapterDriveGateway 需要适配器实例")
         self._adapter = adapter
         self.drive_type = str(drive_type or getattr(adapter, "DRIVE_TYPE", "") or "")
+        self._read_retry = read_retry or (lambda _action, fn: fn())
+
+    def transfer_files(self, request):
+        strategy = getattr(self._adapter, "TRANSFER_STRATEGY", None) or TransferStrategy()
+        return strategy.transfer(self._adapter, request, self._read_retry)
+
+    @property
+    def capabilities(self) -> DriveCapabilities:
+        return DriveCapabilities(
+            supports_share=bool(getattr(self._adapter, "SUPPORTS_SHARE", False)),
+            supports_result_lookup=bool(getattr(self._adapter, "SUPPORTS_RESULT_LOOKUP", False)),
+            supports_lead_in=bool(getattr(self._adapter, "SUPPORTS_DRAMA_LEAD_IN", False)),
+            supports_own_material=bool(getattr(self._adapter, "SUPPORTS_LEAD_IN_OWN_FILE", False)),
+        )
+
+    def create_share_link(self, path: str, title: str) -> ShareLinkResult:
+        if not self.capabilities.supports_share:
+            return ShareLinkResult(supported=False)
+        result = self._adapter.create_share_link(path, title)
+        expiry = result.get("expires_in_days")
+        return ShareLinkResult(url=str(result.get("share_url") or ""),
+            share_id=str(result.get("share_id") or ""), title=str(result.get("title") or title),
+            passcode=str(result.get("passcode") or ""),
+            expires_in_days=int(expiry) if expiry else None, supported=True)
 
     # ---------------------------------------------------------------- 读
-    def list_dir(self, path: str) -> Sequence[DriveRemoteEntry]:
+    def list_dir(self, path: str) -> Sequence[DriveFile]:
         response = self._adapter.ls_dir(path)
         if not _response_ok(response):
             raise DriveGatewayError(str(_as_dict(response).get("message") or "列目录失败"))
         return [
-            DriveRemoteEntry(name=_get_name(item), is_dir=_is_dir(item), size=_size(item))
+            DriveFile(id=_get_fid(item), name=_get_name(item), is_dir=_is_dir(item), size=_size(item),
+                      modified_at=item.get("updated_at") or item.get("mtime") or item.get("last_modified"),
+                      token=_get_fid_token(item) or None)
             for item in _items(response)
         ]
 
@@ -217,8 +244,6 @@ class AdapterDriveGateway:
             if not fid:
                 continue
             fid_token = _get_fid_token(item)
-            if not fid_token:
-                raise DriveGatewayError("分享列表缺少 fid_token，无法转存", kind="invalid")
             fid_list.append(fid)
             fid_token_list.append(fid_token)
             file_names.append(_get_name(item))
@@ -260,21 +285,10 @@ class AdapterDriveGateway:
         stoken: str,
         file_names: list[str],
     ) -> Any:
-        """保存文件：部分网盘需要 file_names 关键字，用签名探测兼容（与执行器同一策略）。"""
-        try:
-            params = inspect.signature(self._adapter.save_file).parameters
-        except (TypeError, ValueError):
-            params = {}
-        if "file_names" in params:
-            return self._adapter.save_file(
-                fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken, file_names=file_names,
-            )
-        try:
-            return self._adapter.save_file(fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken)
-        except TypeError:
-            return self._adapter.save_file(
-                fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken, file_names=file_names,
-            )
+        request = TransferRequest(pwd_id, stoken, to_pdir_fid,
+            tuple(DriveFile(fid, name, token=token or None) for fid, token, name in zip(fid_list, fid_token_list, file_names)))
+        strategy = getattr(self._adapter, "TRANSFER_STRATEGY", None) or TransferStrategy()
+        return strategy.submit(self._adapter, request, to_pdir_fid)
 
     def _classify(self, response: Any) -> tuple[str, str]:
         verdict = self._adapter.classify_share_failure(response) or {}
@@ -283,6 +297,6 @@ class AdapterDriveGateway:
         return kind, message
 
 
-def gateway_for_adapter(adapter: Any, *, drive_type: str | None = None) -> AdapterDriveGateway:
+def gateway_for_adapter(adapter: Any, *, drive_type: str | None = None, read_retry=None) -> AdapterDriveGateway:
     """构造端口实现；业务层请通过 `app.application.container.drive_gateway()` 调用。"""
-    return AdapterDriveGateway(adapter, drive_type=drive_type)
+    return AdapterDriveGateway(adapter, drive_type=drive_type, read_retry=read_retry)

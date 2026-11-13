@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import logging
 import re
 import os
@@ -9,6 +8,8 @@ from datetime import datetime
 from typing import Any, Callable, Iterable, TypeVar
 
 from treelib import Tree
+from app.infrastructure.execution.drama_plan import (DramaPlanItem, build_transfer_plan, _parse_size, _to_size, _normalize_name, _is_dir, _get_name, _get_fid, _get_fid_token, _get_updated_at)
+from app.infrastructure.execution.drama_progress import calculate_saved_latest
 
 from app.application.drama_schedule import (
     REASON_ALLOW_ONCE,
@@ -18,6 +19,8 @@ from app.application.drama_schedule import (
     requires_skip,
     resolve_run_schedule,
 )
+from app.domain.drive_types import DriveFile, TransferRequest
+from app.infrastructure.drive.gateway import gateway_for_adapter
 from app.core.errors import bad_request
 from app.core.settings import settings
 from app.infrastructure.execution.execution_log import ExecutionLog
@@ -35,29 +38,8 @@ class SkipTask(Exception):
 T = TypeVar("T")
 
 
-def _parse_size(size_str: str) -> int | None:
-    """将 '100MB' 等大小字符串解析为字节数"""
-    if not size_str or not size_str.strip():
-        return None
-    s = size_str.strip().upper()
-    units = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
-    for suffix, multiplier in sorted(units.items(), key=lambda x: -len(x[0])):
-        if s.endswith(suffix):
-            try:
-                return int(float(s[: -len(suffix)]) * multiplier)
-            except (ValueError, TypeError, OverflowError):
-                return None
-    try:
-        return int(float(s))
-    except (ValueError, TypeError, OverflowError):
-        return None
 
 
-def _to_size(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
 
 
 def _validate_code_status(action: str, resp: Any) -> RetryResult:
@@ -80,73 +62,18 @@ def _validate_code_status(action: str, resp: Any) -> RetryResult:
     return RetryResult(value=resp, ok=True)
 
 
-def _normalize_name(name: str, ignore_extension: bool) -> str:
-    normalized = name.strip().lower()
-    if not ignore_extension:
-        return normalized
-    if "." in normalized:
-        return normalized.rsplit(".", 1)[0]
-    return normalized
 
 
-def _is_dir(payload: dict[str, Any]) -> bool:
-    if payload.get("is_dir") is not None:
-        return bool(payload.get("is_dir"))
-    if payload.get("isdir") is not None:
-        return str(payload.get("isdir")) in ("1", "true", "True")
-    if payload.get("dir") is not None:
-        return bool(payload.get("dir"))
-    if payload.get("kind") in ("folder", "dir", "directory"):
-        return True
-    if payload.get("kind") in ("file",):
-        return False
-    if payload.get("type") in ("folder", "dir"):
-        return True
-    if payload.get("type") in ("file",):
-        return False
-    if payload.get("file_type") is not None:
-        value = str(payload.get("file_type"))
-        if value in ("0", "dir", "folder"):
-            return True
-        if value in ("1", "file"):
-            return False
-    return False
 
 
-def _get_name(payload: dict[str, Any]) -> str:
-    return str(
-        payload.get("file_name")
-        or payload.get("server_filename")
-        or payload.get("fileName")
-        or payload.get("name")
-        or payload.get("title")
-        or payload.get("fid")
-        or payload.get("fs_id")
-        or ""
-    )
 
 
-def _get_fid(payload: dict[str, Any]) -> str:
-    return str(payload.get("fid") or payload.get("fs_id") or payload.get("file_id") or payload.get("id") or payload.get("fileId") or "")
 
 
-def _get_fid_token(payload: dict[str, Any]) -> str | None:
-    value = payload.get("fid_token") or payload.get("share_fid_token") or payload.get("token")
-    if value is None:
-        return None
-    return str(value)
 
 
-def _get_updated_at(payload: dict[str, Any]):
-    return payload.get("updated_at") or payload.get("update_time") or payload.get("mtime") or payload.get("modified_at")
 
 
-@dataclass(slots=True)
-class DramaPlanItem:
-    fid: str
-    fid_token: str | None
-    origin_name: str
-    target_name: str
 
 
 class DramaTaskExecutor:
@@ -293,12 +220,10 @@ class DramaTaskExecutor:
             name = _get_name(raw)
             if not fid:
                 continue
-            if not token:
-                raise RuntimeError("分享列表缺少 fid_token，无法转存")
             plan.append(
                 DramaPlanItem(
                     fid=fid,
-                    fid_token=str(token),
+                    fid_token=str(token) if token is not None else None,
                     origin_name=str(name),
                     target_name=str(name),
                 )
@@ -307,152 +232,25 @@ class DramaTaskExecutor:
             return
         self._save_with_saved_fids(pwd_id=pwd_id, stoken=stoken, dest_root_fid=to_pdir_fid, plan=plan)
 
-    def _call_save_file(
-        self,
-        *,
-        fid_list: list[str],
-        fid_token_list: list[str],
-        to_pdir_fid: str,
-        pwd_id: str,
-        stoken: str,
-        file_names: list[str],
-    ) -> dict[str, Any]:
-        try:
-            params = inspect.signature(self.adapter.save_file).parameters
-            if "file_names" in params:
-                return self.adapter.save_file(fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken, file_names=file_names)
-        except Exception:
-            pass
-        try:
-            return self.adapter.save_file(fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken, file_names=file_names)
-        except TypeError:
-            return self.adapter.save_file(fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken)
-
-    def _extract_saved_fids(
-        self,
-        *,
-        save_file_return: dict[str, Any] | None,
-        query_task_return: dict[str, Any] | None,
-    ) -> tuple[list[str], str]:
-        data = (save_file_return or {}).get("data") or {}
-        if data.get("_sync") and data.get("save_as_top_fids") is not None:
-            fids = [str(x).strip() for x in (data.get("save_as_top_fids") or []) if str(x).strip()]
-            return fids, "save_file.data.save_as_top_fids"
-
-        drive_type = str(getattr(self.adapter, "DRIVE_TYPE", "") or "")
-        qdata = (query_task_return or {}).get("data") or {}
-        save_as = (qdata.get("save_as") or {}) if isinstance(qdata, dict) else {}
-        if drive_type == "uc":
-            if save_as.get("save_as_select_top_fids") is not None:
-                fids = [str(x).strip() for x in (save_as.get("save_as_select_top_fids") or []) if str(x).strip()]
-                return fids, "query_task.data.save_as.save_as_select_top_fids"
-        if save_as.get("save_as_top_fids") is not None:
-            fids = [str(x).strip() for x in (save_as.get("save_as_top_fids") or []) if str(x).strip()]
-            return fids, "query_task.data.save_as.save_as_top_fids"
-        return [], "missing"
-
-    _PENDING_REVIEW_HINTS = ("审核",)
-
-    def _is_share_pending_review(self, response: Any) -> bool:
-        """判断网盘响应是否只是「分享审核中」。
-
-        -7 在转存接口是「分享文件夹等待审核中」（临时状态，稍后自愈），在分享页语境
-        才是「链接已被取消」。所以以适配器 classify_share_failure 为准，用文案兜底。
-        """
-        data = response if isinstance(response, dict) else {}
-        try:
-            verdict = self.adapter.classify_share_failure(data) or {}
-        except Exception:
-            verdict = {}
-        if str(verdict.get("kind") or "") == "pending":
-            return True
-        message = str(data.get("message") or "")
-        return any(hint in message for hint in DramaTaskExecutor._PENDING_REVIEW_HINTS)
-
     def _save_with_saved_fids(self, *, pwd_id: str, stoken: str, dest_root_fid: str, plan: list[DramaPlanItem]) -> list[str]:
-        fid_list = [item.fid for item in plan]
-        fid_token_list = [item.fid_token or "" for item in plan]
-        file_names = [item.origin_name for item in plan]
-        if any(not token for token in fid_token_list):
-            raise RuntimeError("分享列表缺少 fid_token，无法转存")
+        def read_retry(action, fn):
+            return self._retry(action=action, fn=fn,
+                               validate=lambda result: _validate_code_status(action, result))
 
-        drive_type = str(getattr(self.adapter, "DRIVE_TYPE", "") or "")
-        actual_save_fid = str(dest_root_fid)
-        share_folder_fid = None
-        if drive_type == "uc" and hasattr(self.adapter, "get_or_create_share_folder") and hasattr(self.adapter, "move_files_to_target"):
-            share_folder_fid = self.adapter.get_or_create_share_folder()
-            if share_folder_fid:
-                actual_save_fid = str(share_folder_fid)
-                self._line("使用中转目录: 来自：分享")
-            else:
-                self._line("获取中转目录失败，直接转存到目标目录")
-
-        saved_fids: list[str] = []
-        err_msg: str | None = None
-        idx = 0
-        while idx < len(fid_list):
-            batch_fids = fid_list[idx : idx + 100]
-            batch_tokens = fid_token_list[idx : idx + 100]
-            batch_names = file_names[idx : idx + 100]
-            idx += 100
-
-            save_ret = self._call_save_file(
-                fid_list=batch_fids,
-                fid_token_list=batch_tokens,
-                to_pdir_fid=actual_save_fid,
-                pwd_id=str(pwd_id),
-                stoken=str(stoken),
-                file_names=batch_names,
-            ) or {}
-            if (save_ret.get("code") not in (0, "0", None)) or (save_ret.get("status") not in (200, "200", None)):
-                if self._is_share_pending_review(save_ret):
-                    self._line("跳过: 分享正在审核中，网盘审核通过后会自动重试")
-                    raise SkipTask("分享正在审核中，网盘审核通过后会自动重试")
-                err_msg = str(save_ret.get("message") or "转存失败")
-                break
-
-            qret = None
-            job_id = (
-                (save_ret.get("data") or {}).get("task_id")
-                or (save_ret.get("data") or {}).get("taskId")
-                or save_ret.get("task_id")
-                or save_ret.get("taskId")
-                or ""
-            ).strip()
-            if job_id:
-                self._line(f"转存任务 id: {job_id}")
-                qret = self._query_task(str(job_id))
-                status = ((qret.get("data") or {}).get("status"))
-                if status not in (2, "2", None):
-                    task_message = str((qret.get("data") or {}).get("message") or qret.get("message") or "")
-                    if self._is_share_pending_review({"status": status, "message": task_message}):
-                        self._line("跳过: 分享正在审核中，网盘审核通过后会自动重试")
-                        raise SkipTask("分享正在审核中，网盘审核通过后会自动重试")
-                    err_msg = task_message or "转存任务失败"
-                    break
-
-            batch_saved, source = self._extract_saved_fids(save_file_return=save_ret, query_task_return=qret)
-            self._line(f"saved_fids: {len(batch_saved)}（来源={source}）")
-            saved_fids.extend(batch_saved)
-
-        if err_msg:
-            raise RuntimeError(err_msg)
-        if not saved_fids:
-            raise RuntimeError("转存任务完成但未返回转存后 fid 列表")
-
-        if share_folder_fid and drive_type == "uc":
-            self._set_stage("move_files")
-            self._section("移动到目标目录")
-            self._line(f"移动文件数: {len(saved_fids)}")
-            move_ret = self.adapter.move_files_to_target(saved_fids, str(dest_root_fid)) or {}
-            if move_ret.get("code") not in (0, "0", None):
-                raise RuntimeError(str(move_ret.get("message") or "移动失败"))
-
-        if len(saved_fids) != len(plan):
-            self._line(f"提示: saved_fids={len(saved_fids)} 与计划数={len(plan)} 不一致，将仅对齐前 {min(len(saved_fids), len(plan))} 项")
-        if saved_fids:
-            self.transfer_count += len(saved_fids)
-        return saved_fids
+        gateway = gateway_for_adapter(self.adapter, read_retry=read_retry)
+        saved = []
+        for offset in range(0, len(plan), 100):
+            batch = plan[offset:offset + 100]
+            request = TransferRequest(str(pwd_id), str(stoken), str(dest_root_fid),
+                tuple(DriveFile(item.fid, item.origin_name, token=item.fid_token or None) for item in batch))
+            result = gateway.transfer_files(request)
+            if result.state == "pending":
+                raise SkipTask(result.message or "转存结果待确认")
+            if result.state != "completed" or not result.confirmed:
+                raise RuntimeError(result.message or "转存失败")
+            saved.extend(item.id for item in result.files)
+        self.transfer_count += len(saved)
+        return saved
 
     def _iter_files(self, items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -498,106 +296,8 @@ class DramaTaskExecutor:
         return files
 
     def _plan_transfer(self, *, share_files: list[dict[str, Any]], dest_file_list: list[dict[str, Any]]) -> list[DramaPlanItem]:
-        taskname = str(self.task_data.get("taskname") or "")
-        pattern = str(self.task_data.get("pattern") or "")
-        replace = str(self.task_data.get("replace") or "")
-        ignore_extension = bool(self.task_data.get("ignore_extension"))
-
-        mr = MagicRename(magic_regex=(self.task_data.get("magic_regex") if isinstance(self.task_data.get("magic_regex"), dict) else None))
-        mr.set_taskname(taskname)
-        pattern, replace = mr.magic_regex_conv(pattern, replace)
-        compiled_search = re.compile(pattern, re.IGNORECASE) if pattern else None
-        tmdb_series_title = str(self.task_data.get("tmdb_series_title") or "").strip() or None
-        tmdb_tv_seasons = self.task_data.get("tmdb_tv_seasons") if isinstance(self.task_data.get("tmdb_tv_seasons"), list) else None
-        tmdb_year = int(self.task_data.get("tmdb_year")) if isinstance(self.task_data.get("tmdb_year"), int) else None
-        tmdb_media_type = str(self.task_data.get("tmdb_media_type") or "").strip().lower()
-
-        def _to_ts(v):
-            try:
-                return float(v)
-            except Exception:
-                return None
-
-        dest_filename_list = []
-        dest_episode_set: set[tuple[int, int]] = set()
-        from app.application.episode_number import extract_episode
-        mr._resolved_pattern = pattern
-        mr._resolved_replace = replace
-        for raw in dest_file_list:
-            if _is_dir(raw):
-                continue
-            name = _get_name(raw)
-            if name:
-                dest_filename_list.append(name)
-                try:
-                    s, e = extract_episode(name, mr=mr)
-                    if s is not None and e is not None:
-                        dest_episode_set.add((int(s), int(e)))
-                except Exception:
-                    pass
-
-        candidates: list[dict[str, Any]] = []
-        for raw in share_files:
-            fid = _get_fid(raw)
-            origin_name = _get_name(raw)
-            fid_token = _get_fid_token(raw)
-            updated_at = _get_updated_at(raw)
-            if not fid or not origin_name:
-                continue
-            if not _is_dir(raw):
-                # 基于原始文件名去重：文件名已存在则跳过
-                if origin_name in dest_filename_list:
-                    continue
-                # 基于集数去重：重命名后文件名变了但集数相同
-                if dest_episode_set:
-                    try:
-                        s, e = extract_episode(origin_name, mr=mr)
-                        if s is not None and e is not None and (int(s), int(e)) in dest_episode_set:
-                            continue
-                    except Exception:
-                        pass
-            file_name_re = mr.sub(pattern, replace, origin_name) if (pattern or replace) else origin_name
-            candidates.append(
-                {
-                    "fid": fid,
-                    "fid_token": fid_token,
-                    "file_name": origin_name,
-                    "file_name_re": file_name_re,
-                    "updated_at": updated_at,
-                    "size": raw.get("size"),
-                    "dir": False,
-                }
-            )
-
-        candidates = self._filter_transfer_files(candidates)
-
-        # 过滤完成后再判断重命名冲突，避免已排除的文件抢占目标名称。
-        best: dict[str, tuple[tuple[float, float], int]] = {}
-        for idx, f in enumerate(candidates):
-            target = str(f.get("file_name_re") or "")
-            if not target:
-                continue
-            key = os.path.splitext(target)[0] if ignore_extension else target
-            sz = _to_size(f.get("size"))
-            ts = _to_ts(f.get("updated_at"))
-            score = (float(sz) if sz is not None else float("-inf"), ts if ts is not None else float("-inf"))
-            prev = best.get(key)
-            if prev is None or score > prev[0] or (score == prev[0] and idx > prev[1]):
-                best[key] = (score, idx)
-        keep_idx = set(v[1] for v in best.values())
-        candidates = [f for idx, f in enumerate(candidates) if idx in keep_idx]
-
-        plan: list[DramaPlanItem] = []
-        for f in candidates:
-            plan.append(
-                DramaPlanItem(
-                    fid=str(f["fid"]),
-                    fid_token=(str(f.get("fid_token")) if f.get("fid_token") is not None else None),
-                    origin_name=str(f["file_name"]),
-                    target_name=str(f["file_name_re"]),
-                )
-            )
-        return plan
+        return build_transfer_plan(self.task_data, share_files=share_files,
+                                   dest_file_list=dest_file_list, filter_files=self._filter_transfer_files)
 
     def _rename_one(self, *, fid: str, origin: str, target: str) -> bool:
         fid = str(fid or "").strip()
@@ -907,15 +607,12 @@ class DramaTaskExecutor:
                 token = _get_fid_token(raw)
                 if not name or not fid:
                     continue
-                if not token:
-                    self._line(f"跳过缺少 fid_token 的文件: {name}")
-                    continue
                 if _normalize_name(name, ignore_extension) in existing_names:
                     continue
                 plan.append(
                     DramaPlanItem(
                         fid=str(fid),
-                        fid_token=str(token),
+                        fid_token=str(token) if token is not None else None,
                         origin_name=name,
                         target_name=name,
                     )
@@ -1017,15 +714,12 @@ class DramaTaskExecutor:
             token = _get_fid_token(item)
             if not name or not fid:
                 continue
-            if not token:
-                self._line(f"跳过缺少 fid_token 的文件: {name}")
-                continue
             if not copy_all and _normalize_name(name, ignore_extension) in existing_names:
                 continue
             plan.append(
                 DramaPlanItem(
                     fid=str(fid),
-                    fid_token=str(token),
+                    fid_token=str(token) if token is not None else None,
                     origin_name=name,
                     target_name=name,
                 )
@@ -1125,8 +819,9 @@ class DramaTaskExecutor:
             except SkipTask:
                 # 审核中不是「目录直转失败」，不能降级成逐文件再刷一遍，直接上抛让任务记 skipped
                 raise
-            except Exception as exc:
-                self._line(f"目录直转失败，改为逐文件转存: {exc}")
+            except Exception:
+                # A failed write may have partially completed; do not resubmit its contents.
+                raise
         # 退化：新建同名目录 + 递归转存全部文件
         self._line(f"逐文件整包转存文件夹: {share_name}")
         return self._sync_share_dir_incremental(
@@ -1152,75 +847,9 @@ class DramaTaskExecutor:
         }
 
     def _record_saved_latest(self, file_names: list[str] | None = None) -> None:
-        """记录保存后目标目录里实际存在的最大集数（写到任务的 extra.saved_latest）。
-
-        名字来源：目标目录已存在的文件 ∪ 本次转存成功的文件；整包直转时补充目标目录列表。
-        这些清单在同步过程中本来就会拉取，不产生额外请求。
-        """
-        from app.application.episode_number import extract_episode, guess_episode
-
-        extra = self.task_data.get("extra") if isinstance(self.task_data.get("extra"), dict) else {}
-        prev = extra.get("saved_latest") if isinstance(extra.get("saved_latest"), dict) else {}
-        try:
-            prev_episode = int(prev.get("episode") or 0)
-        except (TypeError, ValueError):
-            prev_episode = 0
-        # 历史数据里可能把日期年份记成了集号（如 2026.1.13 -> 2026），直接丢弃
-        prev_year_like = 1900 <= prev_episode <= 2100
-        if prev_year_like:
-            prev_episode = 0
-
-        names = list(file_names) if file_names is not None else list(self._saved_name_pool)
-        hints = list(self._folder_episode_hints)
-        if not names and not hints:
-            if prev_year_like:
-                # 清掉错误的年份水位，前端会隐藏"已存"
-                self._clear_saved_latest()
-            return
-
-        mr = MagicRename(magic_regex=(self.task_data.get("magic_regex") if isinstance(self.task_data.get("magic_regex"), dict) else None))
-        mr.set_taskname(str(self.task_data.get("taskname") or ""))
-        pattern = str(self.task_data.get("pattern") or "")
-        replace = str(self.task_data.get("replace") or "")
-        if pattern and replace:
-            try:
-                pattern, replace = mr.magic_regex_conv(pattern, replace)
-                mr._resolved_pattern = pattern
-                mr._resolved_replace = replace
-            except Exception:
-                mr = None
-        else:
-            mr = None
-
-        best_episode = prev_episode
-        best_season = prev.get("season")
-        best_name = str(prev.get("name") or "")
-        for name in names:
-            season, episode = extract_episode(name, mr=mr)
-            if episode is None:
-                episode = guess_episode(name)
-            if episode is None:
-                continue
-            if int(episode) > int(best_episode or 0):
-                best_episode = int(episode)
-                best_season = season
-                best_name = name
-        for hint in hints:
-            try:
-                hint_value = int(hint)
-            except (TypeError, ValueError):
-                continue
-            if hint_value > int(best_episode or 0):
-                best_episode = hint_value
-                best_season = None
-                best_name = f"{hint_value}集"
-        if not best_episode:
-            if prev_year_like:
-                self._clear_saved_latest()
-            return
-        self.saved_latest = {
-            "episode": int(best_episode),
-            "season": best_season,
-            "name": best_name,
-            "at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        }
+        result = calculate_saved_latest(
+            self.task_data, list(file_names) if file_names is not None else list(self._saved_name_pool),
+            list(self._folder_episode_hints), at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+        if result is not None:
+            self.saved_latest = result

@@ -498,7 +498,12 @@ class GuangyaClientLite:
         )
 
 
+from app.infrastructure.drive.transfer import NamedTransferStrategy
+
+
 class GuangyaAdapter(BaseCloudDriveAdapter):
+    TRANSFER_STRATEGY = NamedTransferStrategy()
+
     DRIVE_TYPE = "guangya"
     DRIVE_NAME = "光鸭云盘"
     CONFIG_FORMAT = "kv"
@@ -1273,7 +1278,7 @@ class GuangyaAdapter(BaseCloudDriveAdapter):
                 },
             }
         except Exception as exc:
-            return {"code": 1, "message": str(exc), "data": {}}
+            return {"write_uncertain": True, "code": 1, "message": str(exc), "data": {}}
 
     def query_task(self, task_id: str) -> Dict:
         try:

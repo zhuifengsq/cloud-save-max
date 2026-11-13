@@ -122,7 +122,7 @@ def test_gateway_satisfies_port_protocol():
     assert gateway.drive_type == "fake11"
     entries = gateway.list_dir("0")
     assert isinstance(entries[0], RemoteEntry)
-    assert entries[0] == DriveRemoteEntry(name="第一集.mp4", is_dir=False, size=1024)
+    assert (entries[0].id, entries[0].name, entries[0].is_dir, entries[0].size, entries[0].token) == ("f1", "第一集.mp4", False, 1024, "t1")
 
 
 def test_list_dir_normalizes_each_drive_field_names():
@@ -215,19 +215,21 @@ def test_transfer_is_thin_save_without_retry():
 
 
 def test_transfer_passes_file_names_when_adapter_requires_it():
+    from app.infrastructure.drive.transfer import NamedTransferStrategy
     adapter = _FileNamesAdapter()
+    adapter.TRANSFER_STRATEGY = NamedTransferStrategy()
     adapter.detail_response = adapter.ls_response
     gateway_for_adapter(adapter).transfer("https://pan.quark.cn/s/x", "target-fid")
     assert adapter.file_names == ["第一集.mp4", "第二季"]
 
 
-def test_transfer_raises_when_fid_token_missing():
+def test_transfer_allows_missing_optional_fid_token():
     adapter = _BaseFakeAdapter()
     adapter.ls_response = {"code": 0, "data": {"list": [{"fid": "f1", "file_name": "a.mp4"}]}}
     adapter.detail_response = adapter.ls_response
-    with pytest.raises(DriveGatewayError) as excinfo:
-        gateway_for_adapter(adapter).transfer("https://pan.quark.cn/s/x", "target-fid")
-    assert excinfo.value.kind == "invalid"
+    gateway_for_adapter(adapter).transfer("https://pan.quark.cn/s/x", "target-fid")
+    args, _ = _call(adapter, "save_file")
+    assert args[1] == [""]
 
 
 def test_probe_share_rejects_empty_list_even_when_code_is_zero():

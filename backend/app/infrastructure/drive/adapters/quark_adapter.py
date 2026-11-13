@@ -18,7 +18,14 @@ from app.infrastructure.drive.adapters.lead_in_support import DramaLeadInMixin
 logger = logging.getLogger(__name__)
 
 
+from app.infrastructure.drive.transfer import TokenTransferStrategy
+
+
 class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
+    SUPPORTS_RESULT_LOOKUP = True
+    TRANSFER_STRATEGY = TokenTransferStrategy()
+
+    SUPPORTS_SHARE = True
     """夸克网盘适配器"""
 
     DRIVE_TYPE = "quark"

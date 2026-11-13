@@ -160,7 +160,12 @@ class AliyunToken:
         }
 
 
+from app.infrastructure.drive.transfer import NamedTransferStrategy
+
+
 class AliyunAdapter(BaseCloudDriveAdapter):
+    TRANSFER_STRATEGY = NamedTransferStrategy()
+
     """阿里云盘适配器"""
 
     DRIVE_TYPE = "aliyun"
@@ -860,7 +865,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
             }
         except Exception as e:
             logger.error(f"[Aliyun] 转存失败: {e}")
-            return {"code": 1, "message": str(e), "data": {}}
+            return {"write_uncertain": True, "code": 1, "message": str(e), "data": {}}
 
     def query_task(self, task_id: str) -> Dict:
         """查询任务状态（阿里云盘转存是同步操作）"""

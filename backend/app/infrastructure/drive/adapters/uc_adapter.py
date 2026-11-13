@@ -17,7 +17,13 @@ from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
 logger = logging.getLogger(__name__)
 
 
+from app.infrastructure.drive.transfer import UCTransferStrategy
+
+
 class UCAdapter(BaseCloudDriveAdapter):
+    SUPPORTS_RESULT_LOOKUP = True
+    TRANSFER_STRATEGY = UCTransferStrategy()
+
     """UC网盘适配器"""
 
     DRIVE_TYPE = "uc"
@@ -89,7 +95,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             logger.error(f"[UC] 请求失败: {e}")
             fake_response = requests.Response()
             fake_response.status_code = 500
-            fake_response._content = b'{"status": 500, "code": 1, "message": "request error"}'
+            fake_response._content = b'{"status": 500, "code": 1, "write_uncertain": true, "message": "request error"}'
             return fake_response
 
     def _safe_json(self, response: requests.Response) -> Dict:
@@ -98,7 +104,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             return response.json()
         except Exception as e:
             logger.warning(f"[UC] JSON解析失败: {e}")
-            return {"code": 1, "status": 500, "message": "响应解析失败"}
+            return {"code": 1, "status": 500, "write_uncertain": True, "message": "响应解析失败"}
 
     def init(self) -> Any:
         """初始化账户"""
@@ -340,7 +346,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             return result
         except Exception as e:
             logger.error(f"[UC] 转存失败: {e}")
-            return {"code": 1, "message": f"转存失败: {e}", "data": {}}
+            return {"write_uncertain": True, "code": 1, "message": f"转存失败: {e}", "data": {}}
 
     def unarchive(self, fid: str, to_pdir_fid: str) -> Dict:
         url = f"{self.BASE_URL}/1/clouddrive/archive/unarchive"
@@ -486,7 +492,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             return result
         except Exception as e:
             logger.error(f"[UC] 移动文件失败: {e}")
-            return {"code": 1, "message": f"移动文件失败: {e}"}
+            return {"code": 1, "write_uncertain": True, "message": "移动结果待确认"}
 
     def move_files(self, fids: List[str], to_pdir_fid: str) -> Dict:
         return self.move_files_to_target(fids, to_pdir_fid)
@@ -543,7 +549,9 @@ class UCAdapter(BaseCloudDriveAdapter):
                 query_result = self.query_task(task_id)
                 if query_result.get("code") != 0 or query_result.get("data", {}).get("status") == -1:
                     msg = query_result.get("data", {}).get("message", query_result.get("message", "移动任务失败"))
-                    return {"code": 1, "message": msg}
+                    return {"code": 1, "write_uncertain": True, "message": msg}
+                if query_result.get("data", {}).get("status") not in (2, "2"):
+                    return {"code": 1, "write_uncertain": True, "message": "移动结果待确认"}
 
         return {"code": 0, "message": "移动完成"}
 

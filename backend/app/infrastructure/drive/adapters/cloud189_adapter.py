@@ -41,7 +41,12 @@ class Cloud189SecondValidRequired(Exception):
         self.context = context
 
 
+from app.infrastructure.drive.transfer import NamedTransferStrategy
+
+
 class Cloud189Adapter(BaseCloudDriveAdapter):
+    TRANSFER_STRATEGY = NamedTransferStrategy()
+
     DRIVE_TYPE = "cloud189"
     DRIVE_NAME = "天翼云盘"
     CONFIG_FORMAT = "kv"
@@ -2136,7 +2141,7 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
                 try:
                     _ = self._list_share_dir_by_code_v2({"shareId": share_id, "shareMode": share_mode}, root_file_id, access_code)
                 except Exception as e:
-                    return {"code": 1, "message": str(e) or "解析分享失败", "data": {}}
+                    return {"write_uncertain": True, "code": 1, "message": str(e) or "解析分享失败", "data": {}}
             target = self._map_root_fid(to_pdir_fid)
 
             before_items: Dict[str, str] = {}
@@ -2246,7 +2251,7 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
                 "data": {"task_id": task_id, "save_as_top_fids": aligned, "_sync": True},
             }
         except Exception as e:
-            return {"code": 1, "message": str(e), "data": {}}
+            return {"write_uncertain": True, "code": 1, "message": str(e), "data": {}}
 
     def query_task(self, task_id: str) -> Dict:
         try:

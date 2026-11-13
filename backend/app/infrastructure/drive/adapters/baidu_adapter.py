@@ -84,7 +84,13 @@ class PanNode:
         return f"{PAN_BAIDU_COM}/{node}"
 
 
+from app.infrastructure.drive.transfer import BaiduTransferStrategy
+
+
 class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
+    TRANSFER_STRATEGY = BaiduTransferStrategy()
+
+    SUPPORTS_SHARE = True
     """百度网盘适配器"""
 
     DRIVE_TYPE = "baidu"
@@ -1258,8 +1264,8 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             errno_match = re.search(r"errno[=:]?\s*(-?\d+)", error_msg)
             if errno_match:
                 errno = int(errno_match.group(1))
-                return {"code": errno, "message": self._get_error_message(errno), "data": {}}
-            return {"code": 1, "message": f"转存失败: {error_msg}", "data": {}}
+                return {"write_uncertain": True, "code": errno, "message": self._get_error_message(errno), "data": {}}
+            return {"write_uncertain": True, "code": 1, "message": f"转存失败: {error_msg}", "data": {}}
 
     def query_task(self, task_id: str) -> Dict:
         """查询任务状态（百度网盘转存是同步操作）"""

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+from app.domain.drive_types import DriveCapabilities, ShareLinkResult, TransferRequest, TransferResult
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,13 @@ class DriveGatewayPort(Protocol):
     """能力最小集：列目录、建目录、转存、校验分享、关闭。"""
 
     drive_type: str
+    capabilities: DriveCapabilities
+
+    def transfer_files(self, request: TransferRequest) -> TransferResult:
+        """Submit a transfer once and report whether its result is confirmed."""
+
+    def create_share_link(self, path: str, title: str) -> ShareLinkResult:
+        """Create a share, or report that the capability is unsupported."""
 
     def list_dir(self, path: str) -> Sequence[RemoteEntry]:
         """列目录（适配器自己的路径语义，如 / 或根目录 id）。"""

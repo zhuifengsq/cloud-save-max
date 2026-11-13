@@ -29,7 +29,12 @@ def set_config_saver(config_path: Any):
         _global_config_saver = config_path
 
 
+from app.infrastructure.drive.transfer import TransferStrategy
+
+
 class Pan123Adapter(BaseCloudDriveAdapter):
+    TRANSFER_STRATEGY = TransferStrategy()
+
     DRIVE_TYPE = "123pan"
     DRIVE_NAME = "123 网盘"
     CONFIG_FORMAT = "kv"
@@ -951,7 +956,7 @@ class Pan123Adapter(BaseCloudDriveAdapter):
                     created_top_fids=created_top_fids,
                 )
             except Exception as e:
-                return {"code": 500, "message": str(e), "data": None}
+                return {"write_uncertain": True, "code": 500, "message": str(e), "data": None}
 
             time.sleep(random.uniform(0.05, 0.15))
 

@@ -17,7 +17,12 @@ from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
 logger = logging.getLogger(__name__)
 
 
+from app.infrastructure.drive.transfer import NamedTransferStrategy
+
+
 class Cloud115Adapter(BaseCloudDriveAdapter):
+    TRANSFER_STRATEGY = NamedTransferStrategy()
+
     """115网盘适配器"""
 
     DRIVE_TYPE = "115"
@@ -517,8 +522,8 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
             result = self._safe_json(resp)
             if not result.get("state"):
                 errors.append(result.get("error", "转存失败"))
-        except Exception as e:
-            errors.append(str(e))
+        except Exception:
+            return {"code": 1, "write_uncertain": True, "message": "转存结果待确认", "data": {}}
 
         if errors:
             return {"code": 1, "message": "; ".join(errors), "data": {}}

@@ -117,7 +117,12 @@ def set_config_saver(config_path: str):
         _global_config_saver = _config_saver_factory(config_path)
 
 
+from app.infrastructure.drive.transfer import NamedTransferStrategy
+
+
 class XunleiAdapter(BaseCloudDriveAdapter):
+    TRANSFER_STRATEGY = NamedTransferStrategy()
+
     """迅雷网盘适配器"""
 
     DRIVE_TYPE = "xunlei"
@@ -731,7 +736,7 @@ class XunleiAdapter(BaseCloudDriveAdapter):
 
         except Exception as e:
             logger.error(f"[Xunlei] 转存失败: {e}")
-            return {"code": 1, "message": str(e), "data": {}}
+            return {"write_uncertain": True, "code": 1, "message": str(e), "data": {}}
 
     def query_task(self, task_id: str) -> Dict:
         """查询任务状态"""

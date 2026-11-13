@@ -20,7 +20,12 @@ from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
 logger = logging.getLogger(__name__)
 
 
+from app.infrastructure.drive.transfer import NamedTransferStrategy
+
+
 class Cloud139Adapter(BaseCloudDriveAdapter):
+    TRANSFER_STRATEGY = NamedTransferStrategy()
+
     DRIVE_TYPE = "cloud139"
     DRIVE_NAME = "移动云盘"
     CONFIG_FORMAT = "kv"
@@ -795,7 +800,7 @@ class Cloud139Adapter(BaseCloudDriveAdapter):
                 },
             }
         except Exception as exc:
-            return {"code": 1, "message": str(exc), "data": {}}
+            return {"write_uncertain": True, "code": 1, "message": str(exc), "data": {}}
 
     def query_task(self, task_id: str) -> Dict:
         if not str(task_id or "").strip():
