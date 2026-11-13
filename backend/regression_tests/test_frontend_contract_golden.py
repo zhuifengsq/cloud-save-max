@@ -53,6 +53,8 @@ MODEL_PAIRS = [
     ("TaskExecutionDetail", "app.schemas.task_reads", "TaskExecutionDetailOut"),
     ("TMDBImage", "app.schemas.media_discovery", "TMDBImageOut"),
     ("TMDBImages", "app.schemas.media_discovery", "TMDBImagesOut"),
+    ("SavedLatestProgress", "app.schemas.saved_progress", "SavedLatestProgressOut"),
+    ("SavedProgressCorrection", "app.schemas.saved_progress", "SavedProgressCorrectionOut"),
 ]
 
 # 「后端有、前端没有」的已确认差异：字段 -> 理由。空理由视为未登记。

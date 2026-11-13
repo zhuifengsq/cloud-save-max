@@ -11,6 +11,7 @@ import type {
   TaskItem,
   TaskSchedulerSetting,
   TaskShareLink,
+  SavedProgressCorrection,
 } from '@/types/tasks'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 import { markTasksChanged } from '@/utils/taskChangeBus'
@@ -72,6 +73,14 @@ export async function setTaskStatus(taskId: number, enabled: boolean) {
 
 export async function runTask(taskId: number) {
   const { data } = await http.post<TaskExecutionItem>(`/tasks/${taskId}/run`)
+  markTasksChanged()
+  return data
+}
+
+export async function correctTaskSavedProgress(taskId: number): Promise<SavedProgressCorrection> {
+  const { data } = await http.post<SavedProgressCorrection>(`/tasks/${taskId}/saved-progress/correct`, undefined, {
+    headers: { 'X-Silent-Toast': '1' },
+  })
   markTasksChanged()
   return data
 }

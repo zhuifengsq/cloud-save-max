@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.infrastructure.execution.magic_rename import MagicRename
 
-def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints: list[int], *, at: str) -> dict | None:
+def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints: list[int], *, at: str, preserve_previous: bool = True, require_all_recognized: bool = False) -> dict | None:
     """记录保存后目标目录里实际存在的最大集数（写到任务的 extra.saved_latest）。
 
     名字来源：目标目录已存在的文件 ∪ 本次转存成功的文件；整包直转时补充目标目录列表。
@@ -12,6 +12,8 @@ def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints:
 
     extra = task_data.get("extra") if isinstance(task_data.get("extra"), dict) else {}
     prev = extra.get("saved_latest") if isinstance(extra.get("saved_latest"), dict) else {}
+    if not preserve_previous:
+        prev = {}
     try:
         prev_episode = int(prev.get("episode") or 0)
     except (TypeError, ValueError):
@@ -50,7 +52,9 @@ def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints:
         season, episode = extract_episode(name, mr=mr)
         if episode is None:
             episode = guess_episode(name)
-        if episode is None:
+        if episode is None or (require_all_recognized and episode <= 0):
+            if require_all_recognized:
+                raise ValueError('A saved file has no recognizable episode number')
             continue
         if int(episode) > int(best_episode or 0):
             best_episode = int(episode)

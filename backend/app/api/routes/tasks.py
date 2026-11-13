@@ -39,7 +39,7 @@ from app.application.resource_search import fetch_task_suggestions
 from app.application.tasks import create_task, delete_task, get_task, set_task_enabled, update_task
 from app.application.tmdb_settings import get_tmdb_lang_pair
 
-from app.api.routes import tasks_drive, tasks_share, tasks_stream
+from app.api.routes import task_saved_progress, tasks_drive, tasks_share, tasks_stream
 from app.api.presenters.task import execution_out, scheduler_out, task_out
 from app.application.queries.task_views import (
     execution_view,
@@ -207,3 +207,4 @@ def patch_task_scheduler_setting(request: Request, payload: TaskSchedulerSetting
 router.include_router(tasks_share.router)
 router.include_router(tasks_drive.router)
 router.include_router(tasks_stream.router)
+router.include_router(task_saved_progress.router)

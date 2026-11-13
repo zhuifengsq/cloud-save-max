@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     CalendarDramaRefresh: typeof import('./components/tasks/CalendarDramaRefresh.vue')['default']
+    CalendarSavedProgress: typeof import('./components/tasks/CalendarSavedProgress.vue')['default']
     CapacityAccountCard: typeof import('./components/dashboard/CapacityAccountCard.vue')['default']
     CapacityHero: typeof import('./components/dashboard/CapacityHero.vue')['default']
     DramaAttention: typeof import('./components/dashboard/DramaAttention.vue')['default']

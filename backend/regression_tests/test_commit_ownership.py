@@ -28,6 +28,7 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 # file(相对 app/) -> (预算, 归属类别, 为什么必须由它提交)
 COMMIT_BUDGET: dict[str, tuple[int, str, str]] = {
+    'application/use_cases/correct_saved_progress.py': (1, 'use-case-owned', '校正用例拥有进度条件写回与审计的原子提交；网盘扫描在事务外'),
     'infrastructure/persistence/session.py': (1, 'infra', 'commit_with_locked_retry 的实现本体'),
     'core/runtime/tx.py': (1, 'infra', 'end_read_tx 的实现本体（platform 层，零 ORM 依赖）'),
     'main.py': (2, 'app-lifecycle', 'lifespan: 权限种子初始化、启动时执行记录清理'),

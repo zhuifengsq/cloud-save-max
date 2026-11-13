@@ -2,6 +2,10 @@
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 import CalendarDramaRefresh from '@/components/tasks/CalendarDramaRefresh.vue'
+import CalendarSavedProgress from '@/components/tasks/CalendarSavedProgress.vue'
+import { correctTaskSavedProgress } from '@/api/tasks'
+import { TASK_WRITE } from '@/constants/permissions'
+import { useAuthStore } from '@/stores/auth'
 
 import {
   TMDB_DETAIL_REFRESH_MS,
@@ -21,6 +25,8 @@ import { getDramaSchedule } from '@/utils/dramaSchedule'
 import { getTasksVersion, subscribeTasksChanged } from '@/utils/taskChangeBus'
 
 defineOptions({ name: 'DramaCalendarView' })
+const auth = useAuthStore()
+const canWrite = computed(() => auth.permissions.includes(TASK_WRITE))
 
 type WeekdayKey = 1 | 2 | 3 | 4 | 5 | 6 | 7
 
@@ -41,7 +47,7 @@ type CalendarEntry = {
   dateKey: string
   episodeNumbers: number[]
   predictedEpisodes: number | null
-  progressItems: Array<{ key: string; rank: number; label: string; percent: number | null; text: string }>
+  progressItems: Array<{ taskId: number; key: string; rank: number; label: string; percent: number | null; text: string }>
 }
 
 const weekdays: Array<{ key: WeekdayKey; label: string }> = [
@@ -80,6 +86,7 @@ const isMobile = computed(() => viewport.width <= 768)
 const selectedDateKey = ref<string>('')
 const refreshingDetails = reactive<Record<number, boolean>>({})
 const detailRefreshErrors = reactive<Record<number, string>>({})
+const correctingProgress = reactive<Record<number, boolean>>({})
 
 function normalizeWeekdays(value: any): WeekdayKey[] {
   const arr = Array.isArray(value) ? value : []
@@ -760,6 +767,7 @@ const weekEntriesByDate = computed(() => {
     const savedText = calendarProgressText(savedEpisode, totalCount, s.baseAiredTotal)
 
     const progressItem = {
+      taskId: s.task.id,
       key: `${groupKey}:${s.task.id}`,
       rank: driveRankOf(s.task),
       label: driveLabelOf(s.task),
@@ -928,6 +936,7 @@ const monthEntriesByDate = computed(() => {
     const savedText = calendarProgressText(savedEpisode, totalCount, s.baseAiredTotal)
 
     const progressItem = {
+      taskId: s.task.id,
       key: `${groupKey}:${s.task.id}`,
       rank: driveRankOf(s.task),
       label: driveLabelOf(s.task),
@@ -1122,13 +1131,16 @@ let firstActivated = true
 let calendarActive = false
 let derivedStoreVersion = -1
 let unsubscribeTasksChanged: (() => void) | null = null
+let taskLoadVersion = 0
 
 async function performLoad(opts: { silent?: boolean; localOnly?: boolean }) {
+  const loadVersion = ++taskLoadVersion
   const silent = opts.silent === true
   const versionAtStart = getTasksVersion()
   if (!silent) loading.value = true
   try {
     const all = await loadSharedTasks({ maxAgeMs: 0 })
+    if (loadVersion !== taskLoadVersion) return
     tasks.value = all
 
     const ids = Array.from(
@@ -1153,6 +1165,7 @@ async function performLoad(opts: { silent?: boolean; localOnly?: boolean }) {
     for (const id of ids) ensureDerived(id)
     derivedStoreVersion = getTmdbDetailStoreVersion()
 
+    if (loadVersion !== taskLoadVersion) return
     lastLoadedAt = Date.now()
     loadedTasksVersion = versionAtStart
     refreshTodayKey()
@@ -1240,6 +1253,22 @@ async function refreshDramaDetail(item: CalendarEntry) {
   }
 }
 
+async function correctSavedProgress(taskId: number) {
+  if (correctingProgress[taskId]) return
+  correctingProgress[taskId] = true
+  try {
+    const result = await correctTaskSavedProgress(taskId)
+    const task = tasks.value.find(item => item.id === taskId)
+    if (task) task.extra = {...task.extra, saved_latest: result.saved_latest}
+    await refreshData({silent: true, localOnly: true})
+    ElMessage.success(result.saved_latest.episode > 0 ? `已存进度已校正为 ${result.saved_latest.episode}` : '校正完成，保存目录未发现可识别的已存集数')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || error?.message || '校正失败，原已存进度保留，请重试')
+  } finally {
+    delete correctingProgress[taskId]
+  }
+}
+
 // 工作台可能在后台刷新过 TMDB 资料，切回日历时把派生映射同步一下
 function syncDerivedFromCache() {
   if (derivedStoreVersion === getTmdbDetailStoreVersion()) return
@@ -1262,7 +1291,7 @@ onActivated(() => {
   if (!unsubscribeTasksChanged) {
     unsubscribeTasksChanged = subscribeTasksChanged(() => {
       if (!calendarActive) return
-      refreshData({ silent: true })
+      refreshData({ silent: true, localOnly: true })
     })
   }
   if (firstActivated) {
@@ -1368,21 +1397,7 @@ watch(
 
               <div class="poster-overlay">
                 <div class="overlay-title" :title="it.title">{{ it.title }}</div>
-                <div class="poster-progress-list" :tabindex="it.progressItems.length > 2 ? 0 : undefined" :aria-label="`${it.title} 网盘进度`">
-                  <div v-for="p in it.progressItems" :key="p.key" class="overlay-progress">
-                    <div class="overlay-progress__meta">
-                      <span class="overlay-drive">{{ p.label }}</span>
-                      <span class="percent">{{ p.text || (p.percent != null ? `${p.percent}%` : '暂无进度') }}</span>
-                    </div>
-                    <el-progress
-                      v-if="p.percent != null"
-                      :percentage="p.percent"
-                      :stroke-width="3"
-                      :show-text="false"
-                      :aria-label="`${p.label}：${p.text || `${p.percent}%`}`"
-                    />
-                  </div>
-                </div>
+                <CalendarSavedProgress :items="it.progressItems" :title="it.title" :can-write="canWrite" :correcting="correctingProgress" overlay @correct="correctSavedProgress" />
               </div>
             </div>
           </el-card>
@@ -1440,7 +1455,7 @@ watch(
                   :error="detailRefreshErrors[it.tmdbId]" @refresh="refreshDramaDetail(it)"
                 />
               </div>
-              <div class="month-name" :title="it.title">{{ it.title }}</div>
+              <button class="month-name month-progress-trigger" :title="`${it.title}：查看网盘进度与校正`" :aria-label="`查看${it.title}网盘进度`" @click.stop="openMonthMore(cell.key)">{{ it.title }}</button>
               <div class="month-pct">
                 <template v-if="it.dateKey > todayKey() && it.confirmed && it.episodeNumbers.length">{{ formatEpisodeList(it.episodeNumbers) }}</template>
                 <template v-else-if="it.dateKey > todayKey()">预测{{ it.predictedEpisodes != null ? ` E${it.predictedEpisodes}` : '' }}</template>
@@ -1484,6 +1499,7 @@ watch(
               </div>
               <div v-if="it.predictedAiredTotal != null" class="month-detail__caption">预计更新到：E{{ it.predictedAiredTotal }}</div>
               <div v-else-if="it.progressText" class="month-detail__caption">{{ it.progressText }}</div>
+              <CalendarSavedProgress :items="it.progressItems" :title="it.title" :can-write="canWrite" :correcting="correctingProgress" @correct="correctSavedProgress" />
             </div>
           </div>
         </div>
@@ -1504,6 +1520,7 @@ watch(
           <div class="month-dialog-pct">
             {{ it.predictedAiredTotal != null ? `E${it.predictedAiredTotal}` : it.progressPercent != null ? `${it.progressPercent}%` : '—' }}
           </div>
+          <CalendarSavedProgress class="month-dialog-progress" :items="it.progressItems" :title="it.title" :can-write="canWrite" :correcting="correctingProgress" @correct="correctSavedProgress" />
         </div>
       </div>
     </el-dialog>
@@ -1628,6 +1645,9 @@ watch(
 }
 
 .calendar-artwork { position: relative; width: fit-content; }
+.month-dialog-progress { grid-column: 2 / -1; margin-bottom: 12px; }
+.month-progress-trigger { border: 0; padding: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.month-progress-trigger:hover { text-decoration: underline; }
 
 .poster-img {
   width: 100%;
@@ -1665,22 +1685,6 @@ watch(
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
-
-.poster-progress-list {
-  display: grid;
-  gap: 10px;
-  max-height: 82px;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, .35) transparent;
-}
-
-.overlay-progress { display: grid; gap: 7px; min-width: 0; }
-.overlay-progress__meta { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
-.overlay-drive { color: #d0d8e4; font-size: 11px; line-height: 1.4; }
-.percent { color: #fff; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.4; text-align: right; }
-.overlay-progress :deep(.el-progress-bar__outer) { background: rgba(255, 255, 255, .2); }
-.overlay-progress :deep(.el-progress-bar__inner) { background: #58c99a; }
 
 @media (hover: hover) and (pointer: fine) {
   .show-card:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(15, 23, 42, .14) !important; }
@@ -2038,7 +2042,6 @@ watch(
   .weekday-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .poster-overlay { padding: 36px 10px 12px; }
   .overlay-title { font-size: 14px; margin-bottom: 8px; }
-  .poster-progress-list { max-height: 74px; gap: 8px; }
   .weekday-title__main {
     font-size: 20px;
   }

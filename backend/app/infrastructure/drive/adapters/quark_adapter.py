@@ -272,8 +272,13 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         response["data"]["list"] = list_merge
         return response
 
+    SUPPORTS_COMPLETE_LISTING = True
+
     def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
         """列出目录内容"""
+        if kwargs.get("require_complete"):
+            from .complete_listing import complete_listing
+            return complete_listing(self, pdir_fid)
         list_merge = []
         page = 1
         while True:

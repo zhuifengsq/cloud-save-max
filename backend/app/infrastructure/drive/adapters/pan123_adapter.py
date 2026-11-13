@@ -720,7 +720,12 @@ class Pan123Adapter(BaseCloudDriveAdapter):
             "obj_category": 0,
         }
 
+    SUPPORTS_COMPLETE_LISTING = True
+
     def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
+        if kwargs.get("require_complete"):
+            from .complete_listing import complete_listing
+            return complete_listing(self, pdir_fid)
         if not self._ensure_login():
             return {"code": 401, "message": "未登录或登录失败", "data": {"list": []}}
         try:

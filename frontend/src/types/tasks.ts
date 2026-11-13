@@ -13,6 +13,21 @@ export type TaskExtraConfig = Record<string, any> & {
   } | null
 }
 
+export type SavedLatestProgress = {
+  episode: number
+  season: number | null
+  name: string
+  at: string
+}
+
+export type SavedProgressCorrection = {
+  task_id: number
+  previous_episode: number | null
+  saved_latest: SavedLatestProgress
+  scanned_files: number
+  scanned_directories: number
+}
+
 export type ShareurlUpdateLog = {
   id: string
   at: string

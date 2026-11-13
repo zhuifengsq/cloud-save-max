@@ -1079,7 +1079,12 @@ class GuangyaAdapter(BaseCloudDriveAdapter):
             data["resolved_pdir_fid"] = self._normalize_output_fid(parent_id)
         return {"code": 0, "message": "success", "data": data}
 
+    SUPPORTS_COMPLETE_LISTING = True
+
     def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
+        if kwargs.get("require_complete"):
+            from .complete_listing import complete_listing
+            return complete_listing(self, pdir_fid)
         try:
             self._ensure_login()
             raw_items = self._list_fs_items(self._normalize_root_parent_id(pdir_fid), max_items=max_items)

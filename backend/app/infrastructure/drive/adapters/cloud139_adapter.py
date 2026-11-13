@@ -599,7 +599,12 @@ class Cloud139Adapter(BaseCloudDriveAdapter):
             raise RuntimeError("获取目录列表失败")
         return data
 
+    SUPPORTS_COMPLETE_LISTING = True
+
     def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
+        if kwargs.get("require_complete"):
+            from .complete_listing import complete_listing
+            return complete_listing(self, pdir_fid)
         try:
             parent_file_id = "/" if str(pdir_fid or "") in ("", "0", "/", "root") else str(pdir_fid)
             items: list[dict[str, Any]] = []

@@ -327,6 +327,21 @@ def task_share_store(db):
     return SqlTaskShareStore(db)
 
 
+def saved_progress_store(db):
+    from app.infrastructure.drive.saved_progress import SqlSavedProgressStore
+    return SqlSavedProgressStore(db)
+
+
+def saved_progress_scanner():
+    from app.infrastructure.drive.saved_progress import SavedProgressScanner
+    return SavedProgressScanner()
+
+
+def correct_saved_progress_use_case(db):
+    from app.application.use_cases.correct_saved_progress import CorrectSavedProgressUseCase
+    return CorrectSavedProgressUseCase(db)
+
+
 def task_share_gateway(plan):
     from app.infrastructure.drive.task_share import open_task_share_gateway
     return open_task_share_gateway(plan)

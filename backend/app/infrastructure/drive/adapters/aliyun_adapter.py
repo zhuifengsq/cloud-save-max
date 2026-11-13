@@ -711,8 +711,13 @@ class AliyunAdapter(BaseCloudDriveAdapter):
         except:
             return 0
 
+    SUPPORTS_COMPLETE_LISTING = True
+
     def ls_dir(self, pdir_fid: str, max_items: int = 0, **kwargs) -> Dict:
         """列出用户网盘目录内容"""
+        if kwargs.get("require_complete"):
+            from .complete_listing import complete_listing
+            return complete_listing(self, pdir_fid)
         if not self._ensure_token_valid():
             return {"code": 1, "message": "Token 无效", "data": {"list": []}}
         

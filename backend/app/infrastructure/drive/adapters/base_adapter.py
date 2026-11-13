@@ -22,6 +22,20 @@ logger = logging.getLogger(__name__)
 class BaseCloudDriveAdapter(ABC):
     """云盘适配器抽象基类"""
 
+    SUPPORTS_COMPLETE_LISTING = False
+    COMPLETE_LISTING_MAX_PAGES = 1000
+
+    def ls_dir_complete(self, pdir_fid: str) -> Dict:
+        """Fail closed unless this concrete adapter explicitly implements strict listing."""
+        from .complete_listing import failure, validate_result
+
+        if type(self).__dict__.get("SUPPORTS_COMPLETE_LISTING") is not True:
+            return failure("Complete directory listing is unsupported by this adapter")
+        try:
+            return validate_result(self.ls_dir(pdir_fid, max_items=0, require_complete=True))
+        except Exception as exc:
+            return failure(str(exc))
+
     # 网盘类型标识
     DRIVE_TYPE = "base"
     DRIVE_NAME = "基础网盘"

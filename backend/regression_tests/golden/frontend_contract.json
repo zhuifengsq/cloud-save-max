@@ -230,6 +230,19 @@
     "TMDBImagesOut": {
       "posters": "list[app.schemas.media_discovery.TMDBImageOut]",
       "backdrops": "list[app.schemas.media_discovery.TMDBImageOut]"
+    },
+    "SavedLatestProgressOut": {
+      "episode": "<class 'int'>",
+      "season": "int | None",
+      "name": "<class 'str'>",
+      "at": "<class 'str'>"
+    },
+    "SavedProgressCorrectionOut": {
+      "task_id": "<class 'int'>",
+      "previous_episode": "int | None",
+      "saved_latest": "<class 'app.schemas.saved_progress.SavedLatestProgressOut'>",
+      "scanned_files": "<class 'int'>",
+      "scanned_directories": "<class 'int'>"
     }
   },
   "frontend_types": {
@@ -239,6 +252,19 @@
       "saved_latest",
       "share_link",
       "shareurl_update_logs"
+    ],
+    "SavedLatestProgress": [
+      "at",
+      "episode",
+      "name",
+      "season"
+    ],
+    "SavedProgressCorrection": [
+      "previous_episode",
+      "saved_latest",
+      "scanned_directories",
+      "scanned_files",
+      "task_id"
     ],
     "ShareurlUpdateLog": [
       "at",

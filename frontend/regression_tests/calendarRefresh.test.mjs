@@ -16,7 +16,7 @@ test('calendar toolbar refresh only reads tasks and does not wait for background
     ensureDerived:id=>derived.push(id),getTmdbDetailStoreVersion:()=>1,refreshTodayKey:()=>{},TMDB_DETAIL_REFRESH_MS:1800000,
     ElMessage:{error:message=>assert.fail(message)},posterFailures:{},clearDetailCache:()=>{reads.push('clear')},invalidateTmdbDetails:()=>{reads.push('invalidate')}}
   const code=extract('async function performLoad(', '\nfunction stopAutoCheck()')+extract('async function handleRefresh()', '\n// 工作台可能')
-  const actions=new Function(...Object.keys(globals),'let refreshPromise=null,lastLoadedAt=0,loadedTasksVersion=-1,derivedStoreVersion=-1;'+code+';return {refreshData,handleRefresh}')(...Object.values(globals))
+  const actions=new Function(...Object.keys(globals),'let refreshPromise=null,lastLoadedAt=0,loadedTasksVersion=-1,derivedStoreVersion=-1,taskLoadVersion=0;'+code+';return {refreshData,handleRefresh}')(...Object.values(globals))
   const background=actions.refreshData({silent:true})
   await Promise.resolve();await Promise.resolve()
   const local=actions.handleRefresh()
