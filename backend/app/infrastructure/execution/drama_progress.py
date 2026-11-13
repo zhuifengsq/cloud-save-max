@@ -1,12 +1,30 @@
 from __future__ import annotations
 
+import re
+
 from app.infrastructure.execution.magic_rename import MagicRename
+
+_RE_SUPPLEMENTAL_FILE = re.compile(r"^彩蛋(?=$|[\d\s._（(\-]|第|[Ee][Pp]?\d)|角色番综")
+_RE_DATED_TITLE = re.compile(r"^(?:19|20)\d{2}[.\-]\d{1,2}[.\-]\d{1,2}[-_\s]+\S")
+
+
+class UnrecognizedEpisodeFiles(ValueError):
+    """Bounded sample of file positions that strict progress correction rejected."""
+
+    SAMPLE_LIMIT = 5
+
+    def __init__(self, file_indices: list[int], total: int):
+        super().__init__('Saved files have no recognizable episode number')
+        self.file_indices = tuple(file_indices)
+        self.total = total
+
 
 def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints: list[int], *, at: str, preserve_previous: bool = True, require_all_recognized: bool = False) -> dict | None:
     """记录保存后目标目录里实际存在的最大集数（写到任务的 extra.saved_latest）。
 
     名字来源：目标目录已存在的文件 ∪ 本次转存成功的文件；整包直转时补充目标目录列表。
     这些清单在同步过程中本来就会拉取，不产生额外请求。
+    手动校正的严格模式跳过彩蛋、角色番综和无集号的日期标题；其他未知文件仍拒绝校正。
     """
     from app.application.episode_number import extract_episode, guess_episode
 
@@ -48,18 +66,28 @@ def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints:
     best_episode = prev_episode
     best_season = prev.get("season")
     best_name = str(prev.get("name") or "")
-    for name in names:
+    unrecognized_indices = []
+    unrecognized_count = 0
+    for index, name in enumerate(names):
+        if require_all_recognized and _RE_SUPPLEMENTAL_FILE.search(name.strip()):
+            continue
         season, episode = extract_episode(name, mr=mr)
         if episode is None:
             episode = guess_episode(name)
+        if require_all_recognized and episode is None and _RE_DATED_TITLE.match(name.strip()):
+            continue
         if episode is None or (require_all_recognized and episode <= 0):
             if require_all_recognized:
-                raise ValueError('A saved file has no recognizable episode number')
+                unrecognized_count += 1
+                if len(unrecognized_indices) < UnrecognizedEpisodeFiles.SAMPLE_LIMIT:
+                    unrecognized_indices.append(index)
             continue
         if int(episode) > int(best_episode or 0):
             best_episode = int(episode)
             best_season = season
             best_name = name
+    if unrecognized_count:
+        raise UnrecognizedEpisodeFiles(unrecognized_indices, unrecognized_count)
     for hint in hints:
         try:
             hint_value = int(hint)

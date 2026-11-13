@@ -15,7 +15,7 @@ from app.domain.ports.task_share import TaskSharePlan
 from app.infrastructure.drive.adapter_registry import AdapterRegistry
 from app.infrastructure.drive.factory import AdapterFactory
 from app.infrastructure.drive.gateway import _get_fid, _get_name, _is_dir
-from app.infrastructure.execution.drama_progress import calculate_saved_latest
+from app.infrastructure.execution.drama_progress import UnrecognizedEpisodeFiles, calculate_saved_latest
 from app.infrastructure.persistence.models.task import Task
 from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.infrastructure.persistence.models.magic_regex_rule import MagicRegexRule
@@ -165,33 +165,46 @@ class SavedProgressScanner:
                 raise ApiError('SAVED_PROGRESS_READ_FAILED', '目录结构异常，原已存进度保留', 502)
             ancestors.add(fid)
 
-        queue = [(fid, 0)]
+        queue = [(fid, 0, '')]
         visited = set()
         names = []
+        relative_names = []
         scanned_files = 0
         addition = plan.task_data['addition']
         excluded = [word.strip().casefold() for word in str(addition.get('folder_exclude') or '').split('|') if word.strip()]
         exclude_match = all if str(addition.get('folder_exclude_mode') or 'any') == 'all' else any
         while queue:
-            directory, depth = queue.pop()
+            directory, depth, relative_directory = queue.pop()
             if directory in visited or depth > self.MAX_DEPTH or len(visited) >= self.MAX_DIRECTORIES:
                 raise ApiError('SAVED_PROGRESS_SCAN_LIMIT', '目录结构异常或扫描达到限制，原已存进度保留', 422)
             visited.add(directory)
             for entry in read(directory):
                 name = _get_name(entry)
+                relative_name = f'{relative_directory}/{name}' if relative_directory else name
                 if _is_dir(entry):
                     if excluded and exclude_match(word in name.casefold() for word in excluded):
                         continue
-                    queue.append((_get_fid(entry), depth + 1))
+                    queue.append((_get_fid(entry), depth + 1, relative_name))
                 else:
                     scanned_files += 1
                     if scanned_files > self.MAX_FILES:
                         raise ApiError('SAVED_PROGRESS_SCAN_LIMIT', '文件数量达到扫描限制，原已存进度保留', 422)
                     if PurePosixPath(name).suffix.casefold() not in _NON_EPISODE_EXTENSIONS:
                         names.append(name)
+                        relative_names.append(relative_name)
         at = datetime.now(timezone.utc).isoformat(timespec='seconds')
         try:
             latest = calculate_saved_latest(plan.task_data, names, [], at=at, preserve_previous=False, require_all_recognized=True)
+        except UnrecognizedEpisodeFiles as exc:
+            paths = [relative_names[index][:500] for index in exc.file_indices]
+            first_path = paths[0] if len(paths[0]) <= 160 else paths[0][:157] + '…'
+            count_hint = f'等 {exc.total} 个文件' if exc.total > 1 else ''
+            raise ApiError(
+                'SAVED_PROGRESS_UNRECOGNIZED',
+                f'无法识别集号：{first_path}{count_hint}；原已存进度保留，请检查文件名或识别规则',
+                422,
+                detail=json.dumps({'unrecognized_files': paths, 'unrecognized_count': exc.total}, ensure_ascii=False),
+            ) from exc
         except ValueError as exc:
             raise ApiError('SAVED_PROGRESS_UNRECOGNIZED', '部分文件无法识别集号，原已存进度保留；请检查文件名或识别规则', 422) from exc
         if names and latest is None:

@@ -111,6 +111,84 @@ def test_partly_unrecognized_episode_files_do_not_allow_lowering_the_watermark(d
     assert json.loads(db.get(Task, 1).extra_json)['saved_latest']['episode'] == 30
 
 
+def test_unrecognized_error_identifies_the_saved_file_and_relative_directory(db, monkeypatch):
+    from app.core.errors import ApiError
+    adapter = adapter_for(db, {'0': [folder('shows', 'Shows')], 'shows': [folder('show', 'Show')],
+        'show': [folder('quality', '4K DV')], 'quality': [video('10', '10.zip'), video('extra', '番外.zip'), video('trailer', '预告.mp4')]})
+    with pytest.raises(ApiError) as error:
+        run_correction(db, adapter, monkeypatch)
+    assert '4K DV/番外.zip' in error.value.message
+    detail = json.loads(error.value.detail)
+    assert detail['unrecognized_files'] == ['4K DV/番外.zip', '4K DV/预告.mp4']
+    assert detail['unrecognized_count'] == 2
+    assert json.loads(db.get(Task, 1).extra_json)['saved_latest']['episode'] == 30
+
+
+def test_numbered_zip_share_layout_is_recognized_without_renaming(db, monkeypatch):
+    tree = {'0': [folder('shows', 'Shows')], 'shows': [folder('show', 'Show')],
+        'show': [folder('dv', '4K DV 高码率 60帧率'), folder('sdr', '4K SDR 高码率 60帧率'),
+                 folder('low', '4K SDR 低码率 60帧率 更新至20集'), video('advert', '链接每天失效进群.jpg')]}
+    for folder_id, count in [('dv', 19), ('sdr', 19), ('low', 20)]:
+        tree[folder_id] = [video(f'{folder_id}-{i}', f'{i:02}.zip') for i in range(1, count + 1)]
+    result = run_correction(db, adapter_for(db, tree), monkeypatch)
+    assert result.saved_latest.episode == 20
+    assert result.saved_latest.name == '20.zip'
+
+
+def test_correction_ignores_confirmed_supplemental_videos_in_numbered_share(db, monkeypatch):
+    names = [f'{i:02}.zip' for i in range(1, 17)] + [
+        '10(1).zip', '11(1).zip', '12(1).zip', '13(1).zip', '14(1).zip', '15(1).zip',
+        '12.mp4', '13.mp4', '14.mp4', '15.mp4',
+        '彩蛋1.mp4', '彩蛋2.mp4', '太阳雨角色番综第一期.mp4',
+        '2026.11.07-杨超越董思成上演真人版“胡闹厨房”.mp4',
+        '2026.11.08-杨超越董思成开启“微醺派对”.mp4',
+    ]
+    tree = {'0': [folder('shows', 'Shows')], 'shows': [folder('show', 'Show')],
+            'show': [video(str(i), name) for i, name in enumerate(names)]}
+    result = run_correction(db, adapter_for(db, tree), monkeypatch)
+    assert result.saved_latest.episode == 16
+    assert result.saved_latest.name == '16.zip'
+    assert result.scanned_files == 31
+    assert json.loads(db.get(Task, 1).extra_json)['saved_latest']['episode'] == 16
+
+
+@pytest.mark.parametrize('supplemental', ['彩蛋E99.mp4', '太阳雨角色番综第99期.mp4'])
+def test_supplemental_episode_number_does_not_inflate_main_progress(db, monkeypatch, supplemental):
+    tree = {'0': [folder('shows', 'Shows')], 'shows': [folder('show', 'Show')],
+            'show': [video('16', '16.zip'), video('extra', supplemental)]}
+    result = run_correction(db, adapter_for(db, tree), monkeypatch)
+    assert result.saved_latest.episode == 16
+
+
+def test_date_prefix_with_explicit_episode_is_still_counted(db, monkeypatch):
+    tree = {'0': [folder('shows', 'Shows')], 'shows': [folder('show', 'Show')],
+            'show': [video('16', '16.zip'), video('17', '2026.11.08-Show.S01E17.mp4')]}
+    result = run_correction(db, adapter_for(db, tree), monkeypatch)
+    assert result.saved_latest.episode == 17
+
+
+def test_only_supplemental_videos_preserve_previous_progress(db, monkeypatch):
+    from app.core.errors import ApiError
+    tree = {'0': [folder('shows', 'Shows')], 'shows': [folder('show', 'Show')],
+            'show': [video('extra', '彩蛋1.mp4'), video('date', '2026.11.08-微醺派对.mp4')]}
+    with pytest.raises(ApiError) as error:
+        run_correction(db, adapter_for(db, tree), monkeypatch)
+    assert error.value.code == 'SAVED_PROGRESS_UNRECOGNIZED'
+    assert json.loads(db.get(Task, 1).extra_json)['saved_latest']['episode'] == 30
+
+
+def test_unrecognized_diagnostics_bound_samples_but_count_all_files(db, monkeypatch):
+    from app.core.errors import ApiError
+    tree = {'0': [folder('shows', 'Shows')], 'shows': [folder('show', 'Show')],
+            'show': [video(str(i), f'unknown-{chr(97 + i)}.mkv') for i in range(8)]}
+    with pytest.raises(ApiError) as error:
+        run_correction(db, adapter_for(db, tree), monkeypatch)
+    detail = json.loads(error.value.detail)
+    assert detail['unrecognized_count'] == 8
+    assert detail['unrecognized_files'] == [f'unknown-{chr(97 + i)}.mkv' for i in range(5)]
+    assert json.loads(db.get(Task, 1).extra_json)['saved_latest']['episode'] == 30
+
+
 @pytest.mark.parametrize('change', ['path', 'extra', 'account'])
 def test_configuration_changed_during_scan_rejects_writeback(db, monkeypatch, change):
     from app.application.use_cases.correct_saved_progress import CorrectSavedProgressUseCase
