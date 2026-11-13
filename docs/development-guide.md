@@ -4,18 +4,18 @@
 > 配套文档：[架构演进方案](architecture-evolution-plan.md)、[架构总览](architecture/README.md)、[架构决策记录](architecture/adr/)。
 > 维护原则：本文每一条「必须」都能被命令、测试或 CI 检查；写不进检查的规则不写进来。
 
-修订日期：2026-11-13。配套 [后端改造任务书](backend-hardening-taskbook.md)，本次仅修订规范，未实施任务书中的业务改造。
+修订日期：2026-11-13。配套 [后端改造任务书](backend-hardening-taskbook.md)，本轮代码已接线并完成本地验收；具体证据与联调限制见 [改造验证报告](backend-hardening-report.md)。
 
 **现状与目标分开记录**：分层门禁检查导入方向，事务测试检查提交/回滚，golden 检查响应契约；三者通过仍不能证明业务职责充分解耦、故障可恢复或真实网盘可用。
 
-| 工作包 | 修订时的现状 | 目标与切换条件 |
+| 工作包 | 当前实现 | 验证与限制 |
 | --- | --- | --- |
-| A：错误语义与 CI | 搜索外层异常仍返回成功；health 的 DB 故障仍是 HTTP 200；发布 CI 只跑 regression_tests | 错误分类、readiness/liveness、两组后端测试覆盖落地并验证后更新状态 |
-| B：日志与读接口 | 任务全量列表携带执行日志；单次日志无统一字节上限 | 日志有界、分页/概览/日志详情接口及内置调用方迁移均验收后切换 |
-| C：网盘契约 | 已有网关，但执行器仍识别网盘类型、方法参数与原始字段 | 注册网盘完成统一能力/结果契约测试，执行器移除对应兼容逻辑 |
-| D：用例与职责 | 容器暴露具体类/仓储模块，目标路由仍组织部分事务、审计及通知 | 执行、分享、引流用例接管编排，入口及大模块完成行为回归 |
+| A：错误语义与 CI | 搜索来源结果分类、readiness/liveness、完整后端测试命令已落地 | 本地故障注入通过；远端 CI 未触发，不声称远端通过 |
+| B：日志与读接口 | 日志/树限额，分页/概览/按需详情和前端消费已接线 | O(N) 轻量候选/概览成本保留；旧全量接口仅兼容 |
+| C：网盘契约 | 10 家注册策略接统一文件/转存/分享能力契约 | 假响应与签名契约通过；无真实账号联调，不明结果保守 pending |
+| D：用例与职责 | 五类触发入口、分享与引流通过用例，Telegram/计划/进度已拆分 | 准入仍在入口；单进程及崩溃恢复限制不变 |
 
-下文标记“目标”的规则用于新代码及本轮被改造的动作；未涉及的存量 CRUD 暂保留既有事务方式，不为套新样板扩张范围。每批完成时同步更新此表、示例、测试证据与相关 ADR，不能只改文档就标为完成。
+下文标记“目标”的规则是本轮已接线模块及新代码的职责要求；未涉及的存量 CRUD 暂保留既有事务方式，不为套新样板扩张范围。每批完成时同步更新此表、示例、测试证据与相关 ADR，不能只改文档就标为完成。
 
 ---
 
@@ -64,7 +64,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Schema 漂移检查失败' }
 $env:DATABASE_URL = 'sqlite://'
 ```
 
-2026-11-13 代码审查记录：全量测试 **570 passed、2 skipped**，分层 **252 模块、90 deferred imports、0 violations、0 import cycles**。这是带日期的历史基线；验收提交记录当次实际结果，不将固定测试数量作为通过条件。预算以 `backend/.layering-baseline.json` 为准。
+2026-11-13 代码审查记录：全量测试 **570 passed、2 skipped**，分层 **252 模块、90 deferred imports、0 violations、0 import cycles**。这是带日期的历史基线；验收提交记录当次实际结果，不将固定测试数量作为通过条件。预算以 `backend/.layering-baseline.json` 为准。本轮接线后扫描为 287 模块、112 deferred、0 violations、0 cycles；验证记录见报告。
 
 **十条铁律**（违反任何一条，评审直接打回）：
 
@@ -254,7 +254,7 @@ def get_task_tags(db: Session = Depends(get_db)):
 2. **事务里不做外部 IO**：正确形态是「读并结束只读事务 → 外部 HTTP/网盘 → 短写事务」。ORM 属性访问可能重新打开事务，阶段间传递值对象；有未提交写入时不能用只读事务清理函数偷偷提交/丢弃变更。
 3. **提交后返回值对象**：需要最新数据库状态时由事务边界拥有者 refresh/重新查询；不要把已过期 ORM 对象交给 presenter 或跨线程使用。最终通知从明确执行结果取得信息，不依赖可能裁剪的展示文本。
 4. **锁冲突要么安全重试、要么显式 5xx**：`transaction`/`commit` 内置的 `commit_with_locked_retry` 只重试 commit 且校验会话未被数据库回滚；`retry_on_locked(fn)` 的语义是「重跑整个用例」，**禁止用它包单个 commit**（会导致静默丢数据）。
-5. **提交点迁移必须登记**：`test_commit_ownership.py` 维护「文件 → 预算 → 归属类别 → 理由」总账（2026-11-13 预算为 95 处，实际以测试文件为准）。用例接管旧提交时同步减少旧文件预算，登记新归属，保持总预算不扩大；新增后台工作单元必须说明理由，不能只调大预算使检查通过。
+5. **提交点迁移必须登记**：`test_commit_ownership.py` 维护「文件 → 预算 → 归属类别 → 理由」总账（2026-11-13 接线后预算为 94 处，实际以测试文件为准）。用例接管旧提交时同步减少旧文件预算，登记新归属，保持总预算不扩大；新增后台工作单元必须说明理由，不能只调大预算使检查通过。
 
 ### 4.3 反模式速查
 
@@ -307,7 +307,7 @@ def get_task_tags(db: Session = Depends(get_db)):
 
 ## 6. 接入第 11 家网盘（适配器）
 
-新增网盘先明确其能力、统一结果与失败语义，再实现适配器、注册和测试。文件数量不是完成条件；当前接口仍有历史差异，统一契约属于任务书批次 C，未接入前不得声称只注册就能兼容所有转存流程。
+新增网盘先明确其能力、统一结果与失败语义，再实现适配器、注册和测试。文件数量不是完成条件；当前接口仍有历史差异，统一契约已按任务书批次 C 接线，新适配器仍须通过其声明能力的契约测试，不得只注册就声称兼容。
 
 1. 在 `app/infrastructure/drive/adapters/` 新建 `xxx_adapter.py`，继承 `BaseCloudDriveAdapter`；
 2. 在 `app/infrastructure/drive/factory.py` 的 `ADAPTER_MAP` 与 `URL_PATTERNS` 各加一行（或调用 `AdapterFactory.register_adapter / register_url_pattern`）；
@@ -330,7 +330,7 @@ def get_task_tags(db: Session = Depends(get_db)):
 约定：
 
 - **区分业务规则与网盘机制**：文件筛选、季集和增量计划属于业务/执行流程；`file_names` 参数、远端任务轮询、UC 中转目录和移动、不同返回字段属于网盘边界。用例通过统一网关/小能力端口调用，不在公共执行器中加网盘类型分支。
-- **目标统一契约（批次 C，尚未完成）**：文件值对象明确 ID/名称/目录/大小/可选令牌；转存结果明确 completed/pending/failed、保存文件映射、远端任务 ID 和是否核实。提交成功不等于转存完成，令牌是否必需由具体网盘验证。
+- **目标统一契约（批次 C，已接线）**：文件值对象明确 ID/名称/目录/大小/可选令牌；转存结果明确 completed/pending/failed、保存文件映射、远端任务 ID 和是否核实。提交成功不等于转存完成，令牌是否必需由具体网盘验证。
 - **能力显式声明**：不支持分享/引流等能力时明确拒绝；不以 `hasattr`、基类方法比较、`inspect.signature` 或捕获 `TypeError` 后再次写入决定能力。
 - **写入结果不明先核对**：数据库失败或写请求超时不能直接重放；返回文件顺序不保证与计划一致，重命名前核对来源与目标映射。
 - **限速与令牌**：用基类的 `_rate_limit_key()` / `_token_refresh_key()` / `_throttle_request()`；令牌刷新走 `TokenManager` 的单飞，不要自己写重试循环。
@@ -348,7 +348,7 @@ def get_task_tags(db: Session = Depends(get_db)):
 - 关系数据必须在本层**一次批量查完**（禁止 N+1）：`regression_tests/test_task_queries.py` 用 SQL 计数锁定了「列表查询条数与任务数无关」；
 - 路由只做 `[presenter(view) for view in list_xxx(db)]`。
 
-### 7.1.1 列表、概览、详情的目标边界（批次 B，尚未完成）
+### 7.1.1 列表、概览、详情的目标边界（批次 B，已接线）
 
 - 常用列表先筛选/排序/取页 ID，再批量装配当页任务，默认 20 条、最大 100 条；不先读取全部任务与执行记录后切片。
 - 列表/概览不读取 `run_log`、`tree_summary` 和完整 snapshot；所需徽标、成功更新及网盘类型用受控小字段投影。
@@ -393,12 +393,12 @@ golden 的覆盖范围由 `test_frontend_contract_golden.py` 和实际 golden �
 - 业务错误通过 `ApiError(code, message, http_status, detail)` 映射为 `{code, message, detail}`；未处理异常使用现有全局 500 处理，不能把异常原文返回用户。
   409（`TASK_ALREADY_RUNNING`）/ 429（`TASK_CAPACITY_EXCEEDED`）是前端重试与 toast 的判据，**不许改成 200 + failed**（见 [ADR 0002](architecture/adr/0002-task-admission-stays-at-call-sites.md)）。
 
-### 7.5 搜索与健康检查目标语义（批次 A，尚未完成）
+### 7.5 搜索与健康检查目标语义（批次 A，已接线）
 
 - 搜索无匹配：200、success=true、空列表；无启用源需要明确提示。部分源失败而其他源完成：200、partial=true、脱敏 warnings。
 - 所有启用源失败：502/SEARCH_UPSTREAM_FAILED；全部失败且均为超时：504/SEARCH_UPSTREAM_TIMEOUT。成功源的空结果不能算失败。数据库和程序异常保持 500，不伪装空结果。
 - `/api/health` 作为 readiness：数据库正常 200，故障 503，保留现有响应字段。新增 `/api/health/live` 仅检查 HTTP 进程响应，200，不访问数据库或网盘。
-- 当前代码仍存在搜索异常 success=true、health 故障 HTTP 200 的行为；本节只有在接口、前端和故障注入测试完成后才可标记已实现。
+- 搜索异常已按来源分类；health 数据库故障已返回 503，并有不访问数据库的 live 端点，接口与故障注入测试已接线。
 
 ---
 
@@ -418,8 +418,8 @@ golden 的覆盖范围由 `test_frontend_contract_golden.py` 和实际 golden �
 - **审计**：所有 mutating 端点、后台写操作都要 `write_audit_log(...)`，并与业务写在同一个事务里（回滚则审计一起回滚，这是有意的）。
 - **异常**：禁止 `except Exception: pass`；错误分支记录可定位且脱敏的日志并明确返回语义。可选通知失败不推翻已提交业务，SQL/提交失败不能吞掉；搜索故障不伪装成功，目标语义见 §7.5。
 - **慢请求**：`settings.slow_request_ms`（默认 1000ms）由 Timing 中间件记录；新增外部调用要给埋点，不要出现「不知道慢在哪」。
-- **执行日志现状**：执行历史默认每任务保留 20 条（`task_execution_history_limit`）；`ExecutionLog.lines` 仍无限追加，没有统一单次字节上限。记录条数限制、SSE 有界队列和 gzip 都不能替代单次日志容量控制。
-- **执行日志目标（批次 B1，尚未完成）**：`execution_log_max_bytes` 默认 262144 字节，`execution_tree_max_bytes` 默认 65536 字节，均为正整数，按 UTF-8 字节计；日志在追加时就有界，保留头尾及截断提示/元数据，不能只在 render/响应时裁剪。
+- **执行日志现状**：执行历史默认每任务保留 20 条（`task_execution_history_limit`）；`ExecutionLog` 已按追加时 UTF-8 字节限额保存头尾。记录条数限制、SSE 有界队列和 gzip 都不能替代单次日志容量控制。
+- **执行日志目标（批次 B1，已接线）**：`execution_log_max_bytes` 默认 262144 字节，`execution_tree_max_bytes` 默认 65536 字节，均为正整数，按 UTF-8 字节计；日志在追加时就有界，保留头尾及截断提示/元数据，不能只在 render/响应时裁剪。
 - **展示与事实分开**：现有成功通知解析 `tree_summary` 提取新增文件名，裁剪前必须先改为结构化结果驱动通知/进度/重命名，避免展示限额影响业务。历史大日志按需分块读取，不批量改写旧记录。
 
 ---
@@ -430,7 +430,7 @@ golden 的覆盖范围由 `test_frontend_contract_golden.py` 和实际 golden �
 
 | 目录 | 定位 | 修订时 CI 现状与目标 |
 | --- | --- | --- |
-| `backend/tests/` | 按业务模块组织的行为测试 | 当前发布工作流未运行；批次 A3 要求接入，尚未实施 |
+| `backend/tests/` | 按业务模块组织的行为测试 | 发布工作流命令已覆盖 tests 与 regression_tests；远端运行结果需在实际 CI 执行后确认 |
 | `backend/regression_tests/` | 分层/事务/契约/并发/幂等/端口等护栏，包含源码及运行行为测试 | 当前 CI 已运行；接入全量后仍保留 |
 
 两组测试都需要长期生效，目录不代表测试寿命或重要性。按现有模块习惯归位；本地完整验收运行两组，CI 目标同样运行两组。CI 覆盖状态以 workflow 内容和实际运行结果为准，不因修改本文就视为已接入。

@@ -101,4 +101,8 @@ async def benchmark() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(benchmark())
+    if '--bounded' in sys.argv:
+        from bench_task_reads import benchmark as bounded_benchmark
+        bounded_benchmark()
+    else:
+        asyncio.run(benchmark())

@@ -1,5 +1,7 @@
 # 架构分层与门禁一页纸
 
+> 2026-11-13 更新：业务用例、分页/日志、网盘契约与 Telegram 职责改造已接线。最新结构、测试和限制以 [开发规范](../development-guide.md) 与 [验证报告](../backend-hardening-report.md) 为准；下方 S0–S5 数字与旧提交预算为历史记录。
+
 > 适用对象：所有要改 `backend/app/` 的人。主方案见 [架构演进方案](../architecture-evolution-plan.md)（§3.1 分层规则、§3.6 事务模型、§9 阶段计划），
 > 现状 → 目标目录的逐模块映射见其 [附录 A](../architecture-evolution-plan.md#附录-a现状--目标目录映射可直接当搬迁清单)，本文不复述。
 >
