@@ -888,7 +888,8 @@ async function openCopywriting() {
     /* 忽略：拿不到任务列表时只带当前任务的链接 */
   }
 
-  const episode = mediaType === 'tv' ? resolveDramaEpisodeProgress(state.extra, tmdbData).updatedEpisode : null
+  const progress = mediaType === 'tv' ? resolveDramaEpisodeProgress(state.extra, tmdbData) : null
+  const episode = progress?.updatedEpisode ?? null
   // 综艺在文案里按「期」计数，需要把类型一起带过去；拿不到 TMDB 详情时按保存路径兜底
   const category = tmdbData
     ? categoryFromTmdb(mediaType, tmdbData)
@@ -902,6 +903,9 @@ async function openCopywriting() {
     posterPath,
     overview,
     episode: episode != null ? String(episode) : '',
+    totalEpisodes: progress?.totalEpisodes ?? null,
+    // 沿用任务列表的完结口径，不把连载剧当前已播集数当成全剧集数。
+    isEnded: mediaType === 'tv' && ['ended', 'canceled'].includes(String(tmdbData?.status || '').toLowerCase()),
     links,
     taskname: String(state.taskname || ''),
     savedAt: Date.now(),

@@ -19,6 +19,8 @@ type Draft = {
   posterPath: string
   overview: string
   episode: string
+  totalEpisodes: number | null
+  isEnded: boolean
   links: { drive: string; url: string }[]
   taskname: string
   savedAt: number
@@ -35,6 +37,8 @@ const emptyDraft: Draft = {
   posterPath: '',
   overview: '',
   episode: '',
+  totalEpisodes: null,
+  isEnded: false,
   links: [],
   taskname: '',
   savedAt: 0,
@@ -75,9 +79,14 @@ const fullPosterUrl = computed(() => {
 // 综艺按「期」计数，其他按「集」
 const episodeUnit = computed(() => episodeUnitFor(draft.category))
 
-const episodeText = computed(() =>
-  draft.episode.trim() ? `【更${draft.episode.trim()}${episodeUnit.value}】` : '',
-)
+const episodeText = computed(() => {
+  const episode = draft.episode.trim()
+  if (!episode) return ''
+  const total = draft.totalEpisodes
+  const complete = draft.mediaType === 'tv' && draft.isEnded && total != null &&
+    Number.isFinite(total) && total > 0 && Number.isFinite(Number(episode)) && Number(episode) >= total
+  return complete ? `【全${total}${episodeUnit.value}】` : `【更${episode}${episodeUnit.value}】`
+})
 
 const titleLine = computed(() => {
   const title = draft.title.trim() || draft.taskname.trim() || '未命名'

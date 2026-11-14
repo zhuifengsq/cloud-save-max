@@ -65,6 +65,47 @@ test('movies do not inherit episode progress', async () => {
   assert.equal((await generateDraft({ saved: 21, mediaType: 'movie' })).episode, '')
 })
 
+const qqComputed = copySourceForQq()
+
+function copySourceForQq() {
+  const source = readFileSync(new URL('../src/views/tasks/CopywritingView.vue', import.meta.url), 'utf8')
+  return source.slice(source.indexOf('const episodeText = computed('), source.indexOf('\nfunction driveLabel('))
+}
+
+function qqTitle(draft) {
+  return vm.runInNewContext(`${qqComputed}\ntitleLine.value`, {
+    computed: (fn) => ({ get value() { return fn() } }),
+    draft: { title: '沧元图', taskname: '', year: '2023', ...draft },
+    episodeUnit: { value: '集' },
+  })
+}
+
+test('QQ copy marks a completed series with all episodes', async () => {
+  const draft = await generateDraft({ saved: 103, detail: { status: 'Ended', number_of_episodes: 103 } })
+  assert.equal(qqTitle({ ...draft, title: '沧元图', year: '2023' }), '沧元图 (2023) 【全103集】')
+})
+
+test('QQ copy keeps updating label for ongoing, incomplete or unknown series', async () => {
+  for (const options of [
+    { saved: 103, detail: { status: 'Returning Series', number_of_episodes: 103 } },
+    { saved: 102, detail: { status: 'Ended', number_of_episodes: 103 } },
+    { saved: 103, detailFails: true },
+    { saved: 103, detail: { status: 'Ended' } },
+  ]) {
+    const draft = await generateDraft(options)
+    assert.equal(qqTitle({ ...draft, title: '沧元图', year: '2023' }), `沧元图 (2023) 【更${options.saved}集】`)
+  }
+  assert.equal(qqTitle({ episode: '' }), '沧元图 (2023)')
+  assert.equal(qqTitle({ episode: '103' }), '沧元图 (2023) 【更103集】')
+})
+
+test('QQ completion follows existing canceled status and season total fallback', async () => {
+  const draft = await generateDraft({ saved: 103, detail: { status: 'Canceled', seasons: [
+    { season_number: 0, episode_count: 2 }, { season_number: 1, episode_count: 52 }, { season_number: 2, episode_count: 51 },
+  ] } })
+  assert.equal(qqTitle({ ...draft, title: '沧元图', year: '2023' }), '沧元图 (2023) 【全103集】')
+})
+
 const copySource = readFileSync(new URL('../src/views/tasks/CopywritingView.vue', import.meta.url), 'utf8')
 const weiboComputed = copySource.slice(copySource.indexOf('const weiboLine1 = computed('), copySource.indexOf('\nconst weiboText1 = computed('))
 
