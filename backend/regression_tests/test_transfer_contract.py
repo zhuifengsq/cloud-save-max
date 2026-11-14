@@ -26,11 +26,13 @@ def fake(drive, response=None):
     def save(*args, **kwargs):
         events.append(("save", args, kwargs))
         return response or {"code": 0, "data": {"_sync": True, "save_as_top_fids": ["2", "1"]}}
-    return SimpleNamespace(DRIVE_TYPE=drive, TRANSFER_STRATEGY=strategy, events=events,
+    adapter = SimpleNamespace(DRIVE_TYPE=drive, TRANSFER_STRATEGY=strategy, events=events,
         save_file=save, classify_share_failure=lambda r: {"kind": r.get("kind", "unknown")},
         ls_dir=lambda p: {"code": 0, "data": {"list": [{"fid": "1", "file_name": "A"}, {"fid": "2", "file_name": "B"}]}},
         query_task=lambda j: {"code": 0, "data": {"status": 2, "save_as": {"save_as_top_fids": ["2", "1"], "save_as_select_top_fids": ["2", "1"]}}},
         get_or_create_share_folder=lambda: "stage", move_files_to_target=lambda ids, dest: {"code": 0})
+    adapter.ls_dir_complete = lambda path: adapter.ls_dir(path)
+    return adapter
 
 @pytest.mark.parametrize("drive", AdapterFactory.ADAPTER_MAP)
 @pytest.mark.parametrize("async_job", [False, True])

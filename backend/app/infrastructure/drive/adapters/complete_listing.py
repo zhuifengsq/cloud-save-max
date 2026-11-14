@@ -1,4 +1,4 @@
-"""Audited, bounded, fail-closed listing paths used only for progress correction.
+"""Audited, bounded, fail-closed listing for progress and Baidu transfer checks.
 
 Legacy browsing methods intentionally retain their original pagination behavior.
 No partial entries escape this module when a page is missing or ambiguous.

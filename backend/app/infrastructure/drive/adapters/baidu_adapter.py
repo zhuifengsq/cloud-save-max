@@ -84,11 +84,14 @@ class PanNode:
         return f"{PAN_BAIDU_COM}/{node}"
 
 
-from app.infrastructure.drive.transfer import BaiduTransferStrategy
+from app.infrastructure.drive.transfer import BaiduTransferStrategy, baidu_file_key
 
 
 class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
     TRANSFER_STRATEGY = BaiduTransferStrategy()
+    TRANSFER_CONFIRM_TIMEOUT_SECONDS = 60.0
+    TRANSFER_CONFIRM_INTERVAL_SECONDS = 5.0
+    TRANSFER_CONFIRM_MAX_POLLS = 13
 
     SUPPORTS_SHARE = True
     """百度网盘适配器"""
@@ -1150,6 +1153,51 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             logger.error(f"[Baidu] 列出目录失败: {e}")
             return {"code": 1, "message": f"列出目录失败: {e}", "data": {"list": []}}
 
+    def _confirm_saved_file_ids(self, remote_dir, before_items, file_names, expected_count):
+        """Poll read-only snapshots; never replay the submitted transfer."""
+        deadline = time.monotonic() + self.TRANSFER_CONFIRM_TIMEOUT_SECONDS
+        saved_fids = [''] * len(file_names) if file_names else []
+        for attempt in range(self.TRANSFER_CONFIRM_MAX_POLLS):
+            if attempt:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(self.TRANSFER_CONFIRM_INTERVAL_SECONDS, remaining))
+            if time.monotonic() > deadline:
+                break
+            try:
+                snapshot = self.ls_dir_complete(remote_dir)
+                if snapshot.get('code') != 0:
+                    continue
+                # Rebuild from one complete snapshot. Do not combine files seen
+                # on different polls: an earlier file may have disappeared.
+                by_name = {item['file_name']: item['fid'] for item in snapshot['data']['list']
+                           if item['fid'] not in before_items}
+                if file_names:
+                    by_key = {}
+                    for candidate, fid in by_name.items():
+                        by_key.setdefault(baidu_file_key(candidate), []).append(fid)
+                    saved_fids = []
+                    for name in file_names:
+                        fid = by_name.get(name, '')
+                        if not fid:
+                            key = baidu_file_key(name)
+                            candidates = by_key.get(key, [])
+                            if key and len(candidates) == 1:
+                                fid = candidates[0]
+                        saved_fids.append(fid)
+                else:
+                    saved_fids = list(by_name.values())
+                if (len(saved_fids) == expected_count and all(saved_fids)
+                        and len(set(saved_fids)) == expected_count):
+                    logger.info('[Baidu] 转存后核对完成: %s 个文件，%s 次目录读取', expected_count, attempt + 1)
+                    return saved_fids
+            except Exception as exc:
+                logger.debug('[Baidu] 转存后目录核对暂时失败: %s', exc)
+        logger.warning('[Baidu] 转存后核对未完成，保留待确认: 已关联 %s/%s 个文件',
+                       len({fid for fid in saved_fids if fid}), expected_count)
+        return saved_fids
+
     def save_file(
         self,
         fid_list: List[str],
@@ -1171,16 +1219,6 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             share_url = f"https://pan.baidu.com/s/{share_id}"
             remote_dir = self._resolve_fid_to_path(to_pdir_fid if to_pdir_fid else "0")
 
-            # --- 记录转存前目标目录的文件列表 ---
-            before_items = {}  # {fid: file_name}
-            try:
-                before_dir = self.ls_dir(to_pdir_fid if to_pdir_fid else "0")
-                if before_dir.get("code") == 0:
-                    for item in before_dir.get("data", {}).get("list", []):
-                        before_items[item.get("fid", "")] = item.get("file_name", "")
-            except Exception:
-                pass
-
             # 访问分享并获取元数据
             self._api_access_shared(share_url, passcode)
             shared_data = self._api_shared_paths(share_url)
@@ -1198,6 +1236,17 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             share_id_num = shared_data.get("shareid")
             bdstoken = shared_data.get("bdstoken", "")
 
+            # A complete pre-write snapshot is required to distinguish new files
+            # from preexisting names. Failure here must not submit a write.
+            try:
+                before_dir = self.ls_dir_complete(remote_dir)
+            except Exception as exc:
+                logger.warning('[Baidu] 转存前完整读取目录失败: %s', exc)
+                return {"code": 1, "message": "转存前无法完整读取目标目录，未提交转存", "data": {}}
+            if before_dir.get('code') != 0:
+                return {"code": 1, "message": "转存前无法完整读取目标目录，未提交转存", "data": {}}
+            before_items = {item['fid'] for item in before_dir['data']['list']}
+
             # 转存文件
             fs_ids = [int(fid) for fid in fid_token_list if fid and fid.isdigit()]
 
@@ -1205,52 +1254,13 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 remote_dir, fs_ids, uk, share_id_num, bdstoken, share_url
             )
 
-            # --- 转存后列目录，按文件名建立新 fid 映射 ---
-            time.sleep(5)
-            name_to_new_fid = {}  # {file_name: new_fid}
-            try:
-                after_dir = self.ls_dir(to_pdir_fid if to_pdir_fid else "0")
-                if after_dir.get("code") == 0:
-                    for item in after_dir.get("data", {}).get("list", []):
-                        fid = item.get("fid", "")
-                        fname = item.get("file_name", "")
-                        # 只记录新增的文件（不在转存前的 fid 列表中）
-                        if fid and fid not in before_items:
-                            name_to_new_fid[fname] = fid
-            except Exception as e:
-                logger.error(f"[Baidu] 转存后获取目录失败: {e}")
-
-            # --- 按 file_names 顺序组装 save_as_top_fids ---
-            saved_fids = []
-            if file_names:
-                for fname in file_names:
-                    new_fid = name_to_new_fid.get(fname, "")
-                    if new_fid:
-                        saved_fids.append(new_fid)
-                    else:
-                        # 如果按文件名找不到，可能是文件名有特殊字符被改变
-                        # 尝试模糊匹配（去除特殊字符后比较）
-                        fname_clean = re.sub(r'[^\w\s\.]', '', fname)
-                        found = False
-                        for k, v in name_to_new_fid.items():
-                            k_clean = re.sub(r'[^\w\s\.]', '', k)
-                            if fname_clean == k_clean:
-                                saved_fids.append(v)
-                                found = True
-                                break
-                        if not found:
-                            logger.warning(f"[Baidu] 未找到文件 '{fname}' 的新 fid")
-                            saved_fids.append("")  # 占位，保持索引对齐
-            else:
-                # 兼容旧调用方式：直接返回新增文件的 fid 列表
-                saved_fids = list(name_to_new_fid.values())
-
             if result.get("errno") == 0 or not result.get("errno"):
+                saved_fids = self._confirm_saved_file_ids(remote_dir, before_items, file_names, len(fs_ids))
                 return {
                     "code": 0,
                     "message": "success",
                     "data": {
-                        "task_id": f"baidu_sync_{share_id}",
+                        "task_id": str(result.get('taskid') or result.get('task_id') or f"baidu_sync_{share_id}"),
                         "save_as_top_fids": saved_fids,
                         "_sync": True,
                     },
@@ -1273,7 +1283,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             return {"write_uncertain": True, "code": 1, "message": f"转存失败: {error_msg}", "data": {}}
 
     def query_task(self, task_id: str) -> Dict:
-        """查询任务状态（百度网盘转存是同步操作）"""
+        """Legacy response; typed transfers confirm actual saved directory entries."""
         return {
             "status": 200,
             "code": 0,

@@ -233,6 +233,7 @@ class DramaTaskExecutor:
         self._save_with_saved_fids(pwd_id=pwd_id, stoken=stoken, dest_root_fid=to_pdir_fid, plan=plan)
 
     def _save_with_saved_fids(self, *, pwd_id: str, stoken: str, dest_root_fid: str, plan: list[DramaPlanItem]) -> list[str]:
+        self._set_stage('save_file')
         def read_retry(action, fn):
             return self._retry(action=action, fn=fn,
                                validate=lambda result: _validate_code_status(action, result))

@@ -1,6 +1,17 @@
 """Adapter-specific transfer strategies. Writes are submitted only once."""
 from collections import Counter
+import re
 from app.domain.drive_types import SavedFile, TransferResult
+
+
+def baidu_file_key(name):
+    return re.sub(r'[^\w\s\.]', '', name)
+
+
+def _identity(item):
+    fid = str(item.get('fid') or item.get('fs_id') or item.get('file_id') or item.get('id') or item.get('fileId') or '')
+    name = str(item.get('file_name') or item.get('server_filename') or item.get('fileName') or item.get('name') or item.get('title') or '')
+    return fid, name
 
 
 def _ok(response):
@@ -33,9 +44,24 @@ class TransferStrategy:
     def finish(self, adapter, ids, request):
         return True
 
+    def saved_listing(self, adapter, destination):
+        return adapter.ls_dir(destination)
+
     def ids(self, data, queried):
         save_as = data.get('save_as') or {}
         return save_as.get('save_as_top_fids') if queried else data.get('save_as_top_fids')
+
+    def associate(self, request, items, ids):
+        by_name = {}
+        for item in items:
+            fid, name = _identity(item)
+            if fid in ids:
+                by_name.setdefault(name, []).append(fid)
+        counts = Counter(f.name for f in request.files)
+        unmatched = [f.name for f in request.files if counts[f.name] != 1 or len(by_name.get(f.name, [])) != 1]
+        if unmatched:
+            return None, unmatched
+        return tuple(SavedFile(f.id, by_name[f.name][0], f.name) for f in request.files), []
 
     def transfer(self, adapter, request, read):
         try:
@@ -84,22 +110,17 @@ class TransferStrategy:
             return TransferResult('pending', task_id=job, kind='pending', message='转存结果待确认')
         ids = [str(i) for i in ids]
         try:
-            listing = read('ls_dir', lambda: adapter.ls_dir(destination))
+            listing = read('ls_dir', lambda: self.saved_listing(adapter, destination))
         except Exception:
             return TransferResult('pending', task_id=job, kind='pending', message='转存结果待确认')
         if not _ok(listing):
             return TransferResult('pending', task_id=job, kind='pending', message='转存结果待确认')
         items = (listing.get('data') or {}).get('list') or []
-        by_name = {}
-        for item in items:
-            fid = str(item.get('fid') or item.get('fs_id') or item.get('file_id') or item.get('id') or item.get('fileId') or '')
-            name = str(item.get('file_name') or item.get('server_filename') or item.get('fileName') or item.get('name') or item.get('title') or '')
-            if fid in ids:
-                by_name.setdefault(name, []).append(fid)
-        counts = Counter(f.name for f in request.files)
-        if any(counts[f.name] != 1 or len(by_name.get(f.name, [])) != 1 for f in request.files):
-            return TransferResult('pending', task_id=job, kind='pending', message='无法唯一关联转存文件')
-        files = tuple(SavedFile(f.id, by_name[f.name][0], f.name) for f in request.files)
+        files, unmatched = self.associate(request, items, ids)
+        if files is None:
+            sample = '、'.join(name[:80] for name in unmatched[:3])
+            suffix = f'（共 {len(unmatched)} 个）' if len(unmatched) > 3 else ''
+            return TransferResult('pending', task_id=job, kind='pending', message=f'无法唯一关联转存文件：{sample}{suffix}；转存结果待确认')
         try:
             moved = self.finish(adapter, [f.id for f in files], request)
         except Exception:
@@ -122,6 +143,34 @@ class NamedTransferStrategy(TransferStrategy):
 
 class BaiduTransferStrategy(NamedTransferStrategy):
     review_errno = True
+
+    def saved_listing(self, adapter, destination):
+        return adapter.ls_dir_complete(destination)
+
+    def associate(self, request, items, ids):
+        files, unmatched = super().associate(request, items, ids)
+        if len(ids) != len(request.files) or any(not fid for fid in ids) or len(set(ids)) != len(ids):
+            return None, unmatched or [f.name for f in request.files]
+        if files is not None:
+            return files, []
+        # Baidu may strip punctuation. Require a one-to-one mapping across the
+        # whole batch and destination, backed by the adapter's new-file IDs.
+        counts = Counter(baidu_file_key(f.name) for f in request.files)
+        by_key = {}
+        for item in items:
+            fid, name = _identity(item)
+            by_key.setdefault(baidu_file_key(name), []).append((fid, name))
+        matched = []
+        unmatched = []
+        for source in request.files:
+            key = baidu_file_key(source.name)
+            candidates = by_key.get(key, [])
+            if not key or counts[key] != 1 or len(candidates) != 1 or candidates[0][0] not in ids:
+                unmatched.append(source.name)
+            else:
+                fid, name = candidates[0]
+                matched.append(SavedFile(source.id, fid, name))
+        return (None, unmatched) if unmatched else (tuple(matched), [])
 
 
 class TokenTransferStrategy(TransferStrategy):
