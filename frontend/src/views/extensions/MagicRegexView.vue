@@ -201,19 +201,11 @@ function applyDramaLeadInSettings(data: DramaLeadInSettings) {
   syncLeadInActiveDrive()
 }
 
-// 折叠面板默认展开：已配置的网盘优先，其次第一个支持的网盘。
+// 默认全部收起；刷新配置时仅保留用户手动展开且仍存在的网盘。
 function syncLeadInActiveDrive() {
-  const drives = dramaLeadIn.drives
-  if (!drives.length) {
+  if (!dramaLeadIn.drives.some((drive) => drive.drive_type === dramaLeadIn.activeDrive)) {
     dramaLeadIn.activeDrive = ''
-    return
   }
-  if (drives.some((drive) => drive.drive_type === dramaLeadIn.activeDrive)) return
-  const preferred =
-    drives.find((drive) => drive.supported && drive.configured) ||
-    drives.find((drive) => drive.supported) ||
-    drives[0]
-  dramaLeadIn.activeDrive = preferred.drive_type
 }
 
 // 折叠标题右侧的摘要：收起时也能看出配置了哪个素材。

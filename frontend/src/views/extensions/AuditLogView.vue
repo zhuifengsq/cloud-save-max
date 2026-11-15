@@ -156,6 +156,7 @@ onMounted(() => {
               />
               <el-segmented
                 v-model="query.success"
+                @change="query.page = 1; loadData()"
                 :options="[
                   { label: '全部', value: 'all' },
                   { label: '成功', value: 'success' },

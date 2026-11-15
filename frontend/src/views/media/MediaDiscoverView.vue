@@ -590,14 +590,14 @@ onMounted(async () => {
     </div>
 
     <el-card class="page__card search-card" shadow="never">
-      <el-input v-model="searchState.q" class="search-card__input" placeholder="搜索 TMDB 资源（点击搜索后切换结果）" clearable @keyup.enter="doSearch">
-        <template #prefix>
-          <el-icon class="search-card__icon"><Search /></el-icon>
-        </template>
-        <template #append>
-          <el-button type="primary" :loading="searchState.loading" @click="doSearch">搜索</el-button>
-        </template>
-      </el-input>
+      <div class="search-card__controls">
+        <el-input v-model="searchState.q" class="search-card__input" placeholder="搜索 TMDB 资源（点击搜索后切换结果）" clearable @keydown.enter="!($event as KeyboardEvent).isComposing && doSearch()">
+          <template #prefix>
+            <el-icon class="search-card__icon"><Search /></el-icon>
+          </template>
+        </el-input>
+        <el-button class="search-card__button" type="primary" :loading="searchState.loading" @click="doSearch">搜索</el-button>
+      </div>
       <div class="search-card__hint" v-if="searchState.checked && !searchState.configured">未配置 TMDB：无法搜索。</div>
     </el-card>
 
@@ -877,8 +877,18 @@ onMounted(async () => {
 .search-card :deep(.el-card__body) {
   padding: 10px 12px;
 }
-.search-card__input :deep(.el-input__wrapper) {
-  border-radius: 12px;
+.search-card__controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.search-card__input {
+  flex: 1;
+  min-width: 0;
+  --el-input-height: 40px;
+}
+.search-card__button {
+  flex-shrink: 0;
 }
 .search-card__icon {
   color: var(--el-text-color-secondary);
