@@ -1263,6 +1263,11 @@ async function correctSavedProgress(taskId: number) {
     await refreshData({silent: true, localOnly: true})
     ElMessage.success(result.saved_latest.episode > 0 ? `已存进度已校正为 ${result.saved_latest.episode}` : '校正完成，保存目录未发现可识别的已存集数')
   } catch (error: any) {
+    const task = tasks.value.find(item => item.id === taskId)
+    if (task?.media_category === '综艺' && error?.response?.data?.code === 'SAVED_PROGRESS_UNRECOGNIZED') {
+      ElMessage.info('部分文件无法识别期号，已保留原进度')
+      return
+    }
     ElMessage.error(error?.response?.data?.message || error?.message || '校正失败，原已存进度保留，请重试')
   } finally {
     delete correctingProgress[taskId]

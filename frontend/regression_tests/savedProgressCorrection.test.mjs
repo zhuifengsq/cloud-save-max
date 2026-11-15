@@ -31,3 +31,33 @@ test('failed correction retains saved progress and permits retry',async()=>{
  await run(1);assert.equal(tasks.value[0].extra.saved_latest.episode,30);assert(!correctingProgress[1]);assert.equal(errors.length,1)
  fail=false;await run(1);assert.equal(tasks.value[0].extra.saved_latest.episode,10)
 })
+
+test('variety files without episode numbers show an informational notice and retain progress',async()=>{
+ const tasks={value:[{id:1,media_category:'综艺',extra:{saved_latest:{episode:30},custom:'keep'}}]},correctingProgress={},messages=[],errors=[]
+ let attempts=0
+ const run=new Function('tasks','correctingProgress','correctTaskSavedProgress','refreshData','ElMessage',action()+';return correctSavedProgress')(
+  tasks,correctingProgress,async()=>{attempts++;throw {response:{data:{code:'SAVED_PROGRESS_UNRECOGNIZED',message:'无法识别集号：微醺派对.mp4'}}}},
+  async()=>assert.fail('No progress changed; refresh is unnecessary'),
+  {success:()=>assert.fail('Unknown episodes must not be reported as corrected'),info:message=>messages.push(message),error:message=>errors.push(message)})
+ await run(1)
+ assert.equal(errors.length,0)
+ assert.equal(messages.length,1)
+ assert.match(messages[0],/期号.*保留原进度/)
+ assert.deepEqual(tasks.value[0].extra,{saved_latest:{episode:30},custom:'keep'})
+ assert(!correctingProgress[1])
+ await run(1)
+ assert.equal(attempts,2)
+})
+
+test('read failures, scan limits and non-variety recognition errors still show errors',async()=>{
+ for(const [category,code] of [['综艺','SAVED_PROGRESS_READ_FAILED'],['综艺','SAVED_PROGRESS_SCAN_LIMIT'],['国剧','SAVED_PROGRESS_UNRECOGNIZED'],[undefined,'SAVED_PROGRESS_UNRECOGNIZED']]){
+  const tasks={value:[{id:1,media_category:category,extra:{saved_latest:{episode:30}}}]},correctingProgress={},errors=[]
+  const run=new Function('tasks','correctingProgress','correctTaskSavedProgress','refreshData','ElMessage',action()+';return correctSavedProgress')(
+   tasks,correctingProgress,async()=>{throw {response:{data:{code,message:'原已存进度保留'}}}},async()=>{},
+   {success:()=>assert.fail('Unexpected success'),info:()=>assert.fail('Unexpected informational notice'),error:message=>errors.push(message)})
+  await run(1)
+  assert.deepEqual(errors,['原已存进度保留'])
+  assert.equal(tasks.value[0].extra.saved_latest.episode,30)
+  assert(!correctingProgress[1])
+ }
+})
