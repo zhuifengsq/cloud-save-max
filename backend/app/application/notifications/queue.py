@@ -1,7 +1,7 @@
 """通知发送队列（单消费者线程）。
 
-为什么需要它：`legacy_notify.send()` 在调用线程里为每个通知渠道起一个线程并
-`join()` 等它们结束（legacy_notify.py:793-795），渠道 HTTP 超时可达数十秒。
+为什么需要它：`sender.send()` 在调用线程里为每个通知渠道起一个线程并
+`join()` 等它们结束（channel_delivery 的同步扇出），渠道 HTTP 超时可达数十秒。
 任务执行线程、调度线程、请求线程只要直接调用 send()，就会被通知网络 IO 拖住。
 
 设计（不引入新依赖）：
@@ -9,10 +9,10 @@
 - 生产者只入队，队列满时记 WARNING 并丢弃（返回 False），绝不阻塞业务线程；
 - 消费者异常不会退出循环（单条失败记日志后继续），否则后续通知永久丢失；
 - 本模块不依赖 app 内其它业务模块（避免 notifications 包出现导入环），
-  真正的发送函数由调用方以 handler 注入（见 legacy_notify.get_notify_queue）；
+  真正的发送函数由调用方以 handler 注入（见 sender.get_notify_queue）；
 - 单进程假设：队列在进程内，进程退出时未消费的通知会丢（通知本身是尽力而为语义）。
 
-开关：`settings.use_notify_queue`。为 False 时 legacy_notify.send_async() 退化为
+开关：`settings.use_notify_queue`。为 False 时 sender.send_async() 退化为
 同步 send()，调用方无需感知。
 """
 

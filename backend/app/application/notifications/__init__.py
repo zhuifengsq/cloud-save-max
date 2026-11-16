@@ -1,4 +1,1 @@
-from app.application.notifications.legacy_notify import send
-
-__all__ = ["send"]
-
+from app.application.notifications.sender import send

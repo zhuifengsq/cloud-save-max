@@ -18,3 +18,8 @@ docs
 .git
 frontend/node_modules
 frontend/dist
+.tmp
+.mypy_cache
+.ruff_cache
+backend/pip-*
+backend/pytest-of-*

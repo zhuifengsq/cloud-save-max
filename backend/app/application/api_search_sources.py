@@ -27,7 +27,7 @@ DEFAULT_PATHS = {
 }
 
 
-def _config(row: ResourceSearchSource) -> dict[str, Any]:
+def _config(row: Any) -> dict[str, Any]:
     try:
         value = json.loads(row.config_json or "{}")
         return value if isinstance(value, dict) else {}

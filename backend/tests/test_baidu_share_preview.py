@@ -59,10 +59,13 @@ class BaiduSharePreviewTests(unittest.TestCase):
         adapter.extract_url.return_value = ("1test", "1111", "0", [])
         adapter.get_stoken.return_value = {"data": {"stoken": "token"}}
         adapter.get_detail.return_value = {"code": 1, "message": "读取分享目录失败", "data": {"list": []}}
-        manager = Mock()
-        manager.get_adapter_for_task.return_value = adapter
-        with patch("app.application.share_preview.DatabaseAccountManager", return_value=manager), \
-             patch("app.application.share_preview.pick_default_account_name", return_value="test"):
-            with self.assertRaises(ApiError) as caught:
-                preview_share(SharePreviewIn(shareurl="https://pan.baidu.com/s/1test"), Mock())
+        from app.infrastructure.drive.share_preview_reader import SharePreviewReader
+        reader = SharePreviewReader(drive_type='baidu', account_name='test', cookie='fake', config={})
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        with patch('app.application.share_preview.share_preview_reader', return_value=reader), \
+             patch('app.application.share_preview.get_enabled_magic_regex_map', return_value={}), \
+             patch('app.infrastructure.drive.share_preview_reader.AdapterFactory.create_adapter', return_value=adapter):
+            with Session(create_engine('sqlite://')) as db, self.assertRaises(ApiError) as caught:
+                preview_share(SharePreviewIn(shareurl="https://pan.baidu.com/s/1test"), db)
         self.assertEqual(caught.exception.code, "TASK_SHARE_DETAIL_FAILED")

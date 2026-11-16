@@ -2,7 +2,9 @@ import logging
 import os
 import subprocess
 from datetime import datetime
+from functools import cache
 from pathlib import Path
+from threading import Lock
 
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy import text
@@ -11,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.application.container import get_db
 
 
+@cache
 def _git_describe() -> str | None:
     """Try to get version from git tags (e.g. v26.7.7)."""
     try:
@@ -26,6 +29,7 @@ def _git_describe() -> str | None:
         return None
 
 
+@cache
 def _git_sha() -> str | None:
     """Try to get short commit SHA from git."""
     try:
@@ -43,6 +47,7 @@ def _git_sha() -> str | None:
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_build_lock = Lock()
 
 
 @router.get("/health/live")
@@ -63,8 +68,11 @@ def health(response: Response, db: Session = Depends(get_db)):
         # Exception text can contain connection credentials; keep this diagnostic safe.
         logger.warning("Database health probe failed")
 
-    build_tag = (os.getenv("BUILD_TAG") or "").strip() or _git_describe() or "dev"
-    build_sha = (os.getenv("BUILD_SHA") or "").strip() or _git_sha()
+    # Serialize the first cache fill too: concurrent readiness calls must not
+    # launch multiple git processes. None (git unavailable) is cached as well.
+    with _build_lock:
+        build_tag = (os.getenv("BUILD_TAG") or "").strip() or _git_describe() or "dev"
+        build_sha = (os.getenv("BUILD_SHA") or "").strip() or _git_sha()
 
     return {
         "status": "ok" if db_connected else "degraded",

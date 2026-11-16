@@ -1,3 +1,5 @@
+> 2026-11-16 F1 状态更新：下文为历史演进设计，执行入口灰度回退已退役。生产统一走 execute；历史执行开关不再存在，兼容入口只能通过回滚 F1 恢复。通知队列等其他有效开关保持原语义。
+
 # Cloud Save Max 后端分层重构与演进方案
 
 > 版本 v1 · 2026-11-08 · 作者：架构组 · 适用范围：backend/app（Python 3.13 + FastAPI + SQLAlchemy 2.0 + SQLite/WAL + APScheduler，单进程）
@@ -49,7 +51,7 @@
 | --- | --- | --- | --- | --- |
 | S0 | 冻结与护栏 | 1-2 天 | 修 2 个陈旧测试、分层门禁进 CI、备份脚本 + 迁移预检、tests 入库、清 `pytest-of-qiuqu` ACL 残留 | 纯新增，删除即可 |
 | S1 | 逻辑分层 + 横切组件 | 1 周 | 目标包骨架、端口协议、3 个只增不删的注册表换 LRU | 单文件 flag 回退（新旧实现并存） |
-| S2 | 统一任务执行入口 | 1.5-2 周 | `TaskRunUseCase`，6 个直连点收敛为 1 | `settings.use_unified_run_use_case` 开关 |
+| S2 | 统一任务执行入口 | 1.5-2 周 | `TaskRunUseCase`，6 个直连点收敛为 1 | F1已退役；回滚对应代码提交 |
 | S3 | 事务边界与仓储下沉 | 2 周 | UoW + 仓储、`retry_on_locked`、修 27 模块 import 环 | 按模块回滚（每模块一次 PR） |
 | S4 | 网盘链路 + 查询链路 | 2 周 | `DriveGateway` 注册表、实例 LRU+TTL、presenter 下沉 | 每网盘一个 PR，单独回滚 |
 | S5 | 收尾与固化 | 1 周 | 删除 shim、预算归零、ADR 与分层规范一页纸 | 文档与门禁，无运行时风险 |
@@ -518,7 +520,7 @@ class RunTaskUseCase:
 | 目标 | 6 份执行副本 → 1 个 `RunTaskUseCase` |
 | 改动 | ① 新建 `app/application/use_cases/run_task.py` + `app/domain/task/{spec,trigger,outcome}.py`；② `TaskExecutor.run_task` 改为接收 `TaskSpec`（现接收 ORM `Task`）+ `RunPolicy`；③ 6 处调用点改为调用用例；④ 删 `services/tasks.py:229-232` 的重复实现，留 shim；⑤ 执行记录改「开始 `insert(running)` → 结束 `update(终态)`」（规则 4），并把 SSE 的 `commit→refresh→done` 顺序写成契约测试；⑥ 通知调用改为投递 `notify_queue`（不再在任务线程内同步发送），发送结果落计数 |
 | 验收 | `grep -rn "TaskExecutor(" app/` 仅 1 处；`grep -rn "admission.reserve\|_admission.reserve" app/` 仅 1 处；四条入口行为一致性测试通过；404 项测试全绿 |
-| 回滚 | `settings.use_unified_run_use_case`（默认开）；关闭后 6 处调用点走旧分支（旧代码保留一个版本周期） |
+| 回滚 | F1已退役；生产execute不受此开关控制，恢复兼容入口须回滚F1 |
 | 风险 | **行为分叉是最危险的点**：`share_check_always_notify=True` 只在 HTTP 手动触发时传，统一后必须在 `RunPolicy.for_trigger()` 里精确复刻；建议先写一张「触发方 × 行为开关」真值表，评审后再改代码。**自动重试的前置条件**：必须先落幂等键与网盘侧事实源（§3.6 规则 6），否则 S2 只做「不重试」的保守版本 |
 
 ### S3 事务边界与仓储下沉（2 周）
@@ -633,7 +635,7 @@ class RunTaskUseCase:
 
 | # | 风险 | 触发信号 | 概率/影响 | 规避策略 | 兜底/回滚 |
 | --- | --- | --- | --- | --- | --- |
-| R1 | **行为分叉回归**（统一执行入口后，某入口不再发通知/不再写执行记录） | 各入口成功率、通知条数对比异常 | 高 / 高 | 改造前写「触发方 × 行为开关」真值表并评审；每条入口保留 e2e 冒烟；用 fake executor 断言 5 步顺序 | `settings.use_unified_run_use_case=false` 回旧分支，保留旧代码一个版本 |
+| R1 | **行为分叉回归**（统一执行入口后，某入口不再发通知/不再写执行记录） | 各入口成功率、通知条数对比异常 | 高 / 高 | 改造前写「触发方 × 行为开关」真值表并评审；每条入口保留 e2e 冒烟；用 fake executor 断言 5 步顺序 | F1已退役；恢复兼容入口须回滚F1，不是生产回退开关 |
 | R2 | SQLite 写锁（长事务/并发写） | `database is locked` 计数上升 | 中 / 高 | 短事务三段式；`retry_on_locked` 只包幂等写；写热点合并为单事务；不开多 worker | 回退单条链路为旧事务写法 |
 | R3 | 搬迁引发循环依赖/导入崩溃 | 启动即 ImportError；`check_layering` cycles 增加 | 中 / 高 | 逻辑分层先行 + `_compat` shim；一次只搬一个模块；先修 `db/base.py:7` 的 27 模块 SCC | shim 保留旧路径，删除即回滚 |
 | R4 | 48 个既有迁移被动到 | 迁移历史出现异常、本地库结构漂移 | 中 / 高 | **只新增迁移，不改历史**；所有迁移在临时库 + `XXM_TESTING=1` 验证（第二轮已踩坑）；先校验 DB URL 再执行 | 用备份库恢复（`PRAGMA quick_check` 验证） |
@@ -798,7 +800,7 @@ class RunTaskUseCase:
 
 | 开关（`backend/app/core/settings.py`） | 默认 | 关闭后的行为 |
 | --- | --- | --- |
-| `use_unified_run_use_case` | True | 各调用点走 `RunTaskUseCase._legacy_execute()`（逐字复刻旧实参） |
+| 执行兼容开关（F1已退役） | 不适用 | 生产 execute 无旧流程切换；恢复兼容入口须回滚F1 |
 | `use_notify_queue` | True | `send_async()` 退化为同步 `send()`，恢复旧的阻塞语义 |
 | `use_keyed_locks` | True | 素材去重回退到旧的无界 dict 锁表 |
 | `use_account_snapshot_cache` / `account_snapshot_ttl_seconds` | True / 30 | 每次实例化都全表查 `drive_accounts` 并逐行解析（旧行为） |

@@ -1,16 +1,13 @@
 """Task run orchestration: detached read plan, external engine, short writes, notification.
 
 Production uses execute(command, policy). Admission remains at the entry so HTTP/SSE
-reject 409/429 before starting work. The deprecated run(task, ...) compatibility
-adapter retains the legacy grey-flag argument truth table for older integrations;
-production execute never restores network IO inside a database transaction when
-use_unified_run_use_case is false. Both flag values use the safe staged boundary.
+reject 409/429 before starting work. The execute entry owns the staged transaction
+boundary; removed test-only compatibility code is restored only by reverting F1.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 import logging
 import time
 from app.application.dto.task_run import RunTaskCommand, TaskRunResult
@@ -24,15 +21,11 @@ logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 
-from app.application.factories import task_executor_class
-from app.core.settings import settings
 
 
 @dataclass(frozen=True)
 class RunPolicy:
     """一次任务执行的行为参数：只描述"触发方差异"，不承载业务参数（业务参数在 task 上）。
-
-    executor_cls 未包含在此：它是测试注入缝，不属于触发方语义。
     """
 
     trigger: str
@@ -72,14 +65,12 @@ _TRIGGER_POLICIES: dict[str, RunPolicy] = {
 class RunTaskUseCase:
     """Own run/recovery persistence, audit and post-commit notification decisions."""
 
-    def __init__(self, db: Session, *, store: TaskRunStorePort | None = None, engine: TaskExecutionEnginePort | None = None, notifier: NotifierPort | None = None, executor_cls=None):
+    def __init__(self, db: Session, *, store: TaskRunStorePort | None = None, engine: TaskExecutionEnginePort | None = None, notifier: NotifierPort | None = None):
         self.db = db
         from app.application.container import task_run_store, task_execution_engine, task_run_notifier
         self.store = store if store is not None else task_run_store(db)
         self.engine = engine if engine is not None else task_execution_engine()
         self.notifier = notifier if notifier is not None else task_run_notifier(db)
-        # Deprecated compatibility seam; production execute only uses assembled port instances.
-        self.executor_cls = executor_cls
 
     def _release_read(self):
         if self.db.new or self.db.dirty or self.db.deleted:
@@ -155,56 +146,3 @@ class RunTaskUseCase:
             if not result.get('checked'):
                 break
         return False
-
-    def run(
-        self,
-        task: Any,
-        policy: RunPolicy,
-        log: Any | None = None,
-        *,
-        account_manager=None,
-        init_account_for_task: bool = True,
-    ):
-        # account_manager / init_account_for_task 仅调度器使用：它在轮询前已预初始化账号池，
-        # 避免每个任务重复登录网盘。其余触发方保持 TaskExecutor 的默认行为。
-        if not settings.use_unified_run_use_case:
-            return self._legacy_execute(
-                task,
-                policy,
-                log=log,
-                account_manager=account_manager,
-                init_account_for_task=init_account_for_task,
-            )
-        executor = (self.executor_cls or task_executor_class())(self.db)
-        return executor.run_task(
-            task,
-            log=log,
-            persist_execution=policy.persist_execution,
-            account_manager=account_manager,
-            init_account_for_task=init_account_for_task,
-            share_check_always_notify=policy.share_check_always_notify,
-            manual_run=policy.manual_run,
-        )
-
-    def _legacy_execute(self, task, policy, *, log, account_manager, init_account_for_task):
-        """灰度开关为 False 时的回退路径：逐字复刻改造前 6 个调用点的实参。"""
-        executor = (self.executor_cls or task_executor_class())(self.db)
-        trigger = policy.trigger
-        if trigger in {"http", "telegram"}:
-            # 旧：routes/tasks.py:220、telegram_bot/actions.py:480
-            return executor.run_task(task, share_check_always_notify=True, manual_run=policy.manual_run)
-        if trigger == "sse":
-            # 旧：routes/tasks_stream.py:175
-            return executor.run_task(task, log=log, share_check_always_notify=True, manual_run=policy.manual_run)
-        if trigger == "scheduler":
-            # 旧：extensions/runtime/task_scheduler.py:250-254
-            return executor.run_task(
-                task,
-                account_manager=account_manager,
-                init_account_for_task=False,
-                manual_run=policy.manual_run,
-            )
-        if trigger == "preview":
-            # 旧：routes/tasks_stream.py:292
-            return executor.run_task(task, log=log, persist_execution=False, manual_run=policy.manual_run)
-        raise ValueError(f"未知的任务触发方: {trigger!r}")

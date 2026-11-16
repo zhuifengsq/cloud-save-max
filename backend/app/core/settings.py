@@ -86,8 +86,6 @@ class Settings(BaseSettings):
     permission_cache_ttl_seconds: int = 30
 
     # ---- 重构灰度开关：置 False 即回退到旧实现（平滑过渡，见路线图 S1/S2）----
-    # 统一任务执行入口（RunTaskUseCase）
-    use_unified_run_use_case: bool = True
     # 通知走单消费者队列（不再每个渠道起线程）
     use_notify_queue: bool = True
     # 素材/网盘 key 级锁使用 LRU 上限（防止锁表无限增长）
@@ -101,14 +99,6 @@ class Settings(BaseSettings):
     # 同一账户的令牌刷新 single-flight（同一实例内并发请求只刷一次）
     use_token_refresh_single_flight: bool = True
 
-    # ---- 重构灰度开关：置 False 即回退到旧实现（平滑过渡，见路线图 S1/S2）----
-    # 统一任务执行入口（RunTaskUseCase）
-    use_unified_run_use_case: bool = True
-    # 通知走单消费者队列（不再每个渠道起线程）
-    use_notify_queue: bool = True
-    # 素材/网盘 key 级锁使用 LRU 上限（防止锁表无限增长）
-    use_keyed_locks: bool = True
-
     # 追剧任务引流文件预览令牌有效期（秒）
     drama_lead_in_preview_token_ttl_seconds: int = 600
 
@@ -120,6 +110,11 @@ class Settings(BaseSettings):
     jwt_secret_key: str | None = None
     jwt_algorithm: str = "HS256"
     access_token_expires_seconds: int = 2 * 60 * 60
+    login_throttle_pair_limit: int = Field(default=5, gt=0)
+    login_throttle_ip_limit: int = Field(default=30, gt=0)
+    login_throttle_window_seconds: int = Field(default=600, gt=0)
+    login_throttle_cooldown_seconds: int = Field(default=900, gt=0)
+    login_throttle_capacity: int = Field(default=10000, gt=0)
 
     refresh_token_expires_seconds: int = 14 * 24 * 60 * 60
     refresh_token_cookie_name: str = "refresh_token"

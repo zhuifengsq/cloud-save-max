@@ -18,13 +18,13 @@ import requests
 from app.core.runtime.token_manager import get_token_manager
 from app.core.settings import settings
 from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
+from app.infrastructure.drive.adapters.listing_protocol import XUNLEI_API_BASE as API_BASE, FILE_LIST_FILTERS
 
 
 logger = logging.getLogger(__name__)
 
 
 # ==================== 常量定义 ====================
-API_BASE = "https://api-pan.xunlei.com"
 AUTH_BASE = "https://xluser-ssl.xunlei.com"
 
 CLIENT_ID = "Xqp0kJBXWhwaTpB6"
@@ -49,10 +49,7 @@ CAPTCHA_SIGN = "1.fe2108ad808a74c9ac0243309242726c"
 CAPTCHA_TIMESTAMP = "1645241033384"
 
 # 文件列表过滤条件
-FILE_LIST_FILTERS = json.dumps({
-    "phase": {"eq": "PHASE_TYPE_COMPLETE"},
-    "trashed": {"eq": False},
-})
+
 
 # 错误码映射
 ERROR_CODES = {

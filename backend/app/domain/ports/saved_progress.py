@@ -1,6 +1,6 @@
 """Detached values and ports for correcting one task's saved episode watermark."""
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.domain.ports.task_share import TaskSharePlan
 
@@ -17,10 +17,11 @@ class SavedLatestProgress:
 class SavedProgressPlan:
     task_id: int
     drive: TaskSharePlan = field(repr=False)
-    task_snapshot: dict = field(repr=False)
-    task_data: dict = field(repr=False)
-    account_snapshot: dict = field(repr=False)
-    magic_snapshot: tuple[dict, ...] = field(repr=False)
+    # Detached provider/task JSON snapshots; schemas vary across providers.
+    task_snapshot: dict[str, Any] = field(repr=False)
+    task_data: dict[str, Any] = field(repr=False)
+    account_snapshot: dict[str, Any] = field(repr=False)
+    magic_snapshot: tuple[dict[str, Any], ...] = field(repr=False)
 
 
 @dataclass(frozen=True)

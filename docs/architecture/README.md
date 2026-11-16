@@ -98,7 +98,7 @@ CI 侧已有三个 workflow：`layering-gate`（分层预算）、`db-schema-gat
 
 ## 5. 回退开关（方案 §9，已落地在 `app/core/settings.py`）
 
-`use_unified_run_use_case` / `use_notify_queue` / `use_keyed_locks` / `use_account_snapshot_cache` /
+`use_notify_queue` / `use_keyed_locks` / `use_account_snapshot_cache` /
 `use_keyed_rate_limiter` / `use_token_refresh_single_flight` 默认 True（新路径），
 出现回归时按开关回退到旧实现；开关只作为「切换期保险」，不得长期保留两套逻辑。
 

@@ -1,17 +1,14 @@
-"""RunPolicy 真值表 + 统一执行入口参数对齐（纯函数断言，不连库）。
+"""RunPolicy 真值表与现役执行端口装配。
 
-边界：准入（task_admission.reserve）仍在各调用点，本用例不占槽——这里用假执行器
-记录实参，验证灰度开关两端的参数与改造前逐点一致。
+边界：准入（task_admission.reserve）仍在各调用点，本用例不占槽——这里验证触发策略，execute 行为在 test_task_run_phases 中覆盖。
 """
 
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from types import SimpleNamespace
 
 import pytest
 
-from app.application.use_cases import run_task as run_task_use_case
 from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
 
 
@@ -59,91 +56,7 @@ def test_policy_has_no_slot_flag():
     assert not hasattr(RunPolicy.for_trigger("http"), "use_slot")
 
 
-class _RecordingExecutor:
-    calls: list[dict] = []
-
-    def __init__(self, db):
-        self.db = db
-
-    def run_task(self, task, **kwargs):
-        _RecordingExecutor.calls.append({"task": task, "kwargs": kwargs})
-        return SimpleNamespace(status="success")
-
-
-@pytest.fixture
-def fake_deps(monkeypatch):
-    _RecordingExecutor.calls = []
-
-    def fake_executor_cls(db):
-        return _RecordingExecutor(db)
-
-    task = SimpleNamespace(id=17)
-    return SimpleNamespace(task=task, executor_cls=fake_executor_cls)
-
-
-def _set_flag(monkeypatch, value: bool) -> None:
-    monkeypatch.setattr(
-        run_task_use_case,
-        "settings",
-        SimpleNamespace(use_unified_run_use_case=value),
-    )
-
-
-def test_legacy_path_matches_old_call_arguments(fake_deps, monkeypatch):
-    """灰度开关关闭时，逐字复刻改造前 5 个活调用点的实参（第 6 处是已删除的死代码）。"""
-    _set_flag(monkeypatch, False)
-    log = object()
-    manager = object()
-
-    for trigger in ("http", "telegram"):
-        RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
-            fake_deps.task, RunPolicy.for_trigger(trigger)
-        )
-    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
-        fake_deps.task, RunPolicy.for_trigger("sse"), log=log
-    )
-    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
-        fake_deps.task,
-        RunPolicy.for_trigger("scheduler"),
-        account_manager=manager,
-        init_account_for_task=False,
-    )
-    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
-        fake_deps.task, RunPolicy.for_trigger("preview"), log=log
-    )
-
-    assert [call["kwargs"] for call in _RecordingExecutor.calls] == [
-        {"share_check_always_notify": True, "manual_run": True},
-        {"share_check_always_notify": True, "manual_run": True},
-        {"log": log, "share_check_always_notify": True, "manual_run": True},
-        {"account_manager": manager, "init_account_for_task": False, "manual_run": False},
-        {"log": log, "persist_execution": False, "manual_run": True},
-    ]
-
-
-def test_unified_path_derives_arguments_from_policy(fake_deps, monkeypatch):
-    _set_flag(monkeypatch, True)
-    manager = object()
-
-    RunTaskUseCase(db=object(), executor_cls=fake_deps.executor_cls).run(
-        fake_deps.task,
-        RunPolicy.for_trigger("scheduler"),
-        account_manager=manager,
-        init_account_for_task=False,
-    )
-
-    assert _RecordingExecutor.calls[0]["kwargs"] == {
-        "log": None,
-        "persist_execution": True,
-        "account_manager": manager,
-        "init_account_for_task": False,
-        "share_check_always_notify": False,
-        "manual_run": False,
-    }
-
-
 def test_default_execution_dependency_is_an_assembled_port_instance():
     from app.infrastructure.execution.task_run_stages import PreparedTaskEngine
     use_case = RunTaskUseCase(db=object())
     assert isinstance(use_case.engine, PreparedTaskEngine)
-    assert use_case.executor_cls is None

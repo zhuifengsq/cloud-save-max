@@ -212,11 +212,20 @@ def _error_bodies() -> dict[str, dict[str, object]]:
         None, RequestValidationError([{"type": "missing", "loc": ("body", "taskname"), "msg": "Field required"}])
     )
     internal_response = handlers.http_error_handler(None, RuntimeError("boom"))
+    throttle_response = handlers.api_error_handler(
+        None, ApiError(code='AUTH_LOGIN_THROTTLED', message='登录尝试过于频繁，请稍后重试',
+                       http_status=429, headers={'Retry-After': '900'})
+    )
 
     api_body = _body(api_response)
     validation_body = _body(validation_response)
     internal_body = _body(internal_response)
     return {
+        'LoginThrottled': {
+            'status': throttle_response.status_code,
+            'body': _body(throttle_response),
+            'retry_after': throttle_response.headers['Retry-After'],
+        },
         "ApiError": {
             "status": api_response.status_code,
             "keys": list(api_body.keys()),

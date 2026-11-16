@@ -2,7 +2,8 @@ import logging
 import socket
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -73,3 +74,51 @@ def test_liveness_does_not_resolve_database_or_open_network(app, monkeypatch):
             response = client.get("/api/health/live")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_build_environment_does_not_start_git(app, monkeypatch):
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("build environment must take precedence")
+    monkeypatch.setattr(health.subprocess, "run", forbidden)
+    response = health.health(Response(), db=WorkingDatabase())
+    assert response["build_tag"] == "test-build"
+    assert response["build_sha"] == "abc123"
+    assert calls == []
+
+
+class WorkingDatabase:
+    def __init__(self):
+        self.probes = 0
+
+    def execute(self, statement):
+        self.probes += 1
+
+
+@pytest.mark.parametrize("git_available", [True, False])
+def test_git_fallback_is_cached_but_database_is_probed_each_time(monkeypatch, git_available):
+    monkeypatch.delenv("BUILD_TAG", raising=False)
+    monkeypatch.delenv("BUILD_SHA", raising=False)
+    calls = []
+
+    def git(*args, **kwargs):
+        calls.append(args)
+        assert kwargs["timeout"] == 5
+        if not git_available:
+            raise FileNotFoundError("no git")
+        return SimpleNamespace(stdout="test-git\n")
+
+    monkeypatch.setattr(health.subprocess, "run", git)
+    db = WorkingDatabase()
+    try:
+        first = health.health(Response(), db=db)
+        second = health.health(Response(), db=db)
+        assert len(calls) == 2
+        assert db.probes == 2
+        assert first["build_sha"] == second["build_sha"] == ("test-git" if git_available else None)
+        assert first["build_tag"] == second["build_tag"] == ("test-git" if git_available else "dev")
+    finally:
+        for function in (health._git_describe, health._git_sha):
+            if hasattr(function, "cache_clear"):
+                function.cache_clear()

@@ -26,6 +26,12 @@ from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
+# Context-managed transaction owners (their commit primitive is counted in infra).
+# Initial setup owns claim/user/role/token/audit atomically, including rollback.
+TRANSACTION_OWNERS = {
+    "application/use_cases/initialize_admin.py": "initial administrator, claim, roles, token and audit",
+}
+
 # file(相对 app/) -> (预算, 归属类别, 为什么必须由它提交)
 COMMIT_BUDGET: dict[str, tuple[int, str, str]] = {
     'application/use_cases/correct_saved_progress.py': (1, 'use-case-owned', '校正用例拥有进度条件写回与审计的原子提交；网盘扫描在事务外'),
@@ -114,6 +120,18 @@ def test_routes_have_no_raw_commit() -> None:
         "路由层出现裸 db.commit()，请改用 app.infrastructure.persistence.session 的 commit()/transaction()："
         f"{offenders}"
     )
+
+
+def test_registered_transaction_owners_keep_context_managed_boundary() -> None:
+    for rel in TRANSACTION_OWNERS:
+        tree = ast.parse((APP_DIR / rel).read_text(encoding="utf-8"))
+        boundaries = [
+            item for node in ast.walk(tree) if isinstance(node, ast.With)
+            for item in node.items if isinstance(item.context_expr, ast.Call)
+            and isinstance(item.context_expr.func, ast.Name)
+            and item.context_expr.func.id == "transaction"
+        ]
+        assert len(boundaries) == 1, f"事务归属必须保留明确的原子边界: {rel}"
 
 
 def test_commit_counts_stay_within_registered_budget() -> None:

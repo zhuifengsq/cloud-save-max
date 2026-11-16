@@ -1,4 +1,11 @@
 from pydantic import BaseModel
+from typing import Literal
+
+
+class LoginThrottleError(BaseModel):
+    code: Literal['AUTH_LOGIN_THROTTLED'] = 'AUTH_LOGIN_THROTTLED'
+    message: str
+    detail: str | None = None
 
 
 class TokenOut(BaseModel):

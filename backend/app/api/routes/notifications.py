@@ -8,7 +8,7 @@ from app.core.permissions import NOTIFY_READ, NOTIFY_WRITE
 from app.application.container import get_db, transaction
 from app.schemas.notification import NotificationConfigOut, NotificationConfigUpdateIn, NotificationTestIn, NotificationTestOut
 from app.application import audit
-from app.application.notifications import legacy_notify
+from app.application.notifications import sender
 from app.application.notifications.sender import send_test
 from app.application.notifications.settings import get_or_create_notification_setting, load_notification_config, update_notification_setting
 
@@ -22,7 +22,7 @@ def get_notification_config(db: Session = Depends(get_db)):
     config = load_notification_config(item)
     return NotificationConfigOut(
         config=config,
-        default_config=dict(legacy_notify.DEFAULT_PUSH_CONFIG),
+        default_config=dict(sender.DEFAULT_PUSH_CONFIG),
         updated_at=item.updated_at,
     )
 
@@ -50,7 +50,7 @@ def patch_notification_config(
     config = load_notification_config(item)
     return NotificationConfigOut(
         config=config,
-        default_config=dict(legacy_notify.DEFAULT_PUSH_CONFIG),
+        default_config=dict(sender.DEFAULT_PUSH_CONFIG),
         updated_at=item.updated_at,
     )
 

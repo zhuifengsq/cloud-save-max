@@ -617,6 +617,15 @@
     }
   },
   "error_bodies": {
+    "LoginThrottled": {
+      "status": 429,
+      "body": {
+        "code": "AUTH_LOGIN_THROTTLED",
+        "message": "登录尝试过于频繁，请稍后重试",
+        "detail": null
+      },
+      "retry_after": "900"
+    },
     "ApiError": {
       "status": 404,
       "keys": [

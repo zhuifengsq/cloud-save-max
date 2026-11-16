@@ -1,3 +1,4 @@
+"""Process-local admission; deploy one process/replica (docs/architecture/adr/0003-single-process-deployment-assumption.md)."""
 from __future__ import annotations
 
 from collections.abc import Callable

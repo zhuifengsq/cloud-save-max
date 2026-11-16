@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from app.domain.ports.drive import ShareProbeResult
+from app.domain.ports.share_preview import SharePreviewRead
+import re
 from app.domain.drive_types import DriveCapabilities, ShareLinkResult, DriveFile, TransferRequest
 from app.infrastructure.drive.transfer import TransferStrategy
 
@@ -179,6 +181,55 @@ class AdapterDriveGateway:
                       token=_get_fid_token(item) or None)
             for item in _items(response)
         ]
+
+    def read_share_preview(self, shareurl: str, folder_id: str | None) -> SharePreviewRead:
+        try:
+            share_id, passcode, extracted_folder, _ = self._adapter.extract_url(shareurl)
+        except Exception:
+            raise DriveGatewayError('Invalid share URL', kind='preview-url') from None
+        if not share_id:
+            raise DriveGatewayError('Invalid share URL', kind='preview-url')
+        try:
+            token = self._get_stoken(share_id, passcode or '')
+            token_data = _as_dict(_as_dict(token).get('data'))
+            stoken = token_data.get('stoken')
+            if not stoken:
+                raise ValueError('missing share token')
+        except Exception:
+            raise DriveGatewayError('Share token unavailable', kind='preview-token') from None
+        selected_folder = folder_id if folder_id is not None else (extracted_folder or '')
+        try:
+            # Preview needs the full directory, unlike the first-page probe.
+            detail = self._adapter.get_detail(share_id, stoken, selected_folder)
+            if not isinstance(detail, dict) or detail.get('code') not in (None, 0, '0') or not _response_ok(detail):
+                raise ValueError('invalid share detail')
+            data = _as_dict(detail.get('data'))
+            raw = data.get('list')
+            if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+                raise ValueError('malformed share listing')
+        except Exception:
+            raise DriveGatewayError('Share directory unavailable', kind='preview-detail') from None
+        author = _as_dict(token_data.get('author'))
+        name = next((str(author[key]).strip() for key in ('nick_name', 'nickname', 'user_name', 'name') if author.get(key)), '')
+        return SharePreviewRead(str(share_id), str(data.get('resolved_pdir_fid') or selected_folder), name or None, tuple(raw))
+
+    def preview_destination_names(self, path: str) -> tuple[str, ...]:
+        normalized = re.sub(r'/+', '/', path.strip().rstrip('/'))
+        fid_list = self._adapter.get_fids([normalized])
+        if not isinstance(fid_list, list):
+            raise DriveGatewayError('Destination lookup failed')
+        match = next((item for item in fid_list if (item.get('file_path') or item.get('path') or item.get('filePath')) == normalized), None)
+        if match is None and fid_list:
+            match = fid_list[0]
+        if not match or not match.get('fid'):
+            return ()  # Directory does not exist yet: a valid empty difference.
+        response = self._adapter.ls_dir(str(match['fid']), max_items=2000)
+        if not isinstance(response, dict) or not _response_ok(response):
+            raise DriveGatewayError('Destination listing failed')
+        raw = _as_dict(response.get('data')).get('list')
+        if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+            raise DriveGatewayError('Malformed destination listing')
+        return tuple(_get_name(item) for item in raw if not _is_dir(item) and _get_name(item))
 
     def probe_share(self, share_url: str, *, passcode: str = "") -> ShareProbeResult:
         """探测分享链接：取 stoken → 读目录 → 用适配器分类失败原因。"""

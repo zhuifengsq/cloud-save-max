@@ -46,7 +46,7 @@ def get_last_update_id(db: Session) -> int:
     return int(getattr(item, "last_update_id", 0) or 0)
 
 
-def save_last_update_id(db: Session, update_id: int) -> TelegramBotState:
+def save_last_update_id(db: Session, update_id: int) -> Any:
     item = get_or_create_bot_state(db)
     item.last_update_id = int(update_id)
     item.last_processed_at = datetime.now()
@@ -54,7 +54,7 @@ def save_last_update_id(db: Session, update_id: int) -> TelegramBotState:
     return item
 
 
-def mark_polled(db: Session) -> TelegramBotState:
+def mark_polled(db: Session) -> Any:
     item = get_or_create_bot_state(db)
     item.last_polled_at = datetime.now()
     item.last_error = None
@@ -62,7 +62,7 @@ def mark_polled(db: Session) -> TelegramBotState:
     return item
 
 
-def mark_poll_error(db: Session, message: str) -> TelegramBotState:
+def mark_poll_error(db: Session, message: str) -> Any:
     item = get_or_create_bot_state(db)
     item.last_error = str(message or "")[:1024] or None
     item.last_polled_at = datetime.now()

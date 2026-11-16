@@ -19,6 +19,7 @@ import requests
 from app.core.runtime.token_manager import get_token_manager
 from app.core.settings import settings
 from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
+from app.infrastructure.drive.adapters.listing_protocol import ADRIVE_V3_FILE_LIST
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,6 @@ UNI_HEADERS = {
 # API 端点
 V2_USER_GET = "/v2/user/get"
 V2_FILE_LIST = "/v2/file/list"
-ADRIVE_V3_FILE_LIST = "/adrive/v3/file/list"
 V2_FILE_GET = "/v2/file/get"
 V2_FILE_CREATE = "/v2/file/create"
 V2_FILE_COPY = "/v2/file/copy"

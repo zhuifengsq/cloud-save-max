@@ -113,3 +113,33 @@ def test_scheduler_batch_sends_committed_sections_once():
     assert not calls
     batch.flush();batch.flush()
     assert calls == [('tasks','first\n\nsecond')]
+
+
+@pytest.mark.parametrize('trigger', ['http', 'sse', 'telegram', 'scheduler', 'preview'])
+def test_execute_preserves_trigger_persistence_and_notifications(trigger, monkeypatch):
+    from app.application import audit
+    from app.application.dto.task_run import TaskRunState
+    monkeypatch.setattr(audit, 'write_audit_log', lambda *a, **kw: None)
+    calls = []
+    task = TaskRunState(id=7, taskname='example', task_type='drama')
+    class Store:
+        def prepare(self, command):
+            return SimpleNamespace(task=task, prepared={})
+        def save(self, plan, result):
+            calls.append('save')
+    class Engine:
+        def execute(self, plan, policy, log, recover):
+            assert not db.in_transaction()
+            calls.append(('engine', policy.manual_run, policy.share_check_always_notify))
+            return TaskRunResult(task_id=7, status='success', message='complete')
+    class Notify:
+        def send(self, *args, **kwargs):
+            calls.append('notify')
+    with Session(create_engine('sqlite://')) as db:
+        RunTaskUseCase(db, store=Store(), engine=Engine(), notifier=Notify()).execute(
+            RunTaskCommand(7), RunPolicy.for_trigger(trigger))
+    assert calls[0] == ('engine', trigger != 'scheduler', trigger in {'http', 'sse', 'telegram'})
+    assert ('save' in calls) == (trigger != 'preview')
+    assert calls.count('notify') <= 1
+    if trigger == 'preview':
+        assert 'notify' not in calls

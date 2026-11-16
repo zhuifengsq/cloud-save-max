@@ -9,6 +9,7 @@ class ApiError(Exception):
     message: str
     http_status: int = 400
     detail: str | None = None
+    headers: dict[str, str] | None = None
 
 
 def bad_request(code: str, message: str, detail: str | None = None) -> ApiError:

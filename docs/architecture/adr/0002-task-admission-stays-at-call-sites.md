@@ -51,7 +51,7 @@ RunPolicy(trigger="http" | "sse" | "scheduler" | "telegram" | "preview",
 ~~~
 
 6 处 `reserve()` 原位保留（含 `tasks_stream.py:256` 的 `reserve(None)`），用例内部由 `RunTaskUseCase.run()`
-统一调用 `TaskExecutor`，并在 `settings.use_unified_run_use_case=False` 时回退 `_legacy_execute()` 逐字复刻旧实参。
+统一调用现役 `execute()` 分阶段用例。2026-11-16 F1 已移除仅测试调用的兼容入口及失效执行开关；需要恢复历史兼容代码时回滚 F1，不能通过配置切换生产流程。
 
 ## 后果
 

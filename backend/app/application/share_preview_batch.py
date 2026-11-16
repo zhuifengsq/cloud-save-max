@@ -18,7 +18,7 @@ from app.core.settings import settings
 from app.application.container import SessionLocal, drive_accounts_repo, system_settings_repo
 from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
 from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
-from app.application.dto.task_browse import SharePreviewBatchIn, SharePreviewBatchItemOut, SharePreviewBatchOut
+from app.application.dto.task_browse import SharePreviewBatchIn, SharePreviewBatchItemOut, SharePreviewBatchOut, ShareValidateOut
 from app.application.invalid_share_links import upsert_invalid_share_link
 from app.application.share_preview_batch_cache import (
     get_cached_preview_batch_item,
@@ -612,7 +612,7 @@ def preview_share_batch(db: Session, payload: SharePreviewBatchIn) -> tuple[Shar
             text = text[:120] + " ... " + text[-80:]
         return text
 
-    def _candidate_accounts_for_drive(drive_type: str) -> list[DriveAccount]:
+    def _candidate_accounts_for_drive(drive_type: str) -> list[Any]:
         rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
         rows.sort(
             key=lambda x: (
@@ -632,7 +632,7 @@ def preview_share_batch(db: Session, payload: SharePreviewBatchIn) -> tuple[Shar
 
     adapter_cache: dict[str, object] = {}
 
-    def _get_ready_adapter(account: DriveAccount):
+    def _get_ready_adapter(account: Any):
         name = str(getattr(account, "name", "") or "").strip()
         if not name:
             return None

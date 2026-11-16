@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from importlib.util import resolve_name
 import json
 import sys
 from collections import Counter, defaultdict
@@ -47,7 +48,7 @@ LAYER_OF_PREFIX = {
 }
 # 装配点（composition root）可以被任意层引用：它只做「把实现接到端口上」，
 # 不含业务逻辑。app.application.container 是函数访问器形式的装配入口（§10.3 决策 4）。
-COMPOSITION_ROOTS = {"app.main", "app.application.container", "app.application.factories"}
+COMPOSITION_ROOTS = {"app.main", "app.application.container"}
 
 # allowed: source layer -> layers it may import
 ALLOWED = {
@@ -114,9 +115,13 @@ def resolve(target: str, modules: set[str]) -> str:
 
 
 class ImportVisitor(ast.NodeVisitor):
-    def __init__(self) -> None:
+    def __init__(self, package: str = "") -> None:
         self.depth = 0
+        self.package = package
         self.edges: list[tuple[str, int, bool]] = []  # (module, lineno, deferred)
+        self.targets: list[tuple[str, int, bool]] = []
+        self.fingerprints: list[tuple[str, int]] = []
+        self.relative_imports: list[tuple[str, int]] = []
 
     def visit_FunctionDef(self, node):  # noqa: N802
         self.depth += 1
@@ -126,35 +131,75 @@ class ImportVisitor(ast.NodeVisitor):
     visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
 
     def visit_ImportFrom(self, node):  # noqa: N802
-        if node.module and node.module.split(".")[0] == "app":
-            self.edges.append((node.module, node.lineno, self.depth > 0))
+        module = node.module or ""
+        if node.level:
+            # Keep the historical absolute-statement count comparable, while
+            # resolving relative dependencies in the full architecture graph.
+            names = ",".join(sorted(alias.name for alias in node.names))
+            fingerprint = (f"from {'.' * node.level}{module} import {names}", node.lineno)
+            self.relative_imports.append(fingerprint)
+            if self.depth:
+                self.fingerprints.append(fingerprint)
+            target_module = resolve_name('.' * node.level + module, self.package)
+            for alias in node.names:
+                target = target_module if alias.name == '*' else f'{target_module}.{alias.name}'
+                self.targets.append((target, node.lineno, self.depth > 0))
+            return
+        if module and module.split(".")[0] == "app":
+            self.edges.append((module, node.lineno, self.depth > 0))
+            for alias in node.names:
+                self.targets.append((f"{module}.{alias.name}", node.lineno, self.depth > 0))
+            if self.depth:
+                names = ",".join(sorted(alias.name for alias in node.names))
+                self.fingerprints.append((f"from {module} import {names}", node.lineno))
         self.generic_visit(node)
 
     def visit_Import(self, node):  # noqa: N802
         for alias in node.names:
             if alias.name.split(".")[0] == "app":
                 self.edges.append((alias.name, node.lineno, self.depth > 0))
+                self.targets.append((alias.name, node.lineno, self.depth > 0))
+                if self.depth:
+                    self.fingerprints.append((f"import {alias.name}", node.lineno))
         self.generic_visit(node)
 
 
 def scan(app_root: Path):
+    return scan_details(app_root)[:4]
+
+
+def scan_details(app_root: Path):
     modules, files = collect_modules(app_root)
     edges = []          # (src, dst, lineno, deferred)
     parse_errors = []
+    precise_edges = []
+    fingerprints = []
+    relative_imports = []
     for module, path in sorted(files.items()):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError) as exc:  # pragma: no cover
+        except (SyntaxError, UnicodeDecodeError, OSError) as exc:
             parse_errors.append(f"{path}: {exc}")
             continue
-        visitor = ImportVisitor()
-        visitor.visit(tree)
+        package = module if path.name == '__init__.py' else module.rpartition('.')[0]
+        visitor = ImportVisitor(package)
+        try:
+            visitor.visit(tree)
+        except (ImportError, ValueError) as exc:
+            parse_errors.append(f"{path}: {exc}")
+            continue
         for target, lineno, deferred in visitor.edges:
             dst = resolve(target, modules)
             if dst == module:
                 continue
             edges.append((module, dst, lineno, deferred))
-    return modules, files, edges, parse_errors
+        for target, lineno, deferred in visitor.targets:
+            dst = resolve(target, modules)
+            if dst != module:
+                precise_edges.append((module, dst, lineno, deferred))
+        fingerprints.extend({"src": module, "import": target, "line": line} for target, line in visitor.fingerprints)
+        relative_imports.extend({"src": module, "import": target, "line": line} for target, line in visitor.relative_imports)
+    return modules, files, edges, parse_errors, precise_edges, fingerprints, relative_imports
 
 
 def sccs(nodes: set[str], edges: list[tuple[str, str]]) -> list[list[str]]:
@@ -213,6 +258,7 @@ def sccs(nodes: set[str], edges: list[tuple[str, str]]) -> list[list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--app-root", type=Path, default=APP_ROOT, help="package root to scan (default: backend/app)")
     parser.add_argument("--json", metavar="PATH", help="write machine-readable report")
     parser.add_argument("--fail-on", type=int, default=None, metavar="N",
                         help="exit 1 when violations exceed N")
@@ -221,14 +267,14 @@ def main() -> int:
     parser.add_argument("--top", type=int, default=12, help="how many sample edges to print per rule")
     args = parser.parse_args()
 
-    if not APP_ROOT.is_dir():
-        print(f"app package not found: {APP_ROOT}", file=sys.stderr)
+    if not args.app_root.is_dir():
+        print(f"app package not found: {args.app_root}", file=sys.stderr)
         return 2
 
-    modules, _files, edges, parse_errors = scan(APP_ROOT)
+    modules, _files, edges, parse_errors, precise_edges, fingerprints, relative_imports = scan_details(args.app_root)
 
     violations = []
-    for src, dst, lineno, deferred in edges:
+    for src, dst, lineno, deferred in precise_edges:
         src_layer, dst_layer = layer_of(src), layer_of(dst)
         if src_layer == "composition-root":
             continue
@@ -248,7 +294,7 @@ def main() -> int:
 
     module_edges = {
         (s, d)
-        for s, d, _l, _df in edges
+        for s, d, _l, _df in precise_edges
         if layer_of(s) != "composition-root" and layer_of(d) != "composition-root"
     }
     cycles = sccs(modules, sorted(module_edges))
@@ -256,10 +302,13 @@ def main() -> int:
 
     by_pair = Counter((v["src_layer"], v["dst_layer"]) for v in violations)
     report = {
-        "app_root": str(APP_ROOT),
+        "app_root": str(args.app_root),
         "modules": len(modules),
         "internal_edges": len(edges),
         "deferred_imports": len(deferred_edges),
+        "deferred_edges": [{"src": s, "dst": d, "line": line} for s, d, line, _ in deferred_edges],
+        "deferred_import_fingerprints": fingerprints,
+        "relative_import_fingerprints": relative_imports,
         "violations": len(violations),
         "violations_by_layer_pair": {f"{a}->{b}": n for (a, b), n in by_pair.most_common()},
         "cycles": {"count": len(cycles), "largest": max((len(c) for c in cycles), default=0),
@@ -304,19 +353,71 @@ def main() -> int:
         Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\njson report -> {args.json}")
 
+    if parse_errors:
+        return 2
+
+    stored = None
+    if args.baseline and not args.update_baseline:
+        try:
+            stored = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+            for key in ("violations", "deferred_imports", "cycles"):
+                if type(stored[key]) is not int or stored[key] < 0:
+                    raise ValueError(f"{key} must be a nonnegative integer")
+            for key in ("approved_deferred_edges", "approved_deferred_imports", "approved_relative_imports"):
+                if key in stored:
+                    if not isinstance(stored[key], list) or not all(isinstance(edge, str) for edge in stored[key]):
+                        raise ValueError(f"{key} must be a list of strings")
+        except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+            print(f"invalid baseline: {exc}", file=sys.stderr)
+            return 2
+
     if args.update_baseline:
+        if violations or cycles:
+            print("baseline cannot approve layering violations or cycles", file=sys.stderr)
+            return 1
         budget = {k: report[k] for k in ("violations", "deferred_imports")}
         budget["cycles"] = report["cycles"]["count"]
+        budget["approved_deferred_edges"] = sorted(f"{s} -> {d}" for s, d, _, _ in deferred_edges)
+        budget["approved_deferred_imports"] = sorted(f"{item['src']}: {item['import']}" for item in fingerprints)
+        budget["approved_relative_imports"] = sorted(f"{item['src']}: {item['import']}" for item in relative_imports)
         target = Path(args.baseline or ".layering-baseline.json")
         target.write_text(json.dumps(budget, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"baseline budget -> {target}")
 
+    if stored is not None:
+        actual = {"violations": len(violations), "deferred_imports": len(deferred_edges), "cycles": len(cycles)}
+        exceeded = [key for key, value in actual.items() if value > stored[key]]
+        # Baselines may track deferred composition imports, never legalize layering defects.
+        if violations or cycles:
+            exceeded.append("architecture")
+        if args.fail_on is not None and len(violations) > args.fail_on:
+            exceeded.append("fail-on")
+        if "approved_deferred_edges" in stored:
+            approved = Counter(stored["approved_deferred_edges"])
+            unapproved = Counter(f"{s} -> {d}" for s, d, _, _ in deferred_edges) - approved
+            if unapproved:
+                exceeded.append("unapproved deferred edges")
+                for edge in sorted(unapproved):
+                    print(f"unapproved: {edge}")
+        if "approved_deferred_imports" in stored:
+            approved = Counter(stored["approved_deferred_imports"])
+            unapproved = Counter(f"{item['src']}: {item['import']}" for item in fingerprints) - approved
+            if unapproved:
+                exceeded.append("unapproved deferred imports")
+                for target in sorted(unapproved):
+                    print(f"unapproved: {target}")
+        if "approved_relative_imports" in stored:
+            approved = Counter(stored["approved_relative_imports"])
+            unapproved = Counter(f"{item['src']}: {item['import']}" for item in relative_imports) - approved
+            if unapproved:
+                exceeded.append("unapproved relative imports")
+                for target in sorted(unapproved):
+                    print(f"unapproved relative: {target}")
+        if exceeded:
+            print("budget exceeded: " + ", ".join(exceeded))
+        return 1 if exceeded else 0
     if args.fail_on is not None:
-        budget = args.fail_on
-        if args.baseline and Path(args.baseline).exists():
-            stored = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
-            budget = int(stored.get("violations", budget))
-        return 1 if report["violations"] > budget else 0
+        return 1 if len(violations) > args.fail_on or cycles else 0
     return 0
 
 

@@ -505,7 +505,7 @@ class TaskLeadInUseCase:
     def _confirm(
         self,
         db: Session,
-        task: Task,
+        task: Any,
         preview_token: str,
         *,
         actor_user_id: int | None = None,

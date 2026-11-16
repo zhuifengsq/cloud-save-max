@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 
 from app.core.settings import settings
-from app.application.notifications import legacy_notify
+from app.application.notifications import sender
 from app.application.notifications.queue import NotifyQueue
 
 
@@ -54,7 +54,7 @@ def test_send_async_falls_back_to_sync_when_flag_off(monkeypatch):
         return []
 
     monkeypatch.setattr(settings, "use_notify_queue", False)
-    monkeypatch.setattr(legacy_notify, "send", fake_send)
+    monkeypatch.setattr(sender, "send", fake_send)
 
-    assert legacy_notify.send_async("title", "content") is True
+    assert sender.send_async("title", "content") is True
     assert calls and calls[0][0] == ("title", "content")

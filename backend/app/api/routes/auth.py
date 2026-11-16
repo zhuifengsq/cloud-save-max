@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import CurrentUser, get_current_user, load_user_roles_permissions
 from app.core.settings import settings
 from app.application.container import commit, get_db
-from app.schemas.auth import LoginOut, MeOut, TokenOut
+from app.schemas.auth import LoginOut, LoginThrottleError, MeOut, TokenOut
 from app.application import audit
 from app.application.auth import authenticate_user, clear_refresh_cookie, refresh_access_token, revoke_refresh_token, issue_tokens
 
@@ -13,38 +13,42 @@ from app.application.auth import authenticate_user, clear_refresh_cookie, refres
 router = APIRouter()
 
 
-@router.post("/login", response_model=LoginOut)
+@router.post("/login", response_model=LoginOut, responses={429: {
+    'model': LoginThrottleError,
+    'description': '登录准入拒绝；Retry-After 表示等待秒数',
+    'headers': {'Retry-After': {'schema': {'type': 'integer', 'minimum': 1}}},
+}})
 def login(
     request: Request,
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    user = authenticate_user(db, form_data.username, form_data.password)
-    roles, permissions = load_user_roles_permissions(db, user.id)
-    access_token = issue_tokens(db, user=user, permissions=permissions, request=request, response=response)
+    with authenticate_user(db, form_data.username, form_data.password, request=request) as user:
+        roles, permissions = load_user_roles_permissions(db, user.id)
+        access_token = issue_tokens(db, user=user, permissions=permissions, request=request, response=response)
 
-    audit.write_audit_log(
-        db,
-        actor_user_id=user.id,
-        action="auth.login",
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        success=True,
-    )
-    commit(db)
+        audit.write_audit_log(
+            db,
+            actor_user_id=user.id,
+            action="auth.login",
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+        )
+        commit(db)
 
-    return LoginOut(
-        access_token=access_token,
-        expires_in=settings.access_token_expires_seconds,
-        user=MeOut(
-            id=user.id,
-            username=user.username,
-            email=user.email,
-            roles=roles,
-            permissions=permissions,
-        ),
-    )
+        return LoginOut(
+            access_token=access_token,
+            expires_in=settings.access_token_expires_seconds,
+            user=MeOut(
+                id=user.id,
+                username=user.username,
+                email=user.email,
+                roles=roles,
+                permissions=permissions,
+            ),
+        )
 
 
 @router.post("/refresh", response_model=TokenOut)

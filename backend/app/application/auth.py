@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any
+from contextlib import contextmanager
+import logging
+from typing import Any, Iterator
 
 from fastapi import Request, Response
 from sqlalchemy.orm import Session
 
-from app.application.container import refresh_tokens_repo, users_repo
-from app.core.errors import bad_request, unauthorized
+from app.application.container import commit, refresh_tokens_repo, users_repo
+from app.application import audit
+from app.application.login_throttle import LoginThrottle, LoginThrottled
+from app.core.errors import ApiError, bad_request, unauthorized
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
@@ -16,6 +20,15 @@ from app.core.security import (
 )
 from app.core.settings import settings
 from app.application.auth_context import load_user_roles_permissions
+
+logger = logging.getLogger(__name__)
+login_throttle = LoginThrottle(
+    pair_limit=settings.login_throttle_pair_limit,
+    ip_limit=settings.login_throttle_ip_limit,
+    window=settings.login_throttle_window_seconds,
+    cooldown=settings.login_throttle_cooldown_seconds,
+    capacity=settings.login_throttle_capacity,
+)
 
 
 def _utcnow() -> datetime:
@@ -59,13 +72,26 @@ def clear_refresh_cookie(response: Response) -> None:
     )
 
 
-def authenticate_user(db: Session, username: str, password: str) -> Any:
-    user = users_repo().get_user_by_username(db, username)
-    if user is None or not user.is_active:
-        raise unauthorized("AUTH_BAD_CREDENTIALS", "用户名或密码错误")
-    if not verify_password(password, user.hashed_password):
-        raise unauthorized("AUTH_BAD_CREDENTIALS", "用户名或密码错误")
-    return user
+@contextmanager
+def authenticate_user(db: Session, username: str, password: str, *, request: Request | None = None) -> Iterator[Any]:
+    """Hold admission until token issuance and the successful login commit complete."""
+    ip = _client_ip(request) if request is not None else None
+    try:
+        with login_throttle.attempt(ip or 'unknown', username) as attempt:
+            user = users_repo().get_user_by_username(db, username)
+            if user is None or not user.is_active or not verify_password(password, user.hashed_password):
+                attempt.failed = True
+                try:
+                    audit.write_audit_log(db, actor_user_id=None, action='auth.login', ip=ip, success=False)
+                    commit(db)
+                except Exception:
+                    logger.warning('Login failure audit could not be persisted')
+                    db.rollback()
+                raise unauthorized("AUTH_BAD_CREDENTIALS", "用户名或密码错误")
+            yield user
+    except LoginThrottled as exc:
+        raise ApiError(code='AUTH_LOGIN_THROTTLED', message='登录尝试过于频繁，请稍后重试',
+                       http_status=429, headers={'Retry-After': str(exc.retry_after)}) from None
 
 
 def issue_tokens(db: Session, *, user: Any, permissions: list[str], request: Request, response: Response) -> str:

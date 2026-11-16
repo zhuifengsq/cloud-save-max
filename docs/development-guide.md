@@ -8,6 +8,14 @@
 
 **现状与目标分开记录**：分层门禁检查导入方向，事务测试检查提交/回滚，golden 检查响应契约；三者通过仍不能证明业务职责充分解耦、故障可恢复或真实网盘可用。
 
+2026-11-16 质量改进 A/B/D：登录接入有界进程内失败防护，成功事务提交后清组合计数；代理信任与错误契约见 [登录保护](backend-login-protection.md)。首次初始化通过数据库唯一占位竞争，全流程原子提交，保留键禁止通用设置覆盖，见 [B 验收](backend-quality-B-report.md)。开发依赖固定 Ruff/mypy，现有 backend CI 追加未定义名称与领域端口 strict 检查，见 [D 验收](backend-quality-D-report.md)。这些是质量任务书的新批次，与下表旧改造任务书 A～D 分开记录；总体验收见 [质量改进报告](backend-quality-report.md)。
+
+2026-11-16 质量改进 C：分层门禁分别检查违规、延迟导入、循环预算，解析失败或基线无效直接失败；违规与循环保持零。现有 90→116 条延迟导入已按源码逐项复核，来源、删除与新增清单见 [延迟导入复核](backend-layering-deferred-audit.md)。基线另记录来源/目标及重复次数，新增未登记依赖即使总数不增也会失败；禁止用自动刷新基线同时批准业务改动。三项重复灰度配置仅去重，字段、默认值及环境变量语义保持不变；失效执行开关的删除另属 F1。
+
+延迟导入另校验规范化语句指纹（包含 `from` 目标和全部导入名称，忽略本地 `as` 改名及名称顺序），防止同包替换子模块/新增名称绕过计数。E/F及适配器解环后，绝对与相对引用均进入精确分层/循环图，已消除原5模块循环。绝对语句预算由116降为110；121条完整延迟指纹、11条相对引用独立批准，新增未批准依赖失败。来源变化与验收见质量改进报告；不提高违规或循环预算。
+
+健康检查优先读取 `BUILD_TAG` / `BUILD_SHA`；缺失字段的 git 回退仅首次执行并缓存，包括 git 不可用的结果，保留每次命令 5 秒超时。数据库 readiness 每次执行 `SELECT 1`，失败仍返回 503；liveness 不依赖数据库。仍保留现有 PR/main 测试、分层及迁移工作流。本地 Windows 测试使用独立 `--basetemp`，不清理其他进程或用户的临时目录。
+
 | 工作包 | 当前实现 | 验证与限制 |
 | --- | --- | --- |
 | A：错误语义与 CI | 搜索来源结果分类、readiness/liveness、完整后端测试命令已落地 | 本地故障注入通过；远端 CI 未触发，不声称远端通过 |
@@ -95,7 +103,7 @@ $env:DATABASE_URL = 'sqlite://'
 | platform（平台/横切） | `app/core`（settings / errors / deps / runtime / logging / metrics） | platform |
 | tooling（工具） | `app/scripts` | 全层 |
 
-**装配点例外**：`app/main.py`、`app/application/container.py`、`app/application/factories.py` 在分层扫描中作为 composition root 豁免。这是工具规则，业务调用方通过 container/factories 获取依赖，不因此去 import 会启动应用装配的 `app.main`，也不在装配点放业务流程。
+**装配点例外**：`app/main.py`、`app/application/container.py` 在分层扫描中作为 composition root 豁免。这是工具规则，业务调用方通过 container 获取依赖，不因此去 import 会启动应用装配的 `app.main`，也不在装配点放业务流程。
 
 **已登记的 documented exception**：`app/application/tmdb_cache.py` → `app.infrastructure.persistence`（4 条，见 [ADR 0001](architecture/adr/0001-tmdb-cache-writer-isolation.md)）。新增例外必须：写 ADR → 改 `scripts/check_layering.py` 的 `DOCUMENTED_EXCEPTIONS` → 在 PR 说明，三者缺一不可。
 
@@ -285,7 +293,7 @@ def get_task_tags(db: Session = Depends(get_db)):
 | 同一 key 只允许跑一次（令牌刷新、缓存首次回填） | `SingleFlight(maxsize=256).run(key, factory)` | `app/core/runtime/single_flight.py` |
 | 账号等短时快照 | `TtlCache(maxsize, ttl_seconds)` + 写后 `invalidate_drive_accounts()` | `app/core/runtime/ttl_cache.py`、`cache_version.py` |
 | 对外请求限速（按网盘/账号） | `KeyedRateLimiter.wait(key, min_interval, max_interval)` | `app/core/runtime/rate_limiter.py` |
-| 通知发送（不阻塞请求） | `send_async(...)` → 队列单消费者 | `app/application/notifications/legacy_notify.py:828` + 队列 `app/application/notifications/queue.py` |
+| 通知发送（不阻塞请求） | `send_async(...)` → 队列单消费者 | `app/application/notifications/sender.py` + 队列 `app/application/notifications/queue.py` |
 | 长任务执行 | `TaskAdmission.reserve()` + `start_worker()`（daemon 线程） | `app/infrastructure/scheduling/task_admission.py` |
 | 只读路径占着事务 | `end_read_tx(db)` 尽早结束 | `app/core/runtime/tx.py` |
 
@@ -417,7 +425,7 @@ golden 的覆盖范围由 `test_frontend_contract_golden.py` 和实际 golden �
 ## 8. 配置、密钥与灰度
 
 - 新配置项加到 `app/core/settings.py` 的 `Settings`（pydantic-settings，环境变量名 = 字段名大写），给默认值 + 一行注释说明生效范围。
-- 灰度开关统一命名 `use_xxx`，默认 `True`；`False` 时必须能回退到旧路径（参考 `use_unified_run_use_case` / `use_notify_queue` / `use_keyed_locks`）。
+- 灰度开关统一命名 `use_xxx`，默认 `True`；`False` 时必须能回退到旧路径（参考 `use_notify_queue` / `use_keyed_locks`）。
   新增开关要三处登记：`settings.py`、方案文档 §10.4、至少一个回归测试（覆盖两个分支）。
 - 密钥只放 `backend/data/secrets.json`（首次启动自动生成）或环境变量；**不写进代码、不提交**。
 - 数据库地址在 `settings.py` 里硬编码为 `sqlite:///./data/app.db`，仅当 `XXM_TESTING=1` 时允许 `DATABASE_URL` 覆盖 —— 测试/脚本必须显式设置该变量，否则会写到真实库。
@@ -507,7 +515,7 @@ if ($LASTEXITCODE -ne 0) { throw '前端构建失败' }
   影响面：<端点/模型/迁移/契约>
   验证：pytest 结果、门禁结果、手工 e2e（如适用）
   ```
-- 回滚优先级：① 关灰度开关（`use_xxx=False`）→ ② revert 提交 → ③ 用备份恢复库（`scripts/backup_db.py` 产物）。
+- 回滚优先级：① 对仍有效的灰度能力关闭对应开关 → ② revert 对应提交 → ③ 用备份恢复库（`scripts/backup_db.py` 产物）。F1 已移除仅测试使用的执行兼容入口及其失效开关，生产执行没有开关可切回旧流程；恢复该入口必须回滚 F1。
   不要手工改生产库结构。
 
 ---
@@ -616,8 +624,8 @@ slot = task_admission.reserve(task_id)  # HTTP/SSE 在建流/启动 worker 前�
 def work():
     with db_session() as db:           # 会话在 worker 线程内创建
         task = get_task(db, task_id)   # 只传 ID 入线程，在本线程加载 ORM
-        RunTaskUseCase(db).run(task, RunPolicy.for_trigger("scheduler"))
-        commit(db)                    # 存量后台提交点，迁移时同步归属测试
+        RunTaskUseCase(db).execute(RunTaskCommand(task.id), RunPolicy.for_trigger("scheduler"))
+        # execute 拥有提交与通知，入口不再重复 commit
 
 slot.start_worker(work)
 ```

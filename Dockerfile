@@ -52,7 +52,7 @@ RUN printf '%s\n' \
     '' \
     '[program:uvicorn]' \
     'directory=/app/backend' \
-    'command=python -m uvicorn app.main:app --host 0.0.0.0 --port 8000' \
+    'command=python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1' \
     'autostart=true' \
     'autorestart=true' \
     'stdout_logfile=/dev/fd/1' \

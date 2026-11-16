@@ -6,6 +6,11 @@ No partial entries escape this module when a page is missing or ambiguous.
 from typing import Any
 import time
 
+from app.infrastructure.drive.adapters.listing_protocol import (
+    ADRIVE_V3_FILE_LIST, XUNLEI_API_BASE as API_BASE, FILE_LIST_FILTERS,
+    guangya_success as _is_success,
+)
+
 
 def failure(message):
     return {"code": 1, "message": f"Complete directory listing failed: {message}", "data": {"list": []}}
@@ -220,7 +225,6 @@ def _enumerate(a, parent):
             terminal = next_cursor in (-1, "-1")
             total = data.get("Total")
         elif kind == "aliyun":
-            from .aliyun_adapter import ADRIVE_V3_FILE_LIST
             body = {"drive_id": a._token.default_drive_id, "parent_file_id": str(parent) if parent and str(parent) != "0" else "root", "limit": 100, "marker": cursor, "order_by": "name", "order_direction": "ASC"}
             raw = a._check_response(a._request("POST", ADRIVE_V3_FILE_LIST, body=body))
             status(raw)
@@ -232,7 +236,6 @@ def _enumerate(a, parent):
             next_cursor = raw["next_marker"]
             terminal = next_cursor == ""
         elif kind == "xunlei":
-            from .xunlei_adapter import API_BASE, FILE_LIST_FILTERS
             params = {"filters": FILE_LIST_FILTERS, "with_audit": "true", "thumbnail_size": "SIZE_SMALL", "limit": 100}
             if parent and str(parent) != "0":
                 params["parent_id"] = str(parent)
@@ -284,7 +287,6 @@ def _enumerate(a, parent):
             total = integer(data.get("count"))
             terminal = len(c.items) + len(batch) >= total
         elif kind == "guangya":
-            from .guangya_adapter import _is_success
             raw = a._client.fs_files(parent_id=a._normalize_root_parent_id(parent), page=index, page_size=50)
             status(raw, allow_http_code=True)
             if not _is_success(raw):

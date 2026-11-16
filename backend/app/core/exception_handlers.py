@@ -19,6 +19,7 @@ def api_error_handler(_: Request, exc: ApiError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.http_status,
         content={"code": exc.code, "message": exc.message, "detail": exc.detail},
+        headers=exc.headers,
     )
 
 

@@ -32,6 +32,8 @@ docs/追剧任务引流文件*.md
 backend/data/sync/*
 .tmp/
 backend/pytest-of-*/
+backend/pip-metadata-*/
+backend/pip-unpack-*/
 .dbg
 .github_token
 .pnpm-store/

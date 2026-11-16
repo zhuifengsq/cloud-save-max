@@ -15,6 +15,7 @@ import requests
 
 from app.core.runtime.token_manager import get_token_manager
 from app.core.settings import settings
+from app.infrastructure.drive.adapters.listing_protocol import guangya_success as _is_success, guangya_message as _extract_message
 from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
 from app.infrastructure.drive.adapters.drive_auth import DriveAuthRequired
 
@@ -36,15 +37,6 @@ def _deep_get(payload: Any, *keys: str) -> Any:
         if key in payload and payload.get(key) is not None:
             return payload.get(key)
     return None
-
-
-def _extract_message(payload: Any, default: str = "") -> str:
-    if isinstance(payload, dict):
-        for key in ("message", "msg", "errorMessage", "error_message", "detail"):
-            value = payload.get(key)
-            if value is not None and str(value).strip():
-                return str(value).strip()
-    return default
 
 
 def _extract_data(payload: Any) -> Any:
@@ -87,30 +79,6 @@ def _to_int(value: Any, default: int = 0) -> int:
 
 def _clean_text(value: Any) -> str:
     return str(value or "").strip()
-
-
-def _is_success(payload: Any) -> bool:
-    if not isinstance(payload, dict):
-        return bool(payload)
-    if payload.get("success") is True:
-        return True
-    if payload.get("ok") is True:
-        return True
-    for key in ("msg", "message"):
-        value = payload.get(key)
-        if str(value or "").strip().lower() == "success":
-            return True
-    for key in ("code", "status", "result"):
-        if key not in payload:
-            continue
-        value = payload.get(key)
-        if isinstance(value, (int, float)) and int(value) in (0, 200):
-            return True
-        if str(value).strip().lower() in {"0", "200", "ok", "success"}:
-            return True
-    if "data" in payload and payload.get("data") is not None and not _extract_message(payload):
-        return True
-    return False
 
 
 def _has_explicit_failure(payload: Any) -> bool:

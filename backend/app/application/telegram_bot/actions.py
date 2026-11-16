@@ -48,7 +48,7 @@ from app.application.magic_regex import list_enabled_effective_rules_for_picker
 from app.application.media_discovery import tmdb_detail, tmdb_search
 from app.application.notifications.sender import send_runtime, send_test
 from app.application.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_share_check_section
-from app.application.notifications import legacy_notify
+from app.application.notifications import sender
 from app.application.notifications.settings import (
     get_or_create_notification_setting,
     get_runtime_notification_config,
@@ -1009,8 +1009,8 @@ class TelegramBotActions:
             return {
                 "key": key,
                 "label": "通知配置",
-                "values": {**dict(legacy_notify.DEFAULT_PUSH_CONFIG), **current},
-                "default_values": dict(legacy_notify.DEFAULT_PUSH_CONFIG),
+                "values": {**dict(sender.DEFAULT_PUSH_CONFIG), **current},
+                "default_values": dict(sender.DEFAULT_PUSH_CONFIG),
                 "updated_at": _dump_dt(getattr(item, "updated_at", None)),
             }
         if key == "task_scheduler":
@@ -1062,4 +1062,4 @@ class TelegramBotActions:
         item = get_or_create_notification_setting(self.db)
         current = get_runtime_notification_config(self.db)
         saved = _loads(getattr(item, "config_json", None))
-        return sorted({*legacy_notify.DEFAULT_PUSH_CONFIG.keys(), *saved.keys(), *current.keys()})
+        return sorted({*sender.DEFAULT_PUSH_CONFIG.keys(), *saved.keys(), *current.keys()})

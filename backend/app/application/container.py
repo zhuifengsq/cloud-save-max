@@ -11,6 +11,21 @@ from contextlib import contextmanager
 
 from types import ModuleType
 from typing import Any
+from app.domain.ports.share_preview import PreviewRenamerPort, SharePreviewReaderPort
+from sqlalchemy.orm import Session
+
+
+def share_preview_reader(db: Session, shareurl: str, account_name: str | None) -> SharePreviewReaderPort:
+    from app.infrastructure.drive.share_preview_reader import prepare_share_preview_reader
+    return prepare_share_preview_reader(db, shareurl, account_name)
+
+
+def share_preview_renamer(magic_rules: dict[str, dict[str, str]], taskname: str) -> PreviewRenamerPort:
+    return magic_rename_cls()(magic_regex=magic_rules, magic_variable={'{TASKNAME}': taskname})
+
+
+def share_preview_min_bytes(value: str) -> int | None:
+    return drama_parse_size()(value)
 
 
 _SYSTEM_CLOCK: Any = None
@@ -272,12 +287,6 @@ def task_admission_service():
     from app.infrastructure.scheduling.task_admission import task_admission
 
     return task_admission
-
-
-def task_executor_cls():
-    from app.infrastructure.execution.task_executor import TaskExecutor
-
-    return TaskExecutor
 
 
 def execution_log_cls():
