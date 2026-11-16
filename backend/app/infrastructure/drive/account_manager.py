@@ -116,6 +116,15 @@ class DatabaseAccountManager:
         instance.manager.load_accounts(payload, no_login=no_login)
         return instance
 
+    def close(self) -> None:
+        self.manager.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
     def get_adapter_for_task(self, task: dict, *, allow_inactive: bool = False):
         return self.manager.get_adapter_for_task(task, allow_inactive=allow_inactive)
 

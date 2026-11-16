@@ -5,29 +5,53 @@
   deferred_imports（可见、可预算），不会把业务模块标成 application→infrastructure 违规。
 - 单进程假设：这里返回的是无状态模块/单例，不做跨进程共享。
 """
+
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 
-from types import ModuleType
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from threading import Lock
+from app.application import repository_ports as repos
+
+if TYPE_CHECKING:
+    from app.infrastructure.http.tmdb_client import TMDBClient
+    from app.application.use_cases.drive_account_auth import DriveAccountAuthUseCase
+    from app.application.use_cases.run_task import RunTaskUseCase
 from app.application.login_failure_audit import LoginFailureAudit
 from app.domain.ports.share_preview import PreviewRenamerPort, SharePreviewReaderPort
 from app.domain.ports.task import TaskRunStorePort, TaskExecutionEnginePort
 from app.domain.ports.notify import NotifierPort
 from app.core.drive_auth import DriveAuthRequired
-from app.application.drive_account_types import AccountAdapterFactory, AccountRegistry, AccountRepository
+from app.application.drive_account_types import (
+    AccountAdapterFactory,
+    AccountRegistry,
+    AccountRepository,
+)
+from app.application.tmdb_types import (
+    TMDBCacheStorePort,
+    TMDBDetailFetcherPort,
+    TMDBRefreshBackgroundPort,
+)
 from sqlalchemy.orm import Session
 
 
-def share_preview_reader(db: Session, shareurl: str, account_name: str | None) -> SharePreviewReaderPort:
-    from app.infrastructure.drive.share_preview_reader import prepare_share_preview_reader
+def share_preview_reader(
+    db: Session, shareurl: str, account_name: str | None
+) -> SharePreviewReaderPort:
+    from app.infrastructure.drive.share_preview_reader import (
+        prepare_share_preview_reader,
+    )
+
     return prepare_share_preview_reader(db, shareurl, account_name)
 
 
-def share_preview_renamer(magic_rules: dict[str, dict[str, str]], taskname: str) -> PreviewRenamerPort:
-    return magic_rename_cls()(magic_regex=magic_rules, magic_variable={'{TASKNAME}': taskname})
+def share_preview_renamer(
+    magic_rules: dict[str, dict[str, str]], taskname: str
+) -> PreviewRenamerPort:
+    return magic_rename_cls()(
+        magic_regex=magic_rules, magic_variable={"{TASKNAME}": taskname}
+    )
 
 
 def share_preview_min_bytes(value: str) -> int | None:
@@ -43,13 +67,17 @@ def login_failure_audit_service() -> LoginFailureAudit:
     global _LOGIN_FAILURE_AUDIT
     with _LOGIN_FAILURE_AUDIT_LOCK:
         if _LOGIN_FAILURE_AUDIT is None or _LOGIN_FAILURE_AUDIT.closed:
-            _LOGIN_FAILURE_AUDIT = LoginFailureAudit(writer=write_login_failure_audit_batch)
+            _LOGIN_FAILURE_AUDIT = LoginFailureAudit(
+                writer=write_login_failure_audit_batch
+            )
         return _LOGIN_FAILURE_AUDIT
 
 
 def write_login_failure_audit_batch(batch: list[tuple[str, int]]) -> None:
     from app.infrastructure.persistence.login_failure_audit import write_batch
+
     write_batch(batch)
+
 
 # ---------------------------------------------------------------------------
 # 请求作用域数据库依赖的装配出口（composition root re-export）
@@ -64,98 +92,102 @@ from app.infrastructure.persistence.session import (  # noqa: E402
 )
 
 
-def audit_repo() -> ModuleType:
+def audit_repo() -> repos.AuditRepository:
     """审计日志仓储（audit_logs / audit_log_scheduler / write_audit_log）。"""
     from app.infrastructure.persistence.repositories import audit
 
     return audit
 
 
-def permissions_repo() -> ModuleType:
+def permissions_repo() -> repos.PermissionsRepository:
     """权限字典仓储。"""
     from app.infrastructure.persistence.repositories import permissions
 
     return permissions
 
 
-def magic_regex_repo() -> ModuleType:
+def magic_regex_repo() -> repos.MagicRegexRepository:
     """魔术正则规则仓储。"""
     from app.infrastructure.persistence.repositories import magic_regex
 
     return magic_regex
 
 
-def notification_settings_repo() -> ModuleType:
+def notification_settings_repo() -> repos.NotificationSettingsRepository:
     """通知设置仓储。"""
     from app.infrastructure.persistence.repositories import notification_settings
 
     return notification_settings
 
 
-def system_settings_repo() -> ModuleType:
+def system_settings_repo() -> repos.SystemSettingsRepository:
     """系统设置键值仓储（system_settings 表）。"""
     from app.infrastructure.persistence.repositories import system_settings
 
     return system_settings
 
 
-def task_templates_repo() -> ModuleType:
+def task_templates_repo() -> repos.TaskTemplatesRepository:
     """任务模板仓储（task_templates 表）。"""
     from app.infrastructure.persistence.repositories import task_templates
 
     return task_templates
 
 
-def task_lead_in_repo() -> ModuleType:
+def task_lead_in_repo() -> repos.TaskLeadInRepository:
     """追剧引流记录仓储（task_lead_in 表）。"""
     from app.infrastructure.persistence.repositories import task_lead_in
 
     return task_lead_in
 
 
-def task_executions_repo() -> ModuleType:
+def task_executions_repo() -> repos.TaskExecutionsRepository:
     """任务执行记录仓储。"""
     from app.infrastructure.persistence.repositories import task_executions
 
     return task_executions
 
 
-def task_scheduler_setting_repo() -> ModuleType:
+def task_scheduler_setting_repo() -> repos.TaskSchedulerSettingRepository:
     """任务调度设置仓储。"""
     from app.infrastructure.persistence.repositories import task_scheduler_setting
 
     return task_scheduler_setting
 
 
-def tmdb_cache_scheduler_setting_repo() -> ModuleType:
+def tmdb_cache_scheduler_setting_repo() -> repos.TmdbCacheSchedulerSettingRepository:
     """TMDB 缓存调度设置仓储。"""
     from app.infrastructure.persistence.repositories import tmdb_cache_scheduler_setting
 
     return tmdb_cache_scheduler_setting
 
 
-def resource_search_sources_repo() -> ModuleType:
+def resource_search_sources_repo() -> repos.ResourceSearchSourcesRepository:
     """搜索源仓储（内置 API 源与搜索插件共用）。"""
     from app.infrastructure.persistence.repositories import resource_search_sources
 
     return resource_search_sources
 
 
-def invalid_share_links_repo() -> ModuleType:
+def invalid_share_links_repo() -> repos.InvalidShareLinksRepository:
     """失效分享链接仓储。"""
     from app.infrastructure.persistence.repositories import invalid_share_links
 
     return invalid_share_links
 
 
-def drive_account_probe_scheduler_setting_repo() -> ModuleType:
+def drive_account_probe_scheduler_setting_repo() -> (
+    repos.DriveAccountProbeSchedulerSettingRepository
+):
     """网盘账号探测调度设置仓储。"""
-    from app.infrastructure.persistence.repositories import drive_account_probe_scheduler_setting
+    from app.infrastructure.persistence.repositories import (
+        drive_account_probe_scheduler_setting,
+    )
 
     return drive_account_probe_scheduler_setting
 
 
-def tmdb_settings_repo() -> ModuleType:
+def tmdb_settings_repo() -> repos.TmdbSettingsRepository:
     """TMDB 设置仓储。"""
     from app.infrastructure.persistence.repositories import tmdb_settings
 
@@ -169,42 +201,58 @@ def drive_accounts_repo() -> AccountRepository:
     return drive_accounts
 
 
-def tasks_repo() -> ModuleType:
+def adapter_scope() -> AbstractContextManager[None]:
+    from app.infrastructure.drive.lifecycle import adapter_scope as scope
+
+    return scope()
+
+
+def drive_account_auth_use_case() -> DriveAccountAuthUseCase:
+    from app.application.use_cases.drive_account_auth import DriveAccountAuthUseCase
+    from app.infrastructure.drive.account_auth import AliyunQrcodeAuthProvider
+    from app.application.drive_account_auth_gateway import AccountAuthenticationGateway
+
+    return DriveAccountAuthUseCase(
+        provider=AliyunQrcodeAuthProvider(), accounts=AccountAuthenticationGateway()
+    )
+
+
+def tasks_repo() -> repos.TasksRepository:
     """任务仓储。"""
     from app.infrastructure.persistence.repositories import tasks
 
     return tasks
 
 
-def roles_repo() -> ModuleType:
+def roles_repo() -> repos.RolesRepository:
     """角色仓储。"""
     from app.infrastructure.persistence.repositories import roles
 
     return roles
 
 
-def users_repo() -> ModuleType:
+def users_repo() -> repos.UsersRepository:
     """用户仓储。"""
     from app.infrastructure.persistence.repositories import users
 
     return users
 
 
-def refresh_tokens_repo() -> ModuleType:
+def refresh_tokens_repo() -> repos.RefreshTokensRepository:
     """刷新令牌仓储。"""
     from app.infrastructure.persistence.repositories import refresh_tokens
 
     return refresh_tokens
 
 
-def telegram_bot_session_repo() -> ModuleType:
+def telegram_bot_session_repo() -> repos.TelegramBotSessionRepository:
     """Telegram bot 状态与会话仓储。"""
     from app.infrastructure.persistence.repositories import telegram_bot_session
 
     return telegram_bot_session
 
 
-def share_preview_batch_cache_repo() -> ModuleType:
+def share_preview_batch_cache_repo() -> repos.SharePreviewBatchCacheRepository:
     """分享预览批量缓存仓储。"""
     from app.infrastructure.persistence.repositories import share_preview_batch_cache
 
@@ -236,11 +284,37 @@ def db_session():
         session.close()
 
 
-def tmdb_media_cache_repo() -> ModuleType:
+def tmdb_media_cache_repo() -> repos.TmdbMediaCacheRepository:
     """TMDB 媒体缓存仓储。"""
     from app.infrastructure.persistence.repositories import tmdb_media_cache
 
     return tmdb_media_cache
+
+
+def tmdb_cache_store() -> TMDBCacheStorePort:
+    from app.infrastructure.persistence.tmdb_cache import TMDBCacheStore
+
+    return TMDBCacheStore()
+
+
+def tmdb_detail_fetcher() -> TMDBDetailFetcherPort:
+    from app.infrastructure.http.tmdb_detail import TMDBDetailFetcher
+
+    return TMDBDetailFetcher()
+
+
+_TMDB_BACKGROUND: TMDBRefreshBackgroundPort | None = None
+_TMDB_BACKGROUND_LOCK = Lock()
+
+
+def tmdb_refresh_background() -> TMDBRefreshBackgroundPort:
+    global _TMDB_BACKGROUND
+    from app.infrastructure.background.tmdb_refresh import TMDBRefreshBackground
+
+    with _TMDB_BACKGROUND_LOCK:
+        if _TMDB_BACKGROUND is None:
+            _TMDB_BACKGROUND = TMDBRefreshBackground()
+        return _TMDB_BACKGROUND
 
 
 def adapter_registry() -> AccountRegistry:
@@ -251,6 +325,7 @@ def adapter_registry() -> AccountRegistry:
     from app.infrastructure.drive.adapter_registry import AdapterRegistry
 
     return AdapterRegistry
+
 
 def drive_gateway(adapter: Any, *, drive_type: str | None = None):
     """把适配器包装成 `app.domain.ports.drive.DriveGatewayPort`（网盘网关端口）。
@@ -263,6 +338,7 @@ def drive_gateway(adapter: Any, *, drive_type: str | None = None):
 
     return gateway_for_adapter(adapter, drive_type=drive_type)
 
+
 # ---------------------------------------------------------------------------
 # infrastructure 实现的装配出口（S5：presentation/application 不再顶层 import 实现）
 # 调用方约定：在需要的地方写成 `from app.application.container import adapter_factory as _f;
@@ -271,18 +347,6 @@ def adapter_factory() -> AccountAdapterFactory:
     from app.infrastructure.drive.factory import AdapterFactory
 
     return AdapterFactory
-
-
-def base_adapter_cls():
-    from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
-
-    return BaseCloudDriveAdapter
-
-
-def aliyun_adapter_cls():
-    from app.infrastructure.drive.adapters.aliyun_adapter import AliyunAdapter
-
-    return AliyunAdapter
 
 
 def drive_auth_required() -> type[DriveAuthRequired]:
@@ -327,22 +391,16 @@ def douban_client_cls():
     return DoubanClient
 
 
-def tmdb_client_cls():
+def tmdb_client_cls() -> type[TMDBClient]:
     from app.infrastructure.http.tmdb_client import TMDBClient
 
     return TMDBClient
 
 
-def tmdb_base_language():
+def tmdb_base_language() -> str:
     from app.infrastructure.http.tmdb_client import BASE_LANGUAGE
 
     return BASE_LANGUAGE
-
-
-def search_plugin_base():
-    from app.infrastructure.search.base import BaseSearchPlugin
-
-    return BaseSearchPlugin
 
 
 def drama_parse_size():
@@ -353,74 +411,102 @@ def drama_parse_size():
 
 def task_share_store(db):
     from app.infrastructure.drive.task_share import SqlTaskShareStore
+
     return SqlTaskShareStore(db)
 
 
 def saved_progress_store(db):
     from app.infrastructure.drive.saved_progress import SqlSavedProgressStore
+
     return SqlSavedProgressStore(db)
 
 
 def saved_progress_scanner():
     from app.infrastructure.drive.saved_progress import SavedProgressScanner
+
     return SavedProgressScanner()
 
 
 def correct_saved_progress_use_case(db):
-    from app.application.use_cases.correct_saved_progress import CorrectSavedProgressUseCase
+    from app.application.use_cases.correct_saved_progress import (
+        CorrectSavedProgressUseCase,
+    )
+
     return CorrectSavedProgressUseCase(db)
 
 
 def task_share_gateway(plan):
     from app.infrastructure.drive.task_share import open_task_share_gateway
+
     return open_task_share_gateway(plan)
 
 
 def create_task_share_use_case(db):
     from app.application.use_cases.create_task_share import CreateTaskShareUseCase
+
     return CreateTaskShareUseCase(db)
 
 
-def task_reads_repo():
+def task_reads_repo() -> repos.TaskReadsRepository:
     from app.infrastructure.persistence.repositories import task_reads
+
     return task_reads
 
 
-def execution_reads_repo():
+def execution_reads_repo() -> repos.TaskExecutionsRepository:
     from app.infrastructure.persistence.repositories import task_executions
+
     return task_executions
 
 
 def task_lead_in_use_case(db):
     from app.application.use_cases.task_lead_in import TaskLeadInUseCase
+
     return TaskLeadInUseCase(db)
 
 
 def lead_in_provider():
     from app.infrastructure.drive.lead_in_provider import LeadInProvider
+
     return LeadInProvider()
 
 
 def task_run_store(db: Session) -> TaskRunStorePort:
     from app.infrastructure.execution.task_run_stages import SqlTaskRunStore
+
     return SqlTaskRunStore(db)
 
 
 def task_execution_engine() -> TaskExecutionEnginePort:
     from app.infrastructure.execution.task_run_stages import PreparedTaskEngine
+
     return PreparedTaskEngine()
 
 
 def task_run_notifier(db: Session) -> NotifierPort:
     from app.infrastructure.execution.task_run_notifier import TaskRunNotifier
+
     return TaskRunNotifier(db)
 
 
-def run_task_use_case(db, *, notifier=None):
+def run_task_use_case(
+    db: Session,
+    *,
+    notifier: NotifierPort | None = None,
+    store: TaskRunStorePort | None = None,
+    engine: TaskExecutionEnginePort | None = None,
+) -> RunTaskUseCase:
     from app.application.use_cases.run_task import RunTaskUseCase
-    return RunTaskUseCase(db, notifier=notifier)
+
+    return RunTaskUseCase(
+        db,
+        store=store if store is not None else task_run_store(db),
+        engine=engine if engine is not None else task_execution_engine(),
+        notifier=notifier if notifier is not None else task_run_notifier(db),
+    )
 
 
 def task_run_notification_batch():
     from app.application.notifications.task_batch import TaskNotificationBatch
+
     return TaskNotificationBatch(task_run_notifier(None))

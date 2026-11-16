@@ -152,6 +152,9 @@ class GuangyaClientLite:
         )
         self._update_auth_header()
 
+    def close(self) -> None:
+        self._session.close()
+
     def _update_auth_header(self) -> None:
         if self.token:
             self._session.headers["authorization"] = f"Bearer {self.token}"

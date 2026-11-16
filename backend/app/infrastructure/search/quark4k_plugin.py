@@ -85,10 +85,12 @@ class Quark4KPlugin(BaseSearchPlugin):
             for future in concurrent.futures.as_completed(futures):
                 try:
                     payloads.append(future.result())
-                except Exception as exc:
+                except (requests.RequestException, OSError, TimeoutError) as exc:
                     errors.append(exc)
         if not payloads and errors:
-            raise RuntimeError(f"Quark4K 页面请求失败：{errors[0]}") from errors[0]
+            # Preserve the upstream failure contract consumed by aggregation.
+            # A mixed failure is unavailable, rather than an all-source timeout.
+            raise next((error for error in errors if not isinstance(error, (requests.Timeout, TimeoutError))), errors[0])
 
         terms = keyword.casefold().split()
         results: list[dict[str, Any]] = []

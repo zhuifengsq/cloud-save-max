@@ -10,9 +10,10 @@ import json
 import logging
 import threading
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, cast
 
 from app.core.runtime.single_flight import SingleFlight
+from app.infrastructure.drive.lifecycle import AdapterResource, AdapterLease
 from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
 from app.infrastructure.drive.adapters.quark_adapter import QuarkAdapter
 from app.infrastructure.drive.adapters.cloud115_adapter import Cloud115Adapter
@@ -63,8 +64,10 @@ class AdapterFactory:
     # 实例缓存: (drive_type, account_name, mode, config_hash) -> adapter_instance
     # 用 OrderedDict 记录插入序以便淘汰：旧实现是无限 dict，账号/配置（config_hash）
     # 一变就新增实例且永不释放，长时间运行会累积登录态与 HTTP 连接。
-    _instance_cache: "OrderedDict[str, BaseCloudDriveAdapter]" = OrderedDict()
+    _instance_cache: "OrderedDict[str, AdapterResource]" = OrderedDict()
     _instance_cache_max = 64
+    _cache_generation = 0
+    _cache_enabled = True
     # 查表与写入必须加锁，否则并发首次调用会各自创建一个实例（随后只有一个留在缓存里，
     # 登录却发生多次）。但构造适配器（构造函数里可能有登录网络 IO，秒~数十秒级）不能
     # 放在这把全局锁内，否则一个账号登录会阻塞所有账号的取实例。改为：全局锁只保护
@@ -156,10 +159,13 @@ class AdapterFactory:
         if cached is not None:
             return cached
 
+        with cls._cache_lock:
+            generation = cls._cache_generation
+
         def _build() -> Optional[BaseCloudDriveAdapter]:
             # 构造（可能包含 init/登录网络 IO）在全局锁外；SingleFlight 保证同 key 并发
             # 首次调用只构造一次，不同 key 之间并行、不互相阻塞。
-            cached_inner = cls._cache_get(cache_key, account_name)
+            cached_inner = cls._cache_get(cache_key, account_name, track_scope=False)
             if cached_inner is not None:
                 return cached_inner
             try:
@@ -171,57 +177,69 @@ class AdapterFactory:
                     no_login=no_login,
                 )
                 setattr(adapter, "account_name", account_name or "")
-                cls._cache_put(cache_key, adapter)
-                return adapter
+                resource = AdapterResource(adapter)
+                lease = resource.acquire(track_scope=False)
+                cls._cache_put(cache_key, resource, generation=generation)
+                return cast(BaseCloudDriveAdapter, lease)
             except Exception as e:
                 logger.exception("创建适配器失败: %s", e)
                 return None
 
-        return cls._single_flight.run(cache_key, _build)
+        # The flight result itself owns a temporary borrow, so eviction between
+        # construction and waiter delivery cannot close the shared resource.
+        result = cls._single_flight.run((generation, cache_key), _build)
+        return cast(BaseCloudDriveAdapter, result._fork()) if isinstance(result, AdapterLease) else result
 
     @classmethod
-    def _cache_get(cls, cache_key: str, account_name: str) -> Optional[BaseCloudDriveAdapter]:
+    def _cache_get(cls, cache_key: str, account_name: str, *, track_scope: bool = True) -> Optional[BaseCloudDriveAdapter]:
         """持锁读缓存并刷新 LRU 位置；命中时同步 account_name。"""
         with cls._cache_lock:
             cached = cls._instance_cache.get(cache_key)
             if cached is None:
                 return None
             cls._instance_cache.move_to_end(cache_key)
-            setattr(cached, "account_name", account_name or "")
-            return cached
+            setattr(cached.adapter, "account_name", account_name or "")
+            return cast(BaseCloudDriveAdapter, cached.acquire(track_scope=track_scope))
 
     @classmethod
-    def _cache_put(cls, cache_key: str, adapter: BaseCloudDriveAdapter) -> None:
-        """持锁写缓存，超出上限按插入序淘汰最旧实例并关闭它（close 在锁外调用）。"""
-        evicted: List[BaseCloudDriveAdapter] = []
+    def _cache_put(cls, cache_key: str, resource: AdapterResource, *, generation: int) -> None:
+        retired = []
         with cls._cache_lock:
-            existing = cls._instance_cache.pop(cache_key, None)
-            if existing is not None and existing is not adapter:
-                evicted.append(existing)
-            cls._instance_cache[cache_key] = adapter
-            cls._instance_cache.move_to_end(cache_key)
-            while len(cls._instance_cache) > cls._instance_cache_max:
-                _, victim = cls._instance_cache.popitem(last=False)
-                evicted.append(victim)
-        for old in evicted:
-            cls._close_adapter(old)
+            # Configuration clear during a slow login must not repopulate the old cache.
+            if generation != cls._cache_generation or not cls._cache_enabled:
+                retired.append(resource)
+            else:
+                existing = cls._instance_cache.pop(cache_key, None)
+                if existing is not None and existing is not resource:
+                    retired.append(existing)
+                cls._instance_cache[cache_key] = resource
+                while len(cls._instance_cache) > cls._instance_cache_max:
+                    _, victim = cls._instance_cache.popitem(last=False)
+                    retired.append(victim)
+        for old in retired:
+            old.retire()
 
-    @staticmethod
-    def _close_adapter(adapter: BaseCloudDriveAdapter) -> None:
-        """淘汰实例时尽力关闭其连接；关闭失败不能影响新实例创建。"""
-        close = getattr(adapter, "close", None)
-        if not callable(close):
-            return
-        try:
-            close()
-        except Exception as exc:
-            logger.warning("淘汰适配器实例时 close() 失败: %s", exc)
+    @classmethod
+    def startup(cls) -> None:
+        with cls._cache_lock:
+            cls._cache_enabled = True
+
+    @classmethod
+    def shutdown(cls) -> None:
+        # Late background borrowers may finish safely but cannot leave cached transports behind.
+        with cls._cache_lock:
+            cls._cache_enabled = False
+        cls.clear_cache()
 
     @classmethod
     def clear_cache(cls):
-        """清空实例缓存（配置更新时调用）。保留原有语义：只丢引用，不主动 close。"""
+        """Retire cached owners; close idle resources and defer active ones until release."""
         with cls._cache_lock:
+            retired = list(cls._instance_cache.values())
             cls._instance_cache.clear()
+            cls._cache_generation += 1
+        for resource in retired:
+            resource.retire()
 
     @classmethod
     def get_drive_type_by_url(cls, url: str) -> Optional[str]:
@@ -276,6 +294,21 @@ class AccountManager:
         self.adapters: Dict[str, BaseCloudDriveAdapter] = {}
         self.default_adapter: Optional[BaseCloudDriveAdapter] = None
 
+    def close(self) -> None:
+        adapters = list(self.adapters.values())
+        self.adapters.clear()
+        self.default_adapter = None
+        for adapter in adapters:
+            # Only factory leases are owned here; test doubles can remain raw objects.
+            if isinstance(adapter, AdapterLease):
+                adapter.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
     def load_accounts(self, config_data: Dict, *, no_login: bool = False) -> bool:
         """
         从配置加载所有账户
@@ -285,8 +318,7 @@ class AccountManager:
         Returns:
             是否成功加载
         """
-        self.adapters.clear()
-        self.default_adapter = None
+        self.close()
 
         # 新格式：accounts 列表
         if "accounts" in config_data:

@@ -4,6 +4,8 @@ import json
 import logging
 import time
 import traceback
+from app.infrastructure.drive.lifecycle import scoped_adapters
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -108,6 +110,7 @@ class TaskExecutor:
             tree.create_node(str(name), node_id, parent='root')
         return tree
 
+    @scoped_adapters
     def run_task(
         self,
         task: TaskExecutionState,

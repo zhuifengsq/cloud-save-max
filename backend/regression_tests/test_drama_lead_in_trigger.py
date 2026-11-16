@@ -291,7 +291,7 @@ class DramaLeadInTriggerRegressionTests(unittest.TestCase):
         calls: list[int] = []
 
         from app.application.dto.task_run import TaskRunResult
-        from app.application.use_cases.run_task import RunTaskUseCase
+        from app.application.container import run_task_use_case as RunTaskUseCase
         class RecordingEngine:
             def execute(self, plan, policy, log, recover):
                 calls.append(int(plan.task.id))

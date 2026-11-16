@@ -128,7 +128,7 @@ def test_single_flight_propagates_error_to_waiters():
 
 
 def test_task_run_use_case_implements_port():
-    from app.application.use_cases.run_task import RunTaskUseCase
+    from app.application.container import run_task_use_case as RunTaskUseCase
 
     # db 只是透传给 TaskExecutor，构造阶段不访问数据库
     use_case = RunTaskUseCase(None)

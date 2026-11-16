@@ -3,7 +3,8 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from app.application.dto.task_run import RunTaskCommand, TaskRunResult
-from app.application.use_cases.run_task import RunTaskUseCase, RunPolicy
+from app.application.use_cases.run_task import RunPolicy
+from app.application.container import run_task_use_case as RunTaskUseCase
 from app.core.errors import ApiError
 from app.infrastructure.persistence.base import Base
 from app.infrastructure.persistence.models.task import Task

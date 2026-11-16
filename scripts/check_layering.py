@@ -61,13 +61,9 @@ ALLOWED = {
         "tooling": {"presentation", "application", "domain", "persistence", "infrastructure", "platform", "tooling"},
 }
 
-# 显式登记的架构例外（有据可查、单独打印、不计入 violations）：
-# (src 前缀, dst 前缀, 理由)。tmdb_cache 是读写混合服务 + 专用 writer engine，
-# 拆分到 infrastructure 仓储属「tmdb 专项」后续 ADR，见 docs/architecture-evolution-plan.md §10.3 决策 5。
-DOCUMENTED_EXCEPTIONS = [
-    ("app.application.tmdb_cache", "app.infrastructure.persistence",
-     "tmdb_cache 读写混合 + 专用 writer engine，属既定显式例外（§10.3 决策 5）"),
-]
+# Reserved for individually justified exceptions. TMDB persistence now sits behind
+# typed ports, so the previous application->persistence exception is removed.
+DOCUMENTED_EXCEPTIONS: list[tuple[str, str, str]] = []
 
 
 def is_documented_exception(src: str, dst: str) -> bool:

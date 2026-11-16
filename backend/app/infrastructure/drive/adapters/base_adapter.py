@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 class BaseCloudDriveAdapter(ABC):
     """云盘适配器抽象基类"""
 
+    # Concrete adapters own only these transport handles; Guangya owns a client.
+    OWNED_RESOURCE_FIELDS = ("_session", "auth_session", "_client")
+
     SUPPORTS_COMPLETE_LISTING = False
     COMPLETE_LISTING_MAX_PAGES = 1000
 
@@ -61,6 +64,8 @@ class BaseCloudDriveAdapter(ABC):
         *,
         no_login: bool = False,
     ):
+        self._close_lock = threading.Lock()
+        self._closed = False
         self.config = self.resolve_runtime_config(config=config, cookie=cookie)
         self.cookie = self.serialize_config(self.config)
         self.index = index + 1
@@ -85,6 +90,25 @@ class BaseCloudDriveAdapter(ABC):
         self._init_result: Any = None
 
         self.savepath_fid: Dict[str, str] = {"/": "0"}
+
+    def close(self) -> None:
+        """Close owned transports exactly once; callers must first release all borrows."""
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        seen = set()
+        for name in self.OWNED_RESOURCE_FIELDS:
+            resource = getattr(self, name, None)
+            if resource is None or id(resource) in seen:
+                continue
+            seen.add(id(resource))
+            close = getattr(resource, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    logger.warning("Failed closing adapter transport %s", name, exc_info=True)
 
     def _rate_limit_key(self) -> str:
         """限速 key：优先「网盘类型 + 账户名」，缺失时用 cookie 指纹，最后退到实例序号。

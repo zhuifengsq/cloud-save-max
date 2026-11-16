@@ -2,7 +2,8 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-from app.application.use_cases.run_task import RunTaskUseCase, RunPolicy
+from app.application.use_cases.run_task import RunPolicy
+from app.application.container import run_task_use_case as RunTaskUseCase
 from app.application.dto.task_run import RunTaskCommand, TaskRunResult
 
 

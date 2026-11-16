@@ -203,7 +203,8 @@ def test_real_auth_routes_finish_io_before_persisting_credentials(db, monkeypatc
         events.append(('poll', session.in_transaction()))
         concurrent_change()
         return {'success': True, 'data': {'status': 'CONFIRMED', 'refresh_token': 'fake-candidate-refresh'}}
-    monkeypatch.setattr(route.AliyunAdapter, 'query_qrcode_status', query)
+    from app.infrastructure.drive.account_auth import AliyunQrcodeAuthProvider
+    monkeypatch.setattr(AliyunQrcodeAuthProvider, 'query_qrcode_status', lambda self, *args: query(*args))
     def factory(*args, **kwargs):
         events.append(('factory', session.in_transaction()))
         if drive == 'aliyun':

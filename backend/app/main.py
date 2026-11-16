@@ -13,6 +13,8 @@ from alembic.config import Config
 from sqlalchemy.orm.exc import StaleDataError
 
 from app.api.router import api_router
+from app.infrastructure.drive.factory import AdapterFactory
+from app.infrastructure.drive.lifecycle import AdapterLeaseMiddleware
 from app.core.exception_handlers import api_error_handler, http_error_handler, validation_error_handler, concurrent_update_error_handler
 from app.core.errors import ApiError
 from app.core.logging import setup_logging
@@ -26,6 +28,7 @@ from app.middlewares.timing import TimingMiddleware
 from app.application.proxy_image_cache import ensure_dir, resolve_proxy_image_cache_dir
 from app.application.setup import ensure_permissions_and_roles
 from app.application.container import login_failure_audit_service
+from app.application.drive_account_auth_sessions import startup_auth_sessions, shutdown_auth_sessions
 
 
 logger = logging.getLogger(__name__)
@@ -68,6 +71,8 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        AdapterFactory.startup()
+        startup_auth_sessions()
         # 迁移前先热备：SQLite 的 schema 变更是不可逆的（见 docs/architecture-evolution-plan.md R17）
         backup_before_migrate()
         _run_db_migrations_if_needed()
@@ -90,11 +95,19 @@ def create_app() -> FastAPI:
         if bool(getattr(settings, "scheduler_enabled", True)):
             task_scheduler_manager.start()
         telegram_bot_manager.start()
-        yield
-        login_failure_audit_service().close()
-        telegram_bot_manager.shutdown()
-        if bool(getattr(settings, "scheduler_enabled", True)):
-            task_scheduler_manager.shutdown()
+        try:
+            yield
+        finally:
+            try:
+                login_failure_audit_service().close()
+                telegram_bot_manager.shutdown()
+                if bool(getattr(settings, "scheduler_enabled", True)):
+                    task_scheduler_manager.shutdown()
+            finally:
+                try:
+                    shutdown_auth_sessions()
+                finally:
+                    AdapterFactory.shutdown()
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
@@ -104,6 +117,7 @@ def create_app() -> FastAPI:
     # 这样 x-response-time-ms 与慢请求日志统计的是「含压缩在内」的真实耗时。
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     app.add_middleware(TimingMiddleware)
+    app.add_middleware(AdapterLeaseMiddleware)
 
     if settings.cors_origins:
         app.add_middleware(

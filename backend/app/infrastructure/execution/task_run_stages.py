@@ -15,6 +15,7 @@ from app.application.task_executions import prune_task_executions
 from app.infrastructure.persistence.models.task_execution import TaskExecution
 from app.infrastructure.drive.account_manager import load_accounts_payload, DatabaseAccountManager
 from app.infrastructure.execution.task_executor import TaskExecutor
+from app.infrastructure.drive.lifecycle import scoped_adapters
 
 class SqlTaskRunStore:
     def __init__(self, db: Session) -> None:
@@ -99,6 +100,7 @@ class SqlTaskRunStore:
         prune_task_executions(self.db, plan.task.id)
 
 class PreparedTaskEngine:
+    @scoped_adapters
     def execute(self, plan: TaskRunPlan, policy: RunPolicyPort, log: ExecutionLogPort | None, recover: RecoveryCallback) -> TaskRunResult:
         manager = DatabaseAccountManager.from_payload(plan.prepared['accounts'])
         check = probe_generated_share_check(plan.prepared['share_check'], manager,

@@ -7,16 +7,14 @@ import json
 from app.core.errors import ApiError, bad_request, not_found
 from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import DRIVE_ACCOUNT_READ, DRIVE_ACCOUNT_WRITE
-from app.application.container import drive_accounts_repo, get_db, transaction
+from app.application.container import get_db, transaction
 from app.schemas.drive_account import DriveAccountCreateIn, DriveAccountOut, DriveAccountStatusIn, DriveAccountUpdateIn, DriveTypeOut
 from app.schemas.drive_account_auth import DriveAccountCaptchaSubmitIn, DriveAccountSmsSubmitIn
 from app.schemas.drive_account_probe_scheduler import DriveAccountProbeSchedulerSettingOut, DriveAccountProbeSchedulerSettingUpdateIn
-from app.application.container import drive_auth_required as _acc_DriveAuthRequired; DriveAuthRequired = _acc_DriveAuthRequired()
-from app.application.container import aliyun_adapter_cls as _acc_AliyunAdapter; AliyunAdapter = _acc_AliyunAdapter()
 from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
 from app.application.container import task_scheduler as _acc_task_scheduler_manager; task_scheduler_manager = _acc_task_scheduler_manager()
 from app.application.drive_account_probe_scheduler import get_or_create_drive_account_probe_scheduler_setting, load_drive_account_probe_scheduler_setting, update_drive_account_probe_scheduler_setting
-from app.application.drive_account_auth_sessions import create_auth_session, delete_auth_session, get_auth_session
+from app.application.container import drive_account_auth_use_case
 from app.application import audit
 from app.application.drive_accounts import (
     create_drive_account,
@@ -26,7 +24,6 @@ from app.application.drive_accounts import (
     refresh_drive_account_profiles,
     serialize_drive_account,
     sign_in_drive_account,
-    prepare_drive_account_auth,
     set_default_drive_account,
     set_drive_account_enabled,
     supported_drive_types,
@@ -42,7 +39,7 @@ def _out(item) -> DriveAccountOut:
 
 @router.get('/auth/{session_id}', dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_READ))])
 def get_auth_session_status(session_id: str):
-    session = get_auth_session(session_id)
+    session = drive_account_auth_use_case().status(session_id)
     if session is None:
         raise not_found("DRIVE_ACCOUNT_AUTH_SESSION_NOT_FOUND", "认证会话已失效")
     return {"account_id": session.account_id, "drive_type": session.drive_type, "method": session.method, "session_id": session.session_id, "payload": session.payload}
@@ -196,151 +193,65 @@ def post_account_auth_start(request: Request, account_id: int, current: CurrentU
     return _out(account)
 
 
+def _auth_payload(session):
+    return {"account_id": session.account_id, "drive_type": session.drive_type,
+            "method": session.method, "session_id": session.session_id, "payload": session.payload}
+
+
+def _auth_audit(db, request, current, action, account_id):
+    with transaction(db):
+        audit.write_audit_log(db, actor_user_id=current.user.id, action=action,
+            target_type='drive_account', target_id=str(account_id),
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get('user-agent'), success=True)
+
+
 @router.post('/{account_id}/auth/qrcode/start', dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account_auth_qrcode_start(request: Request, account_id: int, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    account = drive_accounts_repo().get_account(db, account_id)
-    if account is None:
-        raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "驱动账号不存在")
-    if account.drive_type != "aliyun":
-        raise bad_request("DRIVE_ACCOUNT_AUTH_UNSUPPORTED", "当前账号不支持扫码认证")
-    account_identity, drive_type = account.id, account.drive_type
-    row_version = prepare_drive_account_auth(db, account_identity)
-    resp = AliyunAdapter.generate_qrcode()
-    if not isinstance(resp, dict) or not resp.get("success"):
-        raise bad_request("DRIVE_ACCOUNT_AUTH_FAILED", "生成二维码失败", detail=str((resp or {}).get("message") or ""))
-    data = resp.get("data") or {}
-    session = create_auth_session(
-        account_id=account_identity,
-        drive_type=drive_type,
-        method="qrcode",
-        adapter={"t": data.get("t") or "", "ck": data.get("ck") or ""},
-        payload={"qrcode_url": data.get("qrCodeUrl") or "", "status": "NEW"},
-        row_version=row_version,
-    )
-    with transaction(db):
-        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_start', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    return {"account_id": account_identity, "drive_type": drive_type, "method": "qrcode", "session_id": session.session_id, "payload": session.payload}
+    session = drive_account_auth_use_case().start_qrcode(db, account_id)
+    _auth_audit(db, request, current, 'drive_account.auth_qrcode_start', account_id)
+    return _auth_payload(session)
 
 
 @router.post('/auth/{session_id}/qrcode/poll', response_model=DriveAccountOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account_auth_qrcode_poll(request: Request, session_id: str, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    session = get_auth_session(session_id)
-    if session is None:
-        raise not_found("DRIVE_ACCOUNT_AUTH_SESSION_NOT_FOUND", "认证会话已失效")
-    if session.method != "qrcode":
-        raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
-    meta = session.adapter or {}
-    t = str(meta.get("t") or "")
-    ck = str(meta.get("ck") or "")
-    row_version = prepare_drive_account_auth(db, session.account_id, session.row_version)
-    resp = AliyunAdapter.query_qrcode_status(t, ck)
-    if not isinstance(resp, dict) or not resp.get("success"):
-        raise bad_request("DRIVE_ACCOUNT_AUTH_FAILED", "查询二维码状态失败", detail=str((resp or {}).get("message") or ""))
-    data = resp.get("data") or {}
-    if str(data.get("status") or "") == "CONFIRMED" and str(data.get("refresh_token") or ""):
-        delete_auth_session(session_id)
-        account = probe_drive_account(db, session.account_id,
-            config={'refresh_token': str(data.get('refresh_token') or '')}, expected_version=row_version)
-        with transaction(db):
-            audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_confirm', target_type='drive_account', target_id=str(account.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-        db.refresh(account)
-        return _out(account)
-    session.payload.update({"status": str(data.get("status") or ""), "message": str(data.get("message") or "")})
-    with transaction(db):
-        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_poll', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    raise ApiError(
-        code="DRIVE_ACCOUNT_AUTH_PENDING",
-        message="扫码未完成",
-        http_status=409,
-        detail=json.dumps(
-            {
-                "account_id": session.account_id,
-                "drive_type": session.drive_type,
-                "method": "qrcode",
-                "session_id": session.session_id,
-                "payload": session.payload,
-            },
-            ensure_ascii=False,
-        ),
-    )
+    result = drive_account_auth_use_case().poll_qrcode(db, session_id,
+        persist=lambda account: _auth_audit(db, request, current, 'drive_account.auth_qrcode_confirm', account.id))
+    if result.account is not None:
+        db.refresh(result.account)
+        return _out(result.account)
+    _auth_audit(db, request, current, 'drive_account.auth_qrcode_poll', result.session.account_id)
+    raise ApiError(code='DRIVE_ACCOUNT_AUTH_PENDING', message='扫码未完成', http_status=409,
+        detail=json.dumps(_auth_payload(result.session), ensure_ascii=False))
+
+
+def _submit_auth_code(db, request, current, session_id, code, method, action):
+    result = drive_account_auth_use_case().submit_code(db, session_id, code, method=method,
+        persist=lambda account: _auth_audit(db, request, current, action, account.id))
+    if result.account is None:
+        raise ApiError(code='DRIVE_ACCOUNT_AUTH_REQUIRED', message=result.message or '需要二次认证', http_status=409,
+            detail=json.dumps(_auth_payload(result.session), ensure_ascii=False))
+    db.refresh(result.account)
+    return _out(result.account)
 
 
 @router.post('/auth/{session_id}/captcha', response_model=DriveAccountOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account_auth_captcha_submit(request: Request, session_id: str, payload: DriveAccountCaptchaSubmitIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    session = get_auth_session(session_id)
-    if session is None:
-        raise not_found("DRIVE_ACCOUNT_AUTH_SESSION_NOT_FOUND", "认证会话已失效")
-    if session.method != "captcha":
-        raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
-    adapter = session.adapter
-    row_version = prepare_drive_account_auth(db, session.account_id, session.row_version)
-    try:
-        adapter.submit_captcha(payload.code)
-    except DriveAuthRequired as exc:
-        delete_auth_session(session_id)
-        new_session = create_auth_session(
-            account_id=session.account_id,
-            drive_type=session.drive_type,
-            method=exc.method,
-            adapter=exc.adapter or adapter,
-            payload=exc.payload,
-            row_version=row_version,
-        )
-        raise ApiError(
-            code="DRIVE_ACCOUNT_AUTH_REQUIRED",
-            message=exc.message or "需要二次认证",
-            http_status=409,
-            detail=json.dumps(
-                {
-                    "account_id": session.account_id,
-                    "drive_type": session.drive_type,
-                    "method": exc.method,
-                    "session_id": new_session.session_id,
-                    "payload": exc.payload,
-                },
-                ensure_ascii=False,
-            ),
-        )
-    delete_auth_session(session_id)
-    account = probe_drive_account(db, session.account_id, config=adapter.export_runtime_config(), expected_version=row_version)
-    with transaction(db):
-        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_captcha', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.refresh(account)
-    return _out(account)
+    return _submit_auth_code(db, request, current, session_id, payload.code, 'captcha', 'drive_account.auth_captcha')
 
 
 @router.post('/auth/{session_id}/sms/send', dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account_auth_sms_send(request: Request, session_id: str, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    session = get_auth_session(session_id)
-    if session is None:
-        raise not_found("DRIVE_ACCOUNT_AUTH_SESSION_NOT_FOUND", "认证会话已失效")
-    if session.method != "sms":
-        raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
-    adapter = session.adapter
-    prepare_drive_account_auth(db, session.account_id, session.row_version)
-    result = adapter.send_sms()
-    with transaction(db):
-        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_sms_send', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
+    use_case = drive_account_auth_use_case()
+    session = use_case.status(session_id, 'sms')
+    result = use_case.send_sms(db, session_id)
+    _auth_audit(db, request, current, 'drive_account.auth_sms_send', session.account_id)
     return result
 
 
 @router.post('/auth/{session_id}/sms/submit', response_model=DriveAccountOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
 def post_account_auth_sms_submit(request: Request, session_id: str, payload: DriveAccountSmsSubmitIn, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    session = get_auth_session(session_id)
-    if session is None:
-        raise not_found("DRIVE_ACCOUNT_AUTH_SESSION_NOT_FOUND", "认证会话已失效")
-    if session.method != "sms":
-        raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
-    adapter = session.adapter
-    row_version = prepare_drive_account_auth(db, session.account_id, session.row_version)
-    adapter.submit_sms(payload.code)
-    delete_auth_session(session_id)
-    config_snapshot = adapter.export_runtime_config()
-    account = probe_drive_account(db, session.account_id, config=config_snapshot, auth_completed=True, expected_version=row_version)
-    with transaction(db):
-        audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_sms_submit', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    db.refresh(account)
-    return _out(account)
+    return _submit_auth_code(db, request, current, session_id, payload.code, 'sms', 'drive_account.auth_sms_submit')
 
 
 @router.post('/{account_id}/sign-in', dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])

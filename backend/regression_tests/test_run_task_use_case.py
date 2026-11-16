@@ -9,7 +9,8 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
+from app.application.use_cases.run_task import RunPolicy
+from app.application.container import run_task_use_case as RunTaskUseCase
 
 
 # trigger -> (share_check_always_notify, persist_execution, manual_run)

@@ -8,7 +8,8 @@ from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import Session
 
 from app.application.dto.task_run import RunTaskCommand
-from app.application.use_cases.run_task import RunPolicy, RunTaskUseCase
+from app.application.use_cases.run_task import RunPolicy
+from app.application.container import run_task_use_case as RunTaskUseCase
 from app.domain.drive_types import SavedFile, TransferResult
 from app.infrastructure.persistence.base import Base
 from app.infrastructure.persistence.models.task import Task

@@ -13,7 +13,8 @@ from app.infrastructure.persistence.base import Base
 from app.infrastructure.persistence.models.task import Task
 from app.infrastructure.persistence.models.task_execution import TaskExecution
 from app.infrastructure.persistence.models.drive_account import DriveAccount
-from app.application.use_cases.run_task import RunTaskUseCase, RunPolicy
+from app.application.use_cases.run_task import RunPolicy
+from app.application.container import run_task_use_case as RunTaskUseCase
 from app.application.dto.task_run import RunTaskCommand
 from app.core.errors import ApiError
 from app.application.tasks import update_task

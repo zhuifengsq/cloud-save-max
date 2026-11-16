@@ -21,7 +21,7 @@ from app.application.search_results import SearchBatch
 
 from app.application.container import resource_search_sources_repo
 from app.core.errors import bad_request, not_found
-from app.application.container import search_plugin_base as _acc_BaseSearchPlugin; BaseSearchPlugin = _acc_BaseSearchPlugin()
+from app.domain.search import BaseSearchPlugin
 
 
 logger = logging.getLogger(__name__)
