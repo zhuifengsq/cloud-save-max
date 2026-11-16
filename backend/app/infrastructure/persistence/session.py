@@ -1,11 +1,12 @@
 import logging
 import time
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from typing import Callable, Iterator, TypeVar
+from sqlite3 import Connection as SQLiteConnection
 
 from sqlalchemy import create_engine, event
-from sqlalchemy.pool import QueuePool
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import ConnectionPoolEntry, QueuePool
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.settings import settings
 
@@ -38,7 +39,7 @@ engine = create_engine(settings.database_url, connect_args=connect_args, **engin
 
 if settings.database_url.startswith("sqlite"):
     @event.listens_for(engine, "connect")
-    def _set_sqlite_pragmas(dbapi_connection, _connection_record):
+    def _set_sqlite_pragmas(dbapi_connection: SQLiteConnection, _connection_record: ConnectionPoolEntry) -> None:
         cur = dbapi_connection.cursor()
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA synchronous=NORMAL")
@@ -112,11 +113,12 @@ def retry_on_locked(
                 _rollback_after_failed_commit(fn)
             delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
             time.sleep(delay)
+    assert last_exc is not None
     raise last_exc  # 理论不可达
 
 
 def commit_with_locked_retry(
-    db,
+    db: Session,
     attempts: int = 3,
     *,
     base_delay: float = 0.2,
@@ -158,7 +160,7 @@ def commit_with_locked_retry(
             time.sleep(delay)
 
 
-def commit(db, attempts: int = 3) -> None:
+def commit(db: Session, attempts: int = 3) -> None:
     """提交当前事务（带锁冲突安全重试）。
 
     给「提交之后还要发副作用或抛异常」的流程用（例如先写失败审计再 raise
@@ -168,7 +170,7 @@ def commit(db, attempts: int = 3) -> None:
 
 
 @contextmanager
-def transaction(db, attempts: int = 3) -> Iterator[object]:
+def transaction(db: Session, attempts: int = 3) -> Iterator[Session]:
     """事务边界：正常结束提交，异常回滚后原样抛出（一个用例一个事务）。
 
     提交走 commit_with_locked_retry（只重试 commit，且事务必须仍存活）；
@@ -187,7 +189,7 @@ def transaction(db, attempts: int = 3) -> Iterator[object]:
 
 
 
-def get_db():
+def get_db() -> Iterator[Session]:
     db = SessionLocal()
     try:
         yield db
@@ -198,12 +200,12 @@ def get_db():
         db.close()
 
 
-def get_db_session():
+def get_db_session() -> AbstractContextManager[Session]:
     """获取数据库会话上下文管理器"""
     from contextlib import contextmanager
     
     @contextmanager
-    def _get_session():
+    def _get_session() -> Iterator[Session]:
         db = SessionLocal()
         try:
             yield db

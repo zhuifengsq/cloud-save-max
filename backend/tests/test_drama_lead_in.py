@@ -164,7 +164,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
             cookie="baidu-cookie",
             config_json=json.dumps({"cookie": "baidu-cookie"}),
             enabled=True,
-            is_default=True,
+            is_default=False,
             runtime_status="active",
         )
         self.third_account = DriveAccount(
@@ -173,7 +173,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
             cookie="third-cookie",
             config_json=json.dumps({"cookie": "third-cookie"}),
             enabled=True,
-            is_default=True,
+            is_default=False,
             runtime_status="active",
         )
         self.quark_task = Task(
@@ -716,6 +716,7 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
         usecase = lead_usecase.TaskLeadInUseCase(self.db)
         token = usecase.preview(lead_usecase.LeadInCommand(task_id)).data['preview_token']
         self.quark_account.is_default = False
+        self.db.flush()
         self.db.add(DriveAccount(name='new-default-quark', drive_type='quark', cookie='private', enabled=True, is_default=True, runtime_status='active'))
         self.db.commit()
         with self.assertRaises(ApiError) as caught:

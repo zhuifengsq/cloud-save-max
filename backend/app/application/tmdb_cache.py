@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from app.core.runtime.tx import end_read_tx
-from app.infrastructure.persistence.session import end_read_tx
 from app.infrastructure.persistence.models.task import Task
 from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
 from app.infrastructure.persistence.models.tmdb_setting import TMDBSetting

@@ -66,7 +66,6 @@ def post_share_validate_stream(payload: ShareValidateIn, db: Session = Depends(g
     """流式验证：验证完一个链接立即返回结果"""
     from fastapi.responses import StreamingResponse
     from app.application.share_preview_batch import validate_share_links_streaming
-    import json
 
     def event_generator():
         for item in validate_share_links_streaming(db, payload.shareurls):

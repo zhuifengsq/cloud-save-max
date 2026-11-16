@@ -152,7 +152,6 @@ class TaskSchedulerManager:
             if self.scheduler.get_job(job_id):
                 self.scheduler.remove_job(job_id)
             return
-        job = self.scheduler.get_job(job_id)
 
 
     def _apply_drive_account_probe_setting(self, setting: Any) -> None:
@@ -179,7 +178,6 @@ class TaskSchedulerManager:
             if self.scheduler.get_job(job_id):
                 self.scheduler.remove_job(job_id)
             return
-        job = self.scheduler.get_job(job_id)
 
 
     def _apply_audit_log_setting(self, setting: Any) -> None:
@@ -206,7 +204,6 @@ class TaskSchedulerManager:
             if self.scheduler.get_job(job_id):
                 self.scheduler.remove_job(job_id)
             return
-        job = self.scheduler.get_job(job_id)
 
 
 def run_drama_tasks() -> None:
@@ -274,10 +271,10 @@ def run_tmdb_cache_refresh() -> None:
             if only_linked:
                 # force=False：按各自的 expires_at 判断，没到期的剧不再重拉，
                 # 否则 6 小时一次的定时任务会把所有追剧任务无视 TTL 全部重刷一遍
-                result = refresh_linked_tasks(db, enabled_only=True, max_items=max_items, force=False, close_read_tx=True)
+                refresh_linked_tasks(db, enabled_only=True, max_items=max_items, force=False, close_read_tx=True)
             else:
-                result = refresh_expired_cache(db, max_items=max_items, force=True, close_read_tx=True)
-            deleted = purge_cold_cache(db, retention_days=retention_days)
+                refresh_expired_cache(db, max_items=max_items, force=True, close_read_tx=True)
+            purge_cold_cache(db, retention_days=retention_days)
             db.commit()
         except Exception as e:
             db.rollback()
@@ -437,7 +434,7 @@ def run_audit_log_cleanup() -> None:
             db.commit()
             db.refresh(setting)
             retention_days = int(getattr(setting, "retention_days", 30) or 30)
-            deleted = purge_old_audit_logs(db, retention_days=retention_days)
+            purge_old_audit_logs(db, retention_days=retention_days)
             db.commit()
         except Exception:
             db.rollback()

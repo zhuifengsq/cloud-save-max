@@ -3,6 +3,7 @@ import base64
 import json
 import os
 from pathlib import Path
+from typing import Any, Literal, TypedDict, overload
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -24,11 +25,25 @@ def public_config_keys(drive_type: str) -> frozenset[str]:
 
 
 class CredentialError(RuntimeError):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__('Credential protection unavailable or authentication failed')
 
 
-def load_keyring(*, required: bool = False) -> dict | None:
+class Keyring(TypedDict):
+    database_id: str
+    active_key_id: str
+    keys: dict[str, bytes]
+
+
+@overload
+def load_keyring(*, required: Literal[True]) -> Keyring: ...
+
+
+@overload
+def load_keyring(*, required: bool = False) -> Keyring | None: ...
+
+
+def load_keyring(*, required: bool = False) -> Keyring | None:
     path = os.getenv('CREDENTIAL_KEYRING_FILE', '')
     if not path:
         if required or os.getenv('CREDENTIAL_ENCRYPTION_REQUIRED') == '1':
@@ -41,16 +56,16 @@ def load_keyring(*, required: bool = False) -> dict | None:
         keys = {key: base64.b64decode(value, validate=True) for key, value in data['keys'].items()}
         if not keys or any(len(value) != 32 for value in keys.values()) or data['active_key_id'] not in keys:
             raise ValueError()
-        return dict(data, keys=keys)
+        return {'database_id': data['database_id'], 'active_key_id': data['active_key_id'], 'keys': keys}
     except Exception:
         raise CredentialError() from None
 
 
-def _aad(ring: dict, identity: str, drive: str) -> bytes:
+def _aad(ring: Keyring, identity: str, drive: str) -> bytes:
     return json.dumps([ring['database_id'], identity, drive, 1], separators=(',', ':')).encode()
 
 
-def seal(payload: dict, identity: str, drive: str) -> str:
+def seal(payload: dict[str, Any], identity: str, drive: str) -> str:
     ring = load_keyring(required=True)
     try:
         nonce = os.urandom(12)
@@ -62,7 +77,7 @@ def seal(payload: dict, identity: str, drive: str) -> str:
         raise CredentialError() from None
 
 
-def unseal(blob: str, identity: str, drive: str) -> dict:
+def unseal(blob: str, identity: str, drive: str) -> dict[str, Any]:
     ring = load_keyring(required=True)
     try:
         envelope = json.loads(blob)

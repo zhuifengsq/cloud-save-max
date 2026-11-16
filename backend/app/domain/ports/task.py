@@ -9,22 +9,25 @@ TaskExecutor）。触发方（HTTP / SSE / 调度器 / Telegram）只依赖本�
 """
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+
+from app.domain.task_run import (ExecutionLogPort, RecoveryCallback, RunPolicyPort,
+    RunTaskCommand, TaskExecutionState, TaskRunPlan, TaskRunResult)
 
 
 @runtime_checkable
 class TaskRunUseCasePort(Protocol):
     """Command/value-based application entry; callers never pass an ORM task row."""
 
-    def execute(self, command: Any, policy: Any, log: Any = None) -> Any:
+    def execute(self, command: RunTaskCommand, policy: RunPolicyPort, log: ExecutionLogPort | None = None) -> TaskRunResult:
         """Run staged execution and return an application result value."""
 
 
 class TaskRunStorePort(Protocol):
-    def prepare(self, command: Any) -> Any: ...
-    def save(self, plan: Any, result: Any) -> None: ...
-    def save_task(self, task: Any) -> None: ...
+    def prepare(self, command: RunTaskCommand) -> TaskRunPlan: ...
+    def save(self, plan: TaskRunPlan, result: TaskRunResult) -> None: ...
+    def save_task(self, task: TaskExecutionState) -> None: ...
 
 
 class TaskExecutionEnginePort(Protocol):
-    def execute(self, plan: Any, policy: Any, log: Any, recover: Any) -> Any: ...
+    def execute(self, plan: TaskRunPlan, policy: RunPolicyPort, log: ExecutionLogPort | None, recover: RecoveryCallback) -> TaskRunResult: ...

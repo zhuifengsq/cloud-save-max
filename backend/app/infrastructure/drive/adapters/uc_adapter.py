@@ -92,7 +92,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             response = requests.request(method, url, headers=headers, timeout=30, **kwargs)
             return response
         except Exception as e:
-            logger.error(f"[UC] 请求失败: {e}")
+            logger.error(f"[UC] 请求失败: {type(e).__name__}")
             fake_response = requests.Response()
             fake_response.status_code = 500
             fake_response._content = b'{"status": 500, "code": 1, "write_uncertain": true, "message": "request error"}'
@@ -103,7 +103,7 @@ class UCAdapter(BaseCloudDriveAdapter):
         try:
             return response.json()
         except Exception as e:
-            logger.warning(f"[UC] JSON解析失败: {e}")
+            logger.warning(f"[UC] JSON解析失败: {type(e).__name__}")
             return {"code": 1, "status": 500, "write_uncertain": True, "message": "响应解析失败"}
 
     def init(self) -> Any:
@@ -127,7 +127,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             if data.get("data"):
                 return data["data"]
         except Exception as e:
-            logger.error(f"[UC] 获取账户信息失败: {e}")
+            logger.error(f"[UC] 获取账户信息失败: {type(e).__name__}")
         
         return False
 
@@ -177,7 +177,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             if result.get("code") == 0 and result.get("data"):
                 return result
         except Exception as e:
-            logger.error(f"[UC] 获取会员信息失败: {e}")
+            logger.error(f"[UC] 获取会员信息失败: {type(e).__name__}")
 
         return {}
 
@@ -192,7 +192,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             result = self._safe_json(response)
             return result
         except Exception as e:
-            logger.error(f"[UC] 获取分享令牌失败: {e}")
+            logger.error(f"[UC] 获取分享令牌失败: {type(e).__name__}")
             return {"status": 500, "code": 1, "message": f"获取分享令牌失败: {e}"}
 
     def get_detail(
@@ -245,7 +245,7 @@ class UCAdapter(BaseCloudDriveAdapter):
                     break
                     
             except Exception as e:
-                logger.error(f"[UC] 获取分享详情失败: {e}")
+                logger.error(f"[UC] 获取分享详情失败: {type(e).__name__}")
                 return {"code": 1, "message": f"获取分享详情失败: {e}", "data": {"list": []}}
 
         # 保留完整的API响应（包含full_path等字段），仅替换合并后的文件列表
@@ -303,7 +303,7 @@ class UCAdapter(BaseCloudDriveAdapter):
                     break
                     
             except Exception as e:
-                logger.error(f"[UC] 列出目录失败: {e}")
+                logger.error(f"[UC] 列出目录失败: {type(e).__name__}")
                 return {"code": 1, "message": f"列出目录失败: {e}", "data": {"list": []}}
 
         return {
@@ -350,7 +350,7 @@ class UCAdapter(BaseCloudDriveAdapter):
                 return {"code": 1, "status": 400, "message": "UC网盘容量不足，请清理空间后重试", "data": {}}
             return result
         except Exception as e:
-            logger.error(f"[UC] 转存失败: {e}")
+            logger.error(f"[UC] 转存失败: {type(e).__name__}")
             return {"write_uncertain": True, "code": 1, "message": f"转存失败: {e}", "data": {}}
 
     def unarchive(self, fid: str, to_pdir_fid: str) -> Dict:
@@ -376,7 +376,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             response = self._send_request("POST", url, json=payload, params=params)
             return self._safe_json(response)
         except Exception as e:
-            logger.error(f"[UC] 解压失败: {e}")
+            logger.error(f"[UC] 解压失败: {type(e).__name__}")
             return {"status": 500, "code": 1, "message": f"解压失败: {e}", "data": {}}
 
     def query_task(self, task_id: str) -> Dict:
@@ -423,14 +423,11 @@ class UCAdapter(BaseCloudDriveAdapter):
                     return result
 
                 # 任务进行中
-                if retry_index == 0:
-                    task_title = result.get("data", {}).get("task_title", "任务")
-
                 retry_index += 1
                 time.sleep(0.5)
 
             except Exception as e:
-                logger.error(f"[UC] 查询任务失败: {e}")
+                logger.error(f"[UC] 查询任务失败: {type(e).__name__}")
                 return {"status": 500, "code": 1, "message": f"查询任务失败: {e}"}
         return result
 
@@ -450,7 +447,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             result = self._safe_json(response)
             return result
         except Exception as e:
-            logger.error(f"[UC] 创建目录失败: {e}")
+            logger.error(f"[UC] 创建目录失败: {type(e).__name__}")
             return {"code": 1, "message": f"创建目录失败: {e}"}
 
     def rename(self, fid: str, file_name: str) -> Dict:
@@ -464,7 +461,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             result = self._safe_json(response)
             return result
         except Exception as e:
-            logger.error(f"[UC] 重命名失败: {e}")
+            logger.error(f"[UC] 重命名失败: {type(e).__name__}")
             return {"code": 1, "message": f"重命名失败: {e}"}
 
     def delete(self, filelist: List[str]) -> Dict:
@@ -478,7 +475,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             result = self._safe_json(response)
             return result
         except Exception as e:
-            logger.error(f"[UC] 删除失败: {e}")
+            logger.error(f"[UC] 删除失败: {type(e).__name__}")
             return {"code": 1, "message": f"删除失败: {e}"}
 
     def move_file(self, filelist: List[str], to_pdir_fid: str) -> Dict:
@@ -496,7 +493,7 @@ class UCAdapter(BaseCloudDriveAdapter):
             result = self._safe_json(response)
             return result
         except Exception as e:
-            logger.error(f"[UC] 移动文件失败: {e}")
+            logger.error(f"[UC] 移动文件失败: {type(e).__name__}")
             return {"code": 1, "write_uncertain": True, "message": "移动结果待确认"}
 
     def move_files(self, fids: List[str], to_pdir_fid: str) -> Dict:
@@ -519,7 +516,7 @@ class UCAdapter(BaseCloudDriveAdapter):
                 logger.warning(f"[UC] 列出根目录失败: {root_list.get('message')}")
                 return None
         except Exception as e:
-            logger.warning(f"[UC] 列出根目录异常: {e}")
+            logger.warning(f"[UC] 列出根目录异常: {type(e).__name__}")
             return None
 
         # 未找到，创建文件夹
@@ -532,7 +529,7 @@ class UCAdapter(BaseCloudDriveAdapter):
                 logger.warning(f"[UC] 创建'来自：分享'文件夹失败: {mkdir_result.get('message')}")
                 return None
         except Exception as e:
-            logger.warning(f"[UC] 创建'来自：分享'文件夹异常: {e}")
+            logger.warning(f"[UC] 创建'来自：分享'文件夹异常: {type(e).__name__}")
             return None
 
     def move_files_to_target(self, fid_list: List[str], to_pdir_fid: str) -> Dict:
@@ -581,7 +578,7 @@ class UCAdapter(BaseCloudDriveAdapter):
                     break
                     
             except Exception as e:
-                logger.error(f"[UC] 获取目录ID失败: {e}")
+                logger.error(f"[UC] 获取目录ID失败: {type(e).__name__}")
                 break
 
         return fids

@@ -145,7 +145,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             response = requests.request(method, url, headers=headers, **kwargs)
             return response
         except Exception as e:
-            logger.exception("_send_request error: %s", e)
+            logger.warning('Quark request failed error_type=%s', type(e).__name__)
             fake_response = requests.Response()
             fake_response.status_code = 500
             fake_response._content = (
@@ -369,7 +369,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             }
             response = self._send_request("GET", url, params=querystring).json()
             if response["status"] != 200:
-                logger.warning("查询任务状态失败：%s", response)
+                logger.warning('Quark task status query failed')
                 return response
             if response["data"]["status"] == 2:
                 break
@@ -429,7 +429,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 fids += response["data"]
                 file_paths = file_paths[50:]
             else:
-                logger.warning("获取目录ID：失败, %s", response.get("message"))
+                logger.warning('Quark directory lookup failed')
                 break
             if len(file_paths) == 0:
                 break
@@ -552,7 +552,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             pwd_id, url_passcode, pdir_fid, paths = self.extract_url(shareurl)
         except Exception as exc:
-            logger.error("[Quark] 解析引流素材链接失败: %s", exc)
+            logger.error("[Quark] 解析引流素材链接失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"解析素材分享链接失败：{exc}")
         if not pwd_id:
             return self._lead_in_error(
@@ -576,7 +576,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             detail = self.get_detail(pwd_id, stoken, root_fid)
         except Exception as exc:
-            logger.error("[Quark] 读取引流素材分享列表失败: %s", exc)
+            logger.error("[Quark] 读取引流素材分享列表失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_MATERIAL_UNAVAILABLE", f"读取分享文件列表失败：{exc}")
         if not isinstance(detail, dict) or detail.get("code") not in (0, "0"):
             message = str((detail or {}).get("message") or "").strip() if isinstance(detail, dict) else ""
@@ -650,7 +650,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             response = self.get_stoken(pwd_id, passcode)
         except Exception as exc:
-            logger.error("[Quark] 获取引流素材分享令牌失败: %s", exc)
+            logger.error("[Quark] 获取引流素材分享令牌失败: %s", type(exc).__name__)
             return None, self._lead_in_error("LEAD_IN_FAILED", f"获取分享令牌失败：{exc}")
         if not isinstance(response, dict):
             return None, self._lead_in_error("LEAD_IN_FAILED", "获取分享令牌失败：网盘返回异常")
@@ -728,7 +728,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             try:
                 listing = self.ls_dir(fid, max_items=0)
             except Exception as exc:
-                logger.error("[Quark] 逐级定位引流目标目录失败: %s", exc)
+                logger.error("[Quark] 逐级定位引流目标目录失败: %s", type(exc).__name__)
                 return None, "", self._lead_in_error(
                     "LEAD_IN_FAILED", f"定位保存目录失败：{exc}"
                 )
@@ -779,7 +779,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             candidates = self.get_fids([path]) or []
         except Exception as exc:
-            logger.error("[Quark] 定位引流目标目录失败: %s", exc)
+            logger.error("[Quark] 定位引流目标目录失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"定位保存目录失败：{exc}")
         folder = None
         for item in candidates:
@@ -804,7 +804,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             listing = self.ls_dir(fid, max_items=0)
         except Exception as exc:
-            logger.error("[Quark] 读取引流目标目录失败: %s", exc)
+            logger.error("[Quark] 读取引流目标目录失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
         raw_items = None
         if isinstance(listing, dict):
@@ -853,7 +853,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             result = self.save_file([fid], [token], dir_fid, pwd_id, stoken)
         except Exception as exc:
-            logger.error("[Quark] 引流素材转存请求异常: %s", exc)
+            logger.error("[Quark] 引流素材转存请求异常: %s", type(exc).__name__)
             return self._lead_in_error(
                 "LEAD_IN_TIMEOUT",
                 f"转存请求异常，添加结果待确认：{exc}",
@@ -919,7 +919,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             response = self._lead_in_query_task_once(task_id)
         except Exception as exc:
-            logger.warning("[Quark] 查询引流转存任务失败: %s", exc)
+            logger.warning("[Quark] 查询引流转存任务失败: %s", type(exc).__name__)
             return "unknown", str(exc)
         if not isinstance(response, dict):
             return "unknown", ""
@@ -957,7 +957,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             try:
                 parents = self.get_fids([parent_path]) or []
             except Exception as exc:
-                logger.error("[Quark] 定位素材所在文件夹失败: %s", exc)
+                logger.error("[Quark] 定位素材所在文件夹失败: %s", type(exc).__name__)
                 return self._lead_in_error("LEAD_IN_FAILED", f"定位素材所在文件夹失败：{exc}")
             parent_item = None
             for item in parents:
@@ -977,7 +977,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             listing = self.ls_dir(parent_fid, max_items=2000)
         except Exception as exc:
-            logger.error("[Quark] 读取素材所在文件夹失败: %s", exc)
+            logger.error("[Quark] 读取素材所在文件夹失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"读取素材所在文件夹失败：{exc}")
         raw_items = None
         if isinstance(listing, dict):
@@ -1085,7 +1085,7 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 "POST", url, json=payload, params=querystring
             ).json()
         except Exception as exc:
-            logger.error("[Quark] 本账号素材复制请求异常: %s", exc)
+            logger.error("[Quark] 本账号素材复制请求异常: %s", type(exc).__name__)
             return self._lead_in_error(
                 "LEAD_IN_TIMEOUT", f"复制请求异常，添加结果待确认：{exc}"
             )

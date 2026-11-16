@@ -561,7 +561,7 @@ class DramaLeadInOwnFileTests(unittest.TestCase):
             cookie="x",
             config_json=json.dumps({"cookie": "x"}),
             enabled=True,
-            is_default=True,
+            is_default=False,
             runtime_status="active",
         )
         self.db.add(account)

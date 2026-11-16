@@ -116,7 +116,7 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
                 timeout=15,
             )
         except Exception as e:
-            logger.warning(f"[115] 访问分享页面失败: {e}")
+            logger.warning(f"[115] 访问分享页面失败: {type(e).__name__}")
         return share_session
 
     def _safe_json(self, response) -> Dict:
@@ -125,7 +125,7 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
             return response.json()
         except Exception as e:
             content = response.text[:200] if response.text else "(empty)"
-            logger.warning(f"[115] JSON解析失败: {e}, 响应: {content}")
+            logger.warning(f"[115] JSON解析失败: {type(e).__name__}, 响应: {content}")
             return {
                 "state": False,
                 "code": getattr(response, "status_code", 500),
@@ -161,7 +161,7 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
                 return data.get("data", {})
             return False
         except Exception as e:
-            logger.error(f"[115] get_account_info error: {e}")
+            logger.error(f"[115] get_account_info error: {type(e).__name__}")
             return False
 
     def get_account_config(self) -> Dict[str, Any]:
@@ -546,7 +546,7 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
                     if fid and fid not in before_items:
                         name_to_new_fid[fname] = fid
         except Exception as e:
-            logger.error(f"[115] 转存后获取目录失败: {e}")
+            logger.error(f"[115] 转存后获取目录失败: {type(e).__name__}")
 
         # --- 按 file_names 顺序组装 save_as_top_fids ---
         saved_fids = []

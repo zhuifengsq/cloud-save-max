@@ -702,7 +702,7 @@ class GuangyaAdapter(BaseCloudDriveAdapter):
     def _try_user_info(self) -> dict[str, Any] | None:
         try:
             payload = self._client.user_info()
-        except Exception as exc:
+        except Exception:
             return None
         if not _is_success(payload):
             return None
@@ -716,7 +716,7 @@ class GuangyaAdapter(BaseCloudDriveAdapter):
             refresh_payload = self._client._refresh_token(stale_token=self._client.token)
             if not _is_success(refresh_payload) and not self._client.token:
                 return None
-        except Exception as exc:
+        except Exception:
             return None
         return self._try_user_info()
 
@@ -726,7 +726,7 @@ class GuangyaAdapter(BaseCloudDriveAdapter):
             return False
         try:
             payload = self._client.fs_files(parent_id=None, page=0, page_size=1)
-        except Exception as exc:
+        except Exception:
             return False
         if _is_success(payload):
             return True

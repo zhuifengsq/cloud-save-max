@@ -365,7 +365,7 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
             try:
                 _global_config_saver(self.cookie)
             except Exception as e:
-                logger.warning(f"[cloud189] persist cookie failed: {e}")
+                logger.warning(f"[cloud189] persist cookie failed: {type(e).__name__}")
 
     def _parse_time_to_ts(self, v: Any) -> int:
         if v is None:
@@ -851,7 +851,7 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
             self._ensure_login()
             account_info = self._get_logined_infos() or {}
             size_info = self._get_user_size_info() or {}
-        except Exception as e:
+        except Exception:
             account_info = {}
             size_info = {}
         
@@ -918,7 +918,7 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
                     self.nickname = info.get("nickname") or self._account_name
                     return info
             except Exception as e:
-                logger.warning(f"[cloud189] cookie login failed: {e}")
+                logger.warning(f"[cloud189] cookie login failed: {type(e).__name__}")
 
         if not self._user_name or not self._password:
             return False
@@ -2045,11 +2045,6 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
         if target_folder_id:
             data["targetFolderId"] = str(target_folder_id)
         resp = self._request("POST", url, data=data, timeout=15, raise_status=False)
-        if self._debug:
-            try:
-                t = (resp.text or "").replace("\r", " ").replace("\n", " ").strip()
-            except Exception:
-                pass
         resp.raise_for_status()
         try:
             j = resp.json()
@@ -2070,11 +2065,6 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
         self._ensure_login()
         url = f"{self.HOST_URL}/api/open/batch/checkBatchTask.action"
         resp = self._request("POST", url, data={"type": task_type, "taskId": task_id}, timeout=15, raise_status=False)
-        if self._debug:
-            try:
-                t = (resp.text or "").replace("\r", " ").replace("\n", " ").strip()
-            except Exception:
-                pass
         resp.raise_for_status()
         j = resp.json()
         if not isinstance(j, dict):

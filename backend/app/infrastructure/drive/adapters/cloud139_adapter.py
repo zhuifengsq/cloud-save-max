@@ -319,7 +319,7 @@ class Cloud139Adapter(BaseCloudDriveAdapter):
         try:
             info = self._get_user_info()
         except Exception as exc:
-            logger.warning("[cloud139] init failed: %s", exc)
+            logger.warning("[cloud139] init failed: %s", type(exc).__name__)
             self.is_active = False
             return False
         self.is_active = True

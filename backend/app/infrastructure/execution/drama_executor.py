@@ -24,6 +24,7 @@ from app.infrastructure.drive.gateway import gateway_for_adapter
 from app.core.errors import bad_request
 from app.core.settings import settings
 from app.infrastructure.execution.execution_log import ExecutionLog
+from app.domain.task_run import ExecutionLogPort
 from app.infrastructure.execution.magic_rename import MagicRename
 from app.infrastructure.execution.retry_utils import RetryResult, retry_call, summarize_payload
 
@@ -77,7 +78,7 @@ def _validate_code_status(action: str, resp: Any) -> RetryResult:
 
 
 class DramaTaskExecutor:
-    def __init__(self, *, adapter: Any, task_data: dict[str, Any], log: ExecutionLog | None = None):
+    def __init__(self, *, adapter: Any, task_data: dict[str, Any], log: ExecutionLogPort | None = None):
         self.adapter = adapter
         self.task_data = task_data
         self.log = log

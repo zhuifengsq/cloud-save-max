@@ -38,6 +38,16 @@ class RemoteEntry(Protocol):
     size: int
 
 
+class ShareCheckAdapterPort(Protocol):
+    @property
+    def DRIVE_TYPE(self) -> str: ...
+    def ensure_initialized(self, *, ttl_seconds: float) -> bool: ...
+
+
+class ShareCheckAccountManagerPort(Protocol):
+    def get_adapter_for_task(self, task: dict[str, Any], *, allow_inactive: bool = False) -> ShareCheckAdapterPort | None: ...
+
+
 @runtime_checkable
 class DriveGatewayPort(Protocol):
     """能力最小集：列目录、建目录、转存、校验分享、关闭。"""

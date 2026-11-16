@@ -217,13 +217,12 @@ class Pan123Adapter(BaseCloudDriveAdapter):
             return {"type": type(resp).__name__}
         if "code" in resp:
             code = resp.get("code")
-            msg = resp.get("message")
             data = resp.get("data") or {}
         else:
             code = resp.get("info", {}).get("code")
-            msg = resp.get("info", {}).get("message")
             data = resp.get("info", {}).get("data") or {}
-        summary: Dict[str, Any] = {"code": code, "message": msg}
+        # Provider messages can echo credentials even without recognizable keys.
+        summary: Dict[str, Any] = {"code": code}
         if isinstance(data, dict):
             if "InfoList" in data and isinstance(data.get("InfoList"), list):
                 summary["InfoList_len"] = len(data.get("InfoList") or [])
@@ -331,8 +330,8 @@ class Pan123Adapter(BaseCloudDriveAdapter):
             return data
         except Exception as e:
             cost_ms = int((time.time() - start) * 1000)
-            logger.warning(f"[123pan] api error: {method} {url} cost={cost_ms}ms err={e}")
-            return {"code": 500, "message": f"请求失败: {e}", "data": None}
+            logger.warning(f"[123pan] api error: {method} {url} cost={cost_ms}ms err={type(e).__name__}")
+            return {"code": 500, "message": "网络请求失败，请稍后重试", "data": None}
 
     def _share_request(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None) -> Dict:
         url = f"{self._share_base}{path}"
@@ -352,8 +351,8 @@ class Pan123Adapter(BaseCloudDriveAdapter):
             return data
         except Exception as e:
             cost_ms = int((time.time() - start) * 1000)
-            logger.warning(f"[123pan] share error: {method} {url} cost={cost_ms}ms err={e}")
-            return {"info": {"code": 500, "message": f"请求失败: {e}", "data": None}}
+            logger.warning(f"[123pan] share error: {method} {url} cost={cost_ms}ms err={type(e).__name__}")
+            return {"info": {"code": 500, "message": "网络请求失败，请稍后重试", "data": None}}
 
     def _save_cookie_string(self):
         global _global_config_saver
@@ -363,11 +362,11 @@ class Pan123Adapter(BaseCloudDriveAdapter):
             return
         cookie_str = self._format_cookie_string()
         try:
-            updated = _global_config_saver(cookie_str, self._account_name)
+            _global_config_saver(cookie_str, self._account_name)
             if self._debug:
                 pass
         except Exception as e:
-            logger.warning(f"[123pan] persist cookie to db failed: account={self._account_name} err={e}")
+            logger.warning(f"[123pan] persist cookie to db failed: account={self._account_name} err={type(e).__name__}")
 
     def _format_cookie_string(self) -> str:
         parts: List[str] = []

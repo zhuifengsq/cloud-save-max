@@ -504,7 +504,7 @@ class DramaLeadInOwnDirE2ETests(unittest.TestCase):
             cookie="mock-cookie",
             config_json=json.dumps({"cookie": "mock-cookie"}),
             enabled=True,
-            is_default=True,
+            is_default=False,
             runtime_status="active",
         )
         self.db.add(account)

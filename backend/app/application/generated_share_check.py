@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from typing import Any
+from app.domain.ports.drive import ShareCheckAccountManagerPort
 
 from sqlalchemy.orm import Session
 
@@ -58,7 +60,7 @@ def _failure(adapter, response: dict, fallback: str) -> tuple[str, str]:
     return _map_kind(verdict.get("kind"), verdict.get("message"), fallback)
 
 
-def _probe(record: dict, manager) -> tuple[str, str]:
+def _probe(record: dict[str, Any], manager: ShareCheckAccountManagerPort) -> tuple[str, str]:
     """探测生成的分享链接（走 DriveGatewayPort，业务文案留在本层）。"""
     url = str(record["share_url"]).strip()
     drive_type = AdapterRegistry.detect_drive_type(url)
@@ -101,7 +103,7 @@ def prepare_generated_share_check(db: Session, task) -> dict | None:
             "task_id": task.id}
 
 
-def probe_generated_share_check(plan, manager, *, always_notify=False):
+def probe_generated_share_check(plan: dict[str, Any] | None, manager: ShareCheckAccountManagerPort, *, always_notify: bool = False) -> dict[str, Any] | None:
     if plan is None:
         return None
     last_definitive = plan["last_definitive"]

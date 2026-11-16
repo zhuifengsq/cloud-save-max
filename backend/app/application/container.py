@@ -14,6 +14,10 @@ from typing import Any
 from threading import Lock
 from app.application.login_failure_audit import LoginFailureAudit
 from app.domain.ports.share_preview import PreviewRenamerPort, SharePreviewReaderPort
+from app.domain.ports.task import TaskRunStorePort, TaskExecutionEnginePort
+from app.domain.ports.notify import NotifierPort
+from app.core.drive_auth import DriveAuthRequired
+from app.application.drive_account_types import AccountAdapterFactory, AccountRegistry, AccountRepository
 from sqlalchemy.orm import Session
 
 
@@ -158,7 +162,7 @@ def tmdb_settings_repo() -> ModuleType:
     return tmdb_settings
 
 
-def drive_accounts_repo() -> ModuleType:
+def drive_accounts_repo() -> AccountRepository:
     """网盘账号仓储。"""
     from app.infrastructure.persistence.repositories import drive_accounts
 
@@ -224,7 +228,6 @@ def clock():
 @contextmanager
 def db_session():
     """显式开启一个会话（供确需自管会话的服务/扩展边界使用，单进程无 DI）。"""
-    from app.infrastructure.persistence.session import SessionLocal
 
     session = SessionLocal()
     try:
@@ -240,7 +243,7 @@ def tmdb_media_cache_repo() -> ModuleType:
     return tmdb_media_cache
 
 
-def adapter_registry():
+def adapter_registry() -> AccountRegistry:
     """适配器注册表（网盘类型探测 + 适配器类注册），实现位于 infrastructure。
 
     业务层只经过本函数拿注册表，避免application顶层import infrastructure（§10.3 决策 4）。
@@ -264,7 +267,7 @@ def drive_gateway(adapter: Any, *, drive_type: str | None = None):
 # infrastructure 实现的装配出口（S5：presentation/application 不再顶层 import 实现）
 # 调用方约定：在需要的地方写成 `from app.application.container import adapter_factory as _f;
 # AdapterFactory = _f()`，保持原有名字与调用写法不变。返回的都是无状态类或单例，单进程内安全。
-def adapter_factory():
+def adapter_factory() -> AccountAdapterFactory:
     from app.infrastructure.drive.factory import AdapterFactory
 
     return AdapterFactory
@@ -282,7 +285,7 @@ def aliyun_adapter_cls():
     return AliyunAdapter
 
 
-def drive_auth_required():
+def drive_auth_required() -> type[DriveAuthRequired]:
     from app.infrastructure.drive.adapters.drive_auth import DriveAuthRequired
 
     return DriveAuthRequired
@@ -398,17 +401,17 @@ def lead_in_provider():
     return LeadInProvider()
 
 
-def task_run_store(db):
+def task_run_store(db: Session) -> TaskRunStorePort:
     from app.infrastructure.execution.task_run_stages import SqlTaskRunStore
     return SqlTaskRunStore(db)
 
 
-def task_execution_engine():
+def task_execution_engine() -> TaskExecutionEnginePort:
     from app.infrastructure.execution.task_run_stages import PreparedTaskEngine
     return PreparedTaskEngine()
 
 
-def task_run_notifier(db):
+def task_run_notifier(db: Session) -> NotifierPort:
     from app.infrastructure.execution.task_run_notifier import TaskRunNotifier
     return TaskRunNotifier(db)
 

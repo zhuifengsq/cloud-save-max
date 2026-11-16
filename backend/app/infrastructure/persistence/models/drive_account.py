@@ -3,9 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 import json
 from uuid import uuid4
+from collections.abc import Iterable
+from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func, event
-from sqlalchemy.orm import Mapped, mapped_column, attributes, Session
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, func, event
+from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Mapped, Mapper, InstanceState, ORMExecuteState, mapped_column, attributes, Session
+from sqlalchemy.orm.attributes import InstrumentedAttribute
 from sqlalchemy.ext.hybrid import hybrid_property
 from app.core.credential_crypto import CredentialError, load_keyring, public_config_keys, seal, unseal
 from app.core.account_privacy import SAFE_ACCOUNT_ERROR, sanitize_profile_json
@@ -31,14 +35,24 @@ class DriveAccount(Base):
     capacity_warning_threshold: Mapped[int] = mapped_column(Integer, nullable=False, server_default="85")
     runtime_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    profile_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     probe_fail_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     __mapper_args__ = {'version_id_col': row_version}
+    __table_args__ = (
+        Index('uq_drive_accounts_single_default', is_default, unique=True,
+              sqlite_where=is_default.is_(True), postgresql_where=is_default.is_(True)),
+    )
 
-    def _secrets(self) -> dict:
+    def set_credentials(self, *, cookie: str, config_json: str | None) -> None:
+        """Typed write boundary; retain hybrid setters for existing ORM callers."""
+        self.cookie = cookie
+        self.config_json = config_json
+
+    def _secrets(self) -> dict[str, Any]:
         if self.credential_version not in (None, 0, 1):
             raise CredentialError()
         if self.credential_version == 1:
@@ -52,22 +66,26 @@ class DriveAccount(Base):
     @hybrid_property
     def cookie(self) -> str:
         if '_pending_cookie' in self.__dict__:
-            return self.__dict__['_pending_cookie']
-        return self._secrets()['cookie']
+            pending: str = self.__dict__['_pending_cookie']
+            return pending
+        cookie: str = self._secrets()['cookie']
+        return cookie
 
-    @cookie.setter
-    def cookie(self, value: str) -> None:
+    @cookie.inplace.setter
+    def _set_cookie(self, value: str) -> None:
         self.__dict__['_pending_cookie'] = value
         attributes.flag_dirty(self)
 
-    @cookie.expression
-    def cookie(cls):
+    @cookie.inplace.expression
+    @classmethod
+    def _cookie_expression(cls) -> InstrumentedAttribute[str]:
         return cls._stored_cookie
 
     @hybrid_property
     def config_json(self) -> str | None:
         if '_pending_config' in self.__dict__:
-            return self.__dict__['_pending_config']
+            pending: str | None = self.__dict__['_pending_config']
+            return pending
         if self.credential_version == 1:
             secrets = self._secrets()
             if not secrets.get('config_present', True):
@@ -76,19 +94,20 @@ class DriveAccount(Base):
         self._secrets()  # validate version/blob before any legacy fallback
         return self._stored_config_json
 
-    @config_json.setter
-    def config_json(self, value: str | None) -> None:
+    @config_json.inplace.setter
+    def _set_config_json(self, value: str | None) -> None:
         self.__dict__['_pending_config'] = value
         attributes.flag_dirty(self)
 
-    @config_json.expression
-    def config_json(cls):
+    @config_json.inplace.expression
+    @classmethod
+    def _config_json_expression(cls) -> InstrumentedAttribute[str | None]:
         return cls._stored_config_json
 
 
 @event.listens_for(DriveAccount, 'before_insert')
 @event.listens_for(DriveAccount, 'before_update')
-def _protect_credentials(mapper, connection, account):
+def _protect_credentials(mapper: Mapper[DriveAccount], connection: Connection, account: DriveAccount) -> None:
     # Profiles and exception text must never become a plaintext credential side channel.
     account.profile_json = sanitize_profile_json(account.profile_json)
     account.last_error = SAFE_ACCOUNT_ERROR if account.last_error else None
@@ -112,14 +131,15 @@ def _protect_credentials(mapper, connection, account):
     account.__dict__.pop('_pending_config', None)
 
 
-@event.listens_for(DriveAccount, 'expire')
-def _discard_pending_credentials(account, names):
-    account.__dict__.pop('_pending_cookie', None)
-    account.__dict__.pop('_pending_config', None)
+@event.listens_for(DriveAccount, 'expire', raw=True)
+def _discard_pending_credentials(state: InstanceState[DriveAccount], names: Iterable[str] | None) -> None:
+    # During rollback the instance itself may already have been garbage collected.
+    state.dict.pop('_pending_cookie', None)
+    state.dict.pop('_pending_config', None)
 
 
 @event.listens_for(Session, 'do_orm_execute')
-def _reject_account_bulk_writes(execute_state):
+def _reject_account_bulk_writes(execute_state: ORMExecuteState) -> None:
     # Bulk ORM writes bypass mapper privacy hooks and version checks, even for v0.
     if ((execute_state.is_update or execute_state.is_delete) and execute_state.bind_mapper is not None
             and execute_state.bind_mapper.class_ is DriveAccount):

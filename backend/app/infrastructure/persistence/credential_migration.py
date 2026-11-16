@@ -1,11 +1,12 @@
 """Explicit offline migration; caller owns backup, transaction and lifecycle."""
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 from app.core.credential_crypto import load_keyring
 from app.core.account_privacy import SAFE_ACCOUNT_ERROR, sanitize_profile_json
 from app.infrastructure.persistence.models.drive_account import DriveAccount
 
 
-def migrate_credentials(db, *, rotate: bool = False) -> int:
+def migrate_credentials(db: Session, *, rotate: bool = False) -> int:
     load_keyring(required=True)
     changed = 0
     for account in db.scalars(select(DriveAccount)):

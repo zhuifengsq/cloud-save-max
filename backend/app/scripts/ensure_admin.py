@@ -92,15 +92,13 @@ def ensure_admin(
 def main() -> None:
     setup_logging()
     args = parse_args()
-    created, password_reset = ensure_admin(
+    ensure_admin(
         username=args.username,
         email=args.email,
         password=args.password,
         reset_password=args.reset_password,
         activate=args.activate,
     )
-    action = "已创建" if created else "已修复"
-    reset_info = "，并重置密码" if password_reset else ""
 
 
 if __name__ == "__main__":

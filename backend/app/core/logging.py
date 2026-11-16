@@ -4,10 +4,42 @@ import logging
 import logging.config
 import os
 import sys
+import copy
+import traceback
+from types import TracebackType
 from typing import Any
+from app.core.log_redaction import redact_log_text
 
 
 _configured = False
+
+
+def _safe_argument(value: object) -> object:
+    if isinstance(value, BaseException):
+        return type(value).__name__
+    return value
+
+
+class SafeFormatter(logging.Formatter):
+    def formatException(self, ei: tuple[type[BaseException], BaseException, TracebackType | None] | tuple[None, None, None]) -> str:
+        # Keep stack locations and exception type; exception text and source lines
+        # can contain opaque cookies which cannot be reliably recognized by regex.
+        if ei[0] is None:
+            return ''
+        frames = traceback.extract_tb(ei[2])
+        lines = [f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}' for frame in frames]
+        return '\n'.join(['Traceback (most recent call last):', *lines, ei[0].__name__])
+
+    def format(self, record: logging.LogRecord) -> str:
+        safe = copy.copy(record)
+        if isinstance(safe.msg, BaseException):
+            safe.msg = type(safe.msg).__name__
+        if isinstance(safe.args, tuple):
+            safe.args = tuple(_safe_argument(value) for value in safe.args)
+        elif isinstance(safe.args, dict):
+            safe.args = {key: _safe_argument(value) for key, value in safe.args.items()}
+        safe.exc_text = None
+        return redact_log_text(super().format(safe))
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -38,6 +70,7 @@ def setup_logging(*, force: bool = False) -> None:
         "disable_existing_loggers": False,
         "formatters": {
             "default": {
+                "()": SafeFormatter,
                 "format": "%(asctime)s %(levelname)-5s [%(name)s] %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             }

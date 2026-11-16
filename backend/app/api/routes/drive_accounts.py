@@ -26,6 +26,7 @@ from app.application.drive_accounts import (
     refresh_drive_account_profiles,
     serialize_drive_account,
     sign_in_drive_account,
+    prepare_drive_account_auth,
     set_default_drive_account,
     set_drive_account_enabled,
     supported_drive_types,
@@ -202,20 +203,23 @@ def post_account_auth_qrcode_start(request: Request, account_id: int, current: C
         raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "驱动账号不存在")
     if account.drive_type != "aliyun":
         raise bad_request("DRIVE_ACCOUNT_AUTH_UNSUPPORTED", "当前账号不支持扫码认证")
+    account_identity, drive_type = account.id, account.drive_type
+    row_version = prepare_drive_account_auth(db, account_identity)
     resp = AliyunAdapter.generate_qrcode()
     if not isinstance(resp, dict) or not resp.get("success"):
         raise bad_request("DRIVE_ACCOUNT_AUTH_FAILED", "生成二维码失败", detail=str((resp or {}).get("message") or ""))
     data = resp.get("data") or {}
     session = create_auth_session(
-        account_id=account.id,
-        drive_type=account.drive_type,
+        account_id=account_identity,
+        drive_type=drive_type,
         method="qrcode",
         adapter={"t": data.get("t") or "", "ck": data.get("ck") or ""},
         payload={"qrcode_url": data.get("qrCodeUrl") or "", "status": "NEW"},
+        row_version=row_version,
     )
     with transaction(db):
         audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_start', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
-    return {"account_id": account.id, "drive_type": account.drive_type, "method": "qrcode", "session_id": session.session_id, "payload": session.payload}
+    return {"account_id": account_identity, "drive_type": drive_type, "method": "qrcode", "session_id": session.session_id, "payload": session.payload}
 
 
 @router.post('/auth/{session_id}/qrcode/poll', response_model=DriveAccountOut, dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])
@@ -228,19 +232,15 @@ def post_account_auth_qrcode_poll(request: Request, session_id: str, current: Cu
     meta = session.adapter or {}
     t = str(meta.get("t") or "")
     ck = str(meta.get("ck") or "")
+    row_version = prepare_drive_account_auth(db, session.account_id, session.row_version)
     resp = AliyunAdapter.query_qrcode_status(t, ck)
     if not isinstance(resp, dict) or not resp.get("success"):
         raise bad_request("DRIVE_ACCOUNT_AUTH_FAILED", "查询二维码状态失败", detail=str((resp or {}).get("message") or ""))
     data = resp.get("data") or {}
     if str(data.get("status") or "") == "CONFIRMED" and str(data.get("refresh_token") or ""):
         delete_auth_session(session_id)
-        account = drive_accounts_repo().get_account(db, session.account_id)
-        if account is None:
-            raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "驱动账号不存在")
-        config = AdapterRegistry.parse_config_json(account.drive_type, account.config_json, account.cookie)
-        config["refresh_token"] = str(data.get("refresh_token") or "")
-        update_drive_account(db, account.id, config=config)
-        account = probe_drive_account(db, account.id)
+        account = probe_drive_account(db, session.account_id,
+            config={'refresh_token': str(data.get('refresh_token') or '')}, expected_version=row_version)
         with transaction(db):
             audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_qrcode_confirm', target_type='drive_account', target_id=str(account.id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
         db.refresh(account)
@@ -273,6 +273,7 @@ def post_account_auth_captcha_submit(request: Request, session_id: str, payload:
     if session.method != "captcha":
         raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
     adapter = session.adapter
+    row_version = prepare_drive_account_auth(db, session.account_id, session.row_version)
     try:
         adapter.submit_captcha(payload.code)
     except DriveAuthRequired as exc:
@@ -283,6 +284,7 @@ def post_account_auth_captcha_submit(request: Request, session_id: str, payload:
             method=exc.method,
             adapter=exc.adapter or adapter,
             payload=exc.payload,
+            row_version=row_version,
         )
         raise ApiError(
             code="DRIVE_ACCOUNT_AUTH_REQUIRED",
@@ -300,8 +302,7 @@ def post_account_auth_captcha_submit(request: Request, session_id: str, payload:
             ),
         )
     delete_auth_session(session_id)
-    update_drive_account(db, session.account_id, config=adapter.export_runtime_config())
-    account = probe_drive_account(db, session.account_id)
+    account = probe_drive_account(db, session.account_id, config=adapter.export_runtime_config(), expected_version=row_version)
     with transaction(db):
         audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_captcha', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(account)
@@ -316,6 +317,7 @@ def post_account_auth_sms_send(request: Request, session_id: str, current: Curre
     if session.method != "sms":
         raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
     adapter = session.adapter
+    prepare_drive_account_auth(db, session.account_id, session.row_version)
     result = adapter.send_sms()
     with transaction(db):
         audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_sms_send', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
@@ -330,36 +332,11 @@ def post_account_auth_sms_submit(request: Request, session_id: str, payload: Dri
     if session.method != "sms":
         raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
     adapter = session.adapter
+    row_version = prepare_drive_account_auth(db, session.account_id, session.row_version)
     adapter.submit_sms(payload.code)
     delete_auth_session(session_id)
     config_snapshot = adapter.export_runtime_config()
-    update_drive_account(db, session.account_id, config=config_snapshot)
-    try:
-        account = probe_drive_account(db, session.account_id)
-    except ApiError as exc:
-        # 光鸭当前账号信息接口不稳定，短信登录成功后可能在二次 probe 时误判为仍需短信认证。
-        if exc.code != "DRIVE_ACCOUNT_AUTH_REQUIRED" or str(session.drive_type or "") != "guangya":
-            raise
-        account = drive_accounts_repo().get_account(db, session.account_id)
-        if account is None:
-            raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "驱动账号不存在")
-        nickname = str(getattr(adapter, "nickname", "") or config_snapshot.get("phone_number") or account.name or "").strip()
-        username = str(config_snapshot.get("phone_number") or nickname).strip()
-        account.runtime_status = "active"
-        account.last_error = None
-        account.probe_fail_count = 0
-        account.profile_json = json.dumps(
-            {
-                "drive_type": str(session.drive_type or ""),
-                "drive_name": str(getattr(adapter, "DRIVE_NAME", session.drive_type) or session.drive_type or ""),
-                "nickname": nickname,
-                "username": username,
-                "used_space": None,
-                "total_space": None,
-                "raw": {"auth_completed": True, "probe_fallback": True},
-            },
-            ensure_ascii=False,
-        )
+    account = probe_drive_account(db, session.account_id, config=config_snapshot, auth_completed=True, expected_version=row_version)
     with transaction(db):
         audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.auth_sms_submit', target_type='drive_account', target_id=str(session.account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
     db.refresh(account)

@@ -2,9 +2,39 @@
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["F6", "F7", "F82"]
+select = ["F6", "F7", "F8"]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["app/domain/ports", "app/application/login_throttle.py", "app/application/login_failure_audit.py", "app/application/share_preview_plan.py", "app/application/drive_payload.py", "app/scripts/container_entrypoint.py"]
+files = [
+    "app/domain/ports",
+    "app/application/login_throttle.py",
+    "app/application/login_failure_audit.py",
+    "app/application/share_preview_plan.py",
+    "app/application/drive_payload.py",
+    "app/scripts/container_entrypoint.py",
+    "app/core/logging.py",
+    "app/core/log_redaction.py",
+    "app/core/account_privacy.py",
+    "app/core/credential_crypto.py",
+    "app/api/login_body_limit.py",
+    "app/application/drive_account_operation.py",
+    "app/application/drive_account_types.py",
+    "app/application/drive_accounts.py",
+    "app/core/drive_auth.py",
+    "app/infrastructure/persistence/models/drive_account.py",
+    "app/infrastructure/persistence/repositories/drive_accounts.py",
+    "app/infrastructure/persistence/session.py",
+    "app/infrastructure/persistence/credential_migration.py",
+    "app/domain/task_run.py",
+    "app/application/dto/task_run.py",
+    "app/application/use_cases/run_task.py",
+    "app/infrastructure/execution/task_executor.py",
+    "app/infrastructure/execution/task_run_stages.py",
+    "app/infrastructure/execution/execution_log.py",
+    "type_checks/runtime_bindings.py",
+]
 strict = true
+# Imported legacy modules are analyzed for their interfaces; diagnostics remain
+# mandatory for every explicit target above. No target uses ignore_errors/skip.
+follow_imports = "silent"

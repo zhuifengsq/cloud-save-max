@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import logging
 import time
 from app.application.dto.task_run import RunTaskCommand, TaskRunResult
+from app.domain.task_run import ExecutionLogPort, RunPolicyPort, TaskExecutionState
 from app.core.runtime.tx import end_read_tx
 from app.core.errors import ApiError
 from app.domain.ports.task import TaskRunStorePort, TaskExecutionEnginePort
@@ -65,19 +66,19 @@ _TRIGGER_POLICIES: dict[str, RunPolicy] = {
 class RunTaskUseCase:
     """Own run/recovery persistence, audit and post-commit notification decisions."""
 
-    def __init__(self, db: Session, *, store: TaskRunStorePort | None = None, engine: TaskExecutionEnginePort | None = None, notifier: NotifierPort | None = None):
+    def __init__(self, db: Session, *, store: TaskRunStorePort | None = None, engine: TaskExecutionEnginePort | None = None, notifier: NotifierPort | None = None) -> None:
         self.db = db
         from app.application.container import task_run_store, task_execution_engine, task_run_notifier
         self.store = store if store is not None else task_run_store(db)
         self.engine = engine if engine is not None else task_execution_engine()
         self.notifier = notifier if notifier is not None else task_run_notifier(db)
 
-    def _release_read(self):
+    def _release_read(self) -> None:
         if self.db.new or self.db.dirty or self.db.deleted:
             raise RuntimeError('Execution read phase contains uncommitted writes')
         end_read_tx(self.db)
 
-    def execute(self, command: RunTaskCommand, policy: RunPolicy, log=None) -> TaskRunResult:
+    def execute(self, command: RunTaskCommand, policy: RunPolicyPort, log: ExecutionLogPort | None = None) -> TaskRunResult:
         plan = self.store.prepare(command)
         self._release_read()
         result = self.engine.execute(plan, policy, log,
@@ -104,7 +105,7 @@ class RunTaskUseCase:
                     logger.warning('Final notification failed task_id=%s error_type=%s', command.task_id, type(exc).__name__)
         return result
 
-    def _recover(self, task, log, tried, policy):
+    def _recover(self, task: TaskExecutionState, log: ExecutionLogPort, tried: set[str] | None, policy: RunPolicyPort) -> bool:
         from app.application.drama_share_autoupdate import resolve_drama_shareurl_update, is_auto_update_task
         from app.application.shareurl_update_logs import append_shareurl_update_log
         if not is_auto_update_task(self.db, task):

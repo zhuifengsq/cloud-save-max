@@ -233,7 +233,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             )
             return resp
         except Exception as e:
-            logger.error(f"[Baidu] HTTP 请求失败: {e}")
+            logger.error(f"[Baidu] HTTP 请求失败: {type(e).__name__}")
             raise
 
     def _check_response(self, info: Dict) -> Dict:
@@ -310,7 +310,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             )
             return resp.json()
         except Exception as e:
-            logger.error(f"[Baidu] 获取用户信息失败: {e}")
+            logger.error(f"[Baidu] 获取用户信息失败: {type(e).__name__}")
             return {}
 
     def init(self) -> Any:
@@ -337,7 +337,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                     "nickname": self.nickname,
                 }
         except Exception as e:
-            logger.error(f"[Baidu] 初始化失败: {e}")
+            logger.error(f"[Baidu] 初始化失败: {type(e).__name__}")
 
         return False
 
@@ -590,7 +590,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 try:
                     info = self._api_list(current_dir)
                     items = info.get("list", [])
-                except Exception as e:
+                except Exception:
                     continue
 
                 for item in items:
@@ -826,7 +826,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 try:
                     info = self._api_list_shared_paths(current_path, uk, share_id)
                     items = info.get("list", [])
-                except Exception as e:
+                except Exception:
                     continue
 
                 for item in items:
@@ -888,7 +888,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             )
             return path_str if path_str else "/"
         except Exception as e:
-            logger.error(f"[Baidu] _resolve_share_fid_to_path 失败: {e}")
+            logger.error(f"[Baidu] _resolve_share_fid_to_path 失败: {type(e).__name__}")
             return "/"
 
     def _resolve_share_path(
@@ -928,7 +928,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             )
             return breadcrumb
         except Exception as e:
-            logger.error(f"[Baidu] _resolve_share_path 失败: {e}")
+            logger.error(f"[Baidu] _resolve_share_path 失败: {type(e).__name__}")
             return []
 
     # ==================== 公共接口实现 ====================
@@ -1079,7 +1079,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             }
 
         except Exception as e:
-            logger.error(f"[Baidu] 获取分享详情失败: {e}")
+            logger.error(f"[Baidu] 获取分享详情失败: {type(e).__name__}")
             return {"code": 1, "message": f"获取分享详情失败: {e}", "data": {"list": []}}
 
     def _convert_shared_item(self, item: Dict) -> Dict:
@@ -1150,7 +1150,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             }
 
         except Exception as e:
-            logger.error(f"[Baidu] 列出目录失败: {e}")
+            logger.error(f"[Baidu] 列出目录失败: {type(e).__name__}")
             return {"code": 1, "message": f"列出目录失败: {e}", "data": {"list": []}}
 
     def _confirm_saved_file_ids(self, remote_dir, before_items, file_names, expected_count):
@@ -1193,7 +1193,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                     logger.info('[Baidu] 转存后核对完成: %s 个文件，%s 次目录读取', expected_count, attempt + 1)
                     return saved_fids
             except Exception as exc:
-                logger.debug('[Baidu] 转存后目录核对暂时失败: %s', exc)
+                logger.debug('[Baidu] 转存后目录核对暂时失败: %s', type(exc).__name__)
         logger.warning('[Baidu] 转存后核对未完成，保留待确认: 已关联 %s/%s 个文件',
                        len({fid for fid in saved_fids if fid}), expected_count)
         return saved_fids
@@ -1241,7 +1241,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             try:
                 before_dir = self.ls_dir_complete(remote_dir)
             except Exception as exc:
-                logger.warning('[Baidu] 转存前完整读取目录失败: %s', exc)
+                logger.warning('[Baidu] 转存前完整读取目录失败: %s', type(exc).__name__)
                 return {"code": 1, "message": "转存前无法完整读取目标目录，未提交转存", "data": {}}
             if before_dir.get('code') != 0:
                 return {"code": 1, "message": "转存前无法完整读取目标目录，未提交转存", "data": {}}
@@ -1359,7 +1359,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             return {"code": 0, "message": "success"}
 
         except Exception as e:
-            logger.error(f"[Baidu] 重命名失败: {e}")
+            logger.error(f"[Baidu] 重命名失败: {type(e).__name__}")
             return {"code": 1, "message": f"重命名失败: {e}"}
 
     def delete(self, filelist: List[str]) -> Dict:
@@ -1387,7 +1387,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             return {"code": 0, "message": "success"}
 
         except Exception as e:
-            logger.error(f"[Baidu] 删除失败: {e}")
+            logger.error(f"[Baidu] 删除失败: {type(e).__name__}")
             return {"code": 1, "message": f"删除失败: {e}"}
 
     def get_fids(self, file_paths: List[str]) -> List[Dict]:
@@ -1451,7 +1451,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 self._api_access_shared(share_page_url, passcode)
                 shared_data = self._api_shared_paths(share_page_url)
             except Exception as exc:  # 网络抖动/页面结构变化都不能当成「链接失效」
-                logger.warning("[Baidu] 分享创建后自检读取失败（第%s次）：%s", attempt, exc)
+                logger.warning("[Baidu] 分享创建后自检读取失败（第%s次）：%s", attempt, type(exc).__name__)
                 shared_data = None
                 message = str(exc) or type(exc).__name__
 
@@ -1615,7 +1615,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             pwd_id, url_passcode, pdir_fid, _paths = self.extract_url(shareurl)
         except Exception as exc:
-            logger.error("[Baidu] 解析引流素材链接失败: %s", exc)
+            logger.error("[Baidu] 解析引流素材链接失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"解析素材分享链接失败：{exc}")
         if not pwd_id:
             return self._lead_in_error(
@@ -1626,7 +1626,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             token_response = self.get_stoken(pwd_id, use_passcode, check_errno=True)
         except Exception as exc:
-            logger.error("[Baidu] 获取引流素材分享令牌失败: %s", exc)
+            logger.error("[Baidu] 获取引流素材分享令牌失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"获取分享令牌失败：{exc}")
         if not isinstance(token_response, dict) or token_response.get("status") != 200:
             return self._lead_in_baidu_stoken_error(token_response, use_passcode)
@@ -1637,7 +1637,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             detail = self.get_detail(pwd_id, stoken, str(pdir_fid or "/"))
         except Exception as exc:
-            logger.error("[Baidu] 读取引流素材分享列表失败: %s", exc)
+            logger.error("[Baidu] 读取引流素材分享列表失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_MATERIAL_UNAVAILABLE", f"读取分享文件列表失败：{exc}")
         if not isinstance(detail, dict) or detail.get("code") not in (0, "0"):
             message = str((detail or {}).get("message") or "").strip() if isinstance(detail, dict) else ""
@@ -1802,7 +1802,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             try:
                 info = self._api_list_all(current)
             except Exception as exc:
-                logger.error("[Baidu] 逐级定位引流目标目录失败: %s", exc)
+                logger.error("[Baidu] 逐级定位引流目标目录失败: %s", type(exc).__name__)
                 return "", self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
             errno = self._lead_in_list_errno(info)
             if errno:
@@ -1840,7 +1840,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             info = self._api_list_all(parent)
         except Exception as exc:
-            logger.error("[Baidu] 读取引流目标目录父目录失败: %s", exc)
+            logger.error("[Baidu] 读取引流目标目录父目录失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
         errno = self._lead_in_list_errno(info)
         if errno:
@@ -1860,7 +1860,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             listing = self.ls_dir(folder_path, max_items=0)
         except Exception as exc:
-            logger.error("[Baidu] 读取引流目标目录失败: %s", exc)
+            logger.error("[Baidu] 读取引流目标目录失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
         raw_items = None
         if isinstance(listing, dict):
@@ -1918,7 +1918,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 file_names=[name],
             )
         except Exception as exc:
-            logger.error("[Baidu] 引流素材转存请求异常: %s", exc)
+            logger.error("[Baidu] 引流素材转存请求异常: %s", type(exc).__name__)
             return self._lead_in_error(
                 "LEAD_IN_TIMEOUT",
                 f"转存请求异常，添加结果待确认：{exc}",
@@ -1985,7 +1985,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         try:
             info = self._api_list(parent)
         except Exception as exc:
-            logger.error("[百度] 读取素材所在文件夹失败: %s", exc)
+            logger.error("[百度] 读取素材所在文件夹失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"读取素材所在文件夹失败：{exc}")
         errno = info.get("errno") if isinstance(info, dict) else None
         if errno not in (0, "0", None):
@@ -2097,14 +2097,14 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 data={"filelist": json.dumps(payload, ensure_ascii=False)},
             )
         except Exception as exc:
-            logger.error("[百度] 本账号素材复制请求异常: %s", exc)
+            logger.error("[百度] 本账号素材复制请求异常: %s", type(exc).__name__)
             return self._lead_in_error(
                 "LEAD_IN_TIMEOUT", f"复制请求异常，添加结果待确认：{exc}"
             )
         try:
             result = self._check_response(response.json())
         except Exception as exc:
-            logger.error("[百度] 本账号素材复制响应解析失败: %s", exc)
+            logger.error("[百度] 本账号素材复制响应解析失败: %s", type(exc).__name__)
             return self._lead_in_error("LEAD_IN_FAILED", f"复制接口返回异常：{exc}")
         if not isinstance(result, dict):
             return self._lead_in_error("LEAD_IN_FAILED", "复制接口返回异常，请稍后重试")

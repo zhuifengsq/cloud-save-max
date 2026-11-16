@@ -1,6 +1,9 @@
 """Infrastructure stages. No execution commit is owned here."""
 import json
 from dataclasses import asdict
+from typing import Any
+from sqlalchemy.orm import Session
+from app.domain.task_run import ExecutionLogPort, RecoveryCallback, RunPolicyPort, TaskExecutionState
 from sqlalchemy import select, update
 from app.core.errors import ApiError
 from app.infrastructure.persistence.models.task import Task
@@ -14,13 +17,16 @@ from app.infrastructure.drive.account_manager import load_accounts_payload, Data
 from app.infrastructure.execution.task_executor import TaskExecutor
 
 class SqlTaskRunStore:
-    def __init__(self, db):
+    def __init__(self, db: Session) -> None:
         self.db = db
 
     def prepare(self, command: RunTaskCommand) -> TaskRunPlan:
-        row = get_task(self.db, command.task_id) if command.preview is None else None
-        values = ({column.name: getattr(row, column.name) for column in row.__table__.columns}
-                  if row is not None else dict(command.preview, id=0, enabled=True))
+        if command.preview is None:
+            row = get_task(self.db, command.task_id)
+            values = {column.name: getattr(row, column.name) for column in row.__table__.columns}
+        else:
+            row = None
+            values = dict(command.preview, id=0, enabled=True)
         task = TaskRunState(**values)
         if not task.enabled:
             from app.core.errors import bad_request
@@ -44,7 +50,7 @@ class SqlTaskRunStore:
         return TaskRunPlan(task, {'task_data':data, 'share_check':check,
                                  'accounts':load_accounts_payload(self.db), 'notification_config':notification_config})
 
-    def save_task(self, task: TaskRunState) -> None:
+    def save_task(self, task: TaskExecutionState) -> None:
         # Refresh even when a caller keeps ORM identity-map entries across commits.
         current = self.db.execute(select(Task).where(Task.id == task.id)
             .execution_options(populate_existing=True)).scalars().first()
@@ -52,7 +58,7 @@ class SqlTaskRunStore:
         identity = ('shareurl', 'account_name', 'savepath')
         if current is None or any(getattr(current, key) != original[key] for key in identity):
             raise ApiError('TASK_CHANGED', '任务配置已变更，请重新执行', 409)
-        changes = {}
+        changes: dict[str, Any] = {}
         if task.extra_json != original['extra_json']:
             before = json.loads(original['extra_json'] or '{}')
             after = json.loads(task.extra_json or '{}')
@@ -93,7 +99,7 @@ class SqlTaskRunStore:
         prune_task_executions(self.db, plan.task.id)
 
 class PreparedTaskEngine:
-    def execute(self, plan: TaskRunPlan, policy, log, recover) -> TaskRunResult:
+    def execute(self, plan: TaskRunPlan, policy: RunPolicyPort, log: ExecutionLogPort | None, recover: RecoveryCallback) -> TaskRunResult:
         manager = DatabaseAccountManager.from_payload(plan.prepared['accounts'])
         check = probe_generated_share_check(plan.prepared['share_check'], manager,
                                            always_notify=policy.share_check_always_notify)

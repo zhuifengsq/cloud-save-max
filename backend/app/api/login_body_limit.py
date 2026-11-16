@@ -2,17 +2,20 @@
 from fastapi import Request
 from fastapi.routing import APIRoute
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 LOGIN_BODY_LIMIT = 16 * 1024
 
 
 class LoginBodyLimitRoute(APIRoute):
-    def get_route_handler(self):
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handler = super().get_route_handler()
         if not self.path.endswith('/login'):
             return handler
 
-        async def bounded(request: Request):
+        async def bounded(request: Request) -> Response:
             chunks = []
             size = 0
             async for chunk in request.stream():

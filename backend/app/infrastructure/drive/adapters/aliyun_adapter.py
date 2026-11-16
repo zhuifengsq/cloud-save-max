@@ -100,7 +100,7 @@ def _config_saver_factory(config_path: str):
                 logger.warning("[Aliyun] 未找到需要更新的阿里云盘账户")
                 return False
         except Exception as e:
-            logger.error(f"[Aliyun] 保存 refresh_token 失败: {e}")
+            logger.error(f"[Aliyun] 保存 refresh_token 失败: {type(e).__name__}")
             return False
     
     return save_config
@@ -239,7 +239,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
         try:
             self._do_refresh_token()
         except Exception as e:
-            logger.error(f"[Aliyun] 初始化 token 失败: {e}")
+            logger.error(f"[Aliyun] 初始化 token 失败: {type(e).__name__}")
 
     def _do_refresh_token(self) -> bool:
         """刷新 access_token"""
@@ -260,9 +260,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                 result = resp.json()
                 
                 if "access_token" not in result:
-                    code = result.get("code", "Unknown")
-                    message = result.get("message", "")
-                    logger.error(f"[Aliyun] 刷新 token 失败: {code} - {message}")
+                    logger.error('[Aliyun] token refresh rejected')
                     return False
                 
                 # 更新 token
@@ -280,7 +278,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                 return True
                 
             except Exception as e:
-                logger.error(f"[Aliyun] 刷新 token 异常: {e}")
+                logger.error(f"[Aliyun] 刷新 token 异常: {type(e).__name__}")
                 return False
 
     def _save_refresh_token(self):
@@ -346,7 +344,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
             except Exception as e:
                 last_resp = None
                 if attempt >= 3:
-                    logger.error(f"[Aliyun] HTTP 请求失败: {e}")
+                    logger.error(f"[Aliyun] HTTP 请求失败: {type(e).__name__}")
                     raise
                 time.sleep(random.uniform(0.4, 0.9) * (2**attempt))
                 continue
@@ -514,7 +512,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                 "message": "success",
             }
         except Exception as e:
-            logger.error(f"[Aliyun] 获取分享令牌失败: {e}")
+            logger.error(f"[Aliyun] 获取分享令牌失败: {type(e).__name__}")
             return {"status": 500, "code": 1, "message": str(e)}
 
     def _get_share_info(self, share_id: str) -> Dict:
@@ -586,7 +584,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                 "metadata": {"_total": len(file_list)},
             }
         except Exception as e:
-            logger.error(f"[Aliyun] 获取分享详情失败: {e}")
+            logger.error(f"[Aliyun] 获取分享详情失败: {type(e).__name__}")
             return {"code": 1, "message": str(e), "data": {"list": []}}
 
     def _get_share_path(self, share_id: str, share_token: str, file_id: str) -> List[Dict]:
@@ -618,7 +616,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
             
             # 方法2: 如果上述方法失败，使用 BFS 遍历
             return self._bfs_share_path(share_id, share_token, file_id)
-        except Exception as e:
+        except Exception:
             return []
 
     def _get_share_file_info(self, share_id: str, share_token: str, file_id: str) -> Optional[Dict]:
@@ -633,7 +631,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
             if not data.get("code"):
                 return data
             return None
-        except Exception as e:
+        except Exception:
             return None
 
     def _bfs_share_path(self, share_id: str, share_token: str, target_file_id: str) -> List[Dict]:
@@ -679,7 +677,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                         visited.add(item_id)
                         new_path = current_path + [{"fid": item_id, "file_name": item_name}]
                         queue.append((item_id, new_path))
-            except Exception as e:
+            except Exception:
                 continue
         
         return []
@@ -775,7 +773,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                 "metadata": {"_total": len(file_list)},
             }
         except Exception as e:
-            logger.error(f"[Aliyun] 列出目录失败: {e}")
+            logger.error(f"[Aliyun] 列出目录失败: {type(e).__name__}")
             return {"code": 1, "message": str(e), "data": {"list": []}}
 
     def _convert_item(self, item: Dict) -> Dict:
@@ -869,7 +867,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                 },
             }
         except Exception as e:
-            logger.error(f"[Aliyun] 转存失败: {e}")
+            logger.error(f"[Aliyun] 转存失败: {type(e).__name__}")
             return {"write_uncertain": True, "code": 1, "message": str(e), "data": {}}
 
     def query_task(self, task_id: str) -> Dict:
@@ -943,7 +941,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                 "data": {"fid": created_id, "file_name": created_name},
             }
         except Exception as e:
-            logger.error(f"[Aliyun] 创建目录失败: {e}")
+            logger.error(f"[Aliyun] 创建目录失败: {type(e).__name__}")
             return {"code": 1, "message": str(e)}
 
     def _find_by_name(self, drive_id: str, parent_id: str, name: str, file_type: str = None) -> Optional[Dict]:
@@ -989,7 +987,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
             
             return {"code": 0, "message": "success"}
         except Exception as e:
-            logger.error(f"[Aliyun] 重命名失败: {e}")
+            logger.error(f"[Aliyun] 重命名失败: {type(e).__name__}")
             return {"code": 1, "message": str(e)}
 
     def delete(self, filelist: List[str]) -> Dict:
@@ -1026,7 +1024,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
             
             return {"code": 0, "message": "success"}
         except Exception as e:
-            logger.error(f"[Aliyun] 删除失败: {e}")
+            logger.error(f"[Aliyun] 删除失败: {type(e).__name__}")
             return {"code": 1, "message": str(e)}
 
     def move_files(self, fids: List[str], to_pdir_fid: str) -> Dict:
@@ -1061,7 +1059,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                         "name": item.get("name", ""),
                     })
             return path.reverse()
-        except Exception as e:
+        except Exception:
             return []
 
     def get_fids(self, file_paths: List[str]) -> List[Dict]:
@@ -1168,7 +1166,7 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                 },
             }
         except Exception as e:
-            logger.error(f"[Aliyun] 生成二维码失败: {e}")
+            logger.error(f"[Aliyun] 生成二维码失败: {type(e).__name__}")
             return {"success": False, "message": str(e)}
 
     @staticmethod
@@ -1233,11 +1231,11 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                         response["data"]["user_name"] = pds_login_result.get("userName", "")
                         response["data"]["nick_name"] = pds_login_result.get("nickName", "")
                     except Exception as e:
-                        logger.error(f"[Aliyun] 解析登录结果失败: {e}")
+                        logger.error(f"[Aliyun] 解析登录结果失败: {type(e).__name__}")
             
             return response
         except Exception as e:
-            logger.error(f"[Aliyun] 查询二维码状态失败: {e}")
+            logger.error(f"[Aliyun] 查询二维码状态失败: {type(e).__name__}")
             return {"success": False, "message": str(e)}
 
 

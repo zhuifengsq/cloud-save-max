@@ -10,14 +10,14 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
-from treelib import Tree
+from treelib.tree import Tree
 
 from app.core.errors import bad_request
 from app.infrastructure.drive.account_manager import DatabaseAccountManager
 from app.infrastructure.execution.drama_executor import DramaTaskExecutor, SkipTask
 from app.infrastructure.execution.execution_log import ExecutionLog, bounded_text
 from app.core.settings import settings
-from app.infrastructure.persistence.models.task import Task
+from app.domain.task_run import ExecutionLogPort, RecoveryCallback, TaskExecutionState
 from app.infrastructure.persistence.models.task_execution import TaskExecution
 from app.application.drama_share_autoupdate import is_auto_update_task, resolve_drama_shareurl_update
 from app.application.generated_share_check import SNAPSHOT_KEY, check_generated_share
@@ -59,11 +59,17 @@ class ExecutionPayload:
 
 
 class TaskExecutor:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session | None) -> None:
         self.db = db
 
+    def _require_session(self) -> Session:
+        """Only the legacy read/write path requires a database session."""
+        if self.db is None:
+            raise RuntimeError('Task execution requires a database session for this operation')
+        return self.db
+
     @staticmethod
-    def _task_to_dict(task: Task) -> dict[str, Any]:
+    def _task_to_dict(task: TaskExecutionState) -> dict[str, Any]:
         return {
             'task_uid': task.task_uid,
             'task_type': task.task_type,
@@ -104,9 +110,9 @@ class TaskExecutor:
 
     def run_task(
         self,
-        task: Task,
+        task: TaskExecutionState,
         *,
-        log: ExecutionLog | None = None,
+        log: ExecutionLogPort | None = None,
         persist_execution: bool = True,
         account_manager: DatabaseAccountManager | None = None,
         init_account_for_task: bool = True,
@@ -114,9 +120,9 @@ class TaskExecutor:
         manual_run: bool = False,
         _auto_update_depth: int = 0,
         _tried_shareurls: set[str] | None = None,
-        _generated_share_check: dict | None = None,
-        prepared_data: dict | None = None,
-        recover=None,
+        _generated_share_check: dict[str, Any] | None = None,
+        prepared_data: dict[str, Any] | None = None,
+        recover: RecoveryCallback | None = None,
     ) -> TaskExecution:
         if not task.enabled:
             raise bad_request('TASK_DISABLED', '任务已禁用')
@@ -132,10 +138,10 @@ class TaskExecutor:
 
         external_manager = account_manager is not None
         if account_manager is None:
-            account_manager = DatabaseAccountManager(self.db)
+            account_manager = DatabaseAccountManager(self._require_session())
         if persist_execution and task.id and task.task_type == "drama" and _auto_update_depth == 0:
             _generated_share_check = check_generated_share(
-                self.db, task, account_manager, always_notify=share_check_always_notify
+                self._require_session(), task, account_manager, always_notify=share_check_always_notify
             )
         if _generated_share_check:
             log.section("分享链接检测")
@@ -148,7 +154,7 @@ class TaskExecutor:
         adapter = account_manager.get_adapter_for_task(task_data)
         if adapter is None and external_manager:
             try:
-                fallback_manager = DatabaseAccountManager(self.db)
+                fallback_manager = DatabaseAccountManager(self._require_session())
                 fallback_manager.init_for_tasks([task_data])
                 account_manager = fallback_manager
                 adapter = account_manager.get_adapter_for_task(task_data)
@@ -174,8 +180,8 @@ class TaskExecutor:
             if not persist_execution:
                 execution.id = 0
                 return execution
-            self.db.add(execution)
-            self.db.flush()
+            self._require_session().add(execution)
+            self._require_session().flush()
             return execution
 
         try:
@@ -198,7 +204,7 @@ class TaskExecutor:
 
         return self._finish_execution(task_id, payload, share_snapshot, log, persist_execution)
 
-    def _prepare_task_data(self, task, prepared_data, manual_run):
+    def _prepare_task_data(self, task: TaskExecutionState, prepared_data: dict[str, Any] | None, manual_run: bool) -> dict[str, Any]:
         task_data = self._task_to_dict(task)
         if prepared_data is not None:
             task_data = dict(prepared_data, shareurl=task.shareurl)
@@ -207,7 +213,7 @@ class TaskExecutor:
             try:
                 from app.application.magic_regex import get_enabled_magic_regex_map
 
-                task_data["magic_regex"] = get_enabled_magic_regex_map(self.db)
+                task_data["magic_regex"] = get_enabled_magic_regex_map(self._require_session())
             except Exception:
                 task_data["magic_regex"] = {}
 
@@ -227,7 +233,7 @@ class TaskExecutor:
                         from app.application.tmdb_cache import get_tmdb_detail_cached
 
                         configured, _detail, update_weekdays, episode_weekdays, _row = get_tmdb_detail_cached(
-                            self.db, media_type="tv", tmdb_id=tmdb_id
+                            self._require_session(), media_type="tv", tmdb_id=tmdb_id
                         )
                         task_data["tmdb_configured"] = bool(configured)
                         task_data["tmdb_update_weekdays"] = update_weekdays or []
@@ -241,7 +247,7 @@ class TaskExecutor:
 
         return task_data
 
-    def _record_drama_progress(self, task, task_data, drama_executor, log, persist_execution, prepared_data):
+    def _record_drama_progress(self, task: TaskExecutionState, task_data: dict[str, Any], drama_executor: DramaTaskExecutor | None, log: ExecutionLogPort, persist_execution: bool, prepared_data: dict[str, Any] | None) -> None:
         task_id = int(getattr(task, 'id', 0) or 0)
         if (persist_execution or prepared_data is not None) and task_id > 0 and task_data.get('task_type') == 'drama':
             # 已存进度：执行时顺手算出来的最大集数，写进任务 extra（不建快照表）
@@ -259,7 +265,7 @@ class TaskExecutor:
                 except Exception:
                     logger.warning("写入已存进度失败 task_id=%s", task_id, exc_info=True)
 
-    def _execute_adapter(self, task, task_data, adapter, log, persist_execution, prepared_data) -> ExecutionPayload:
+    def _execute_adapter(self, task: TaskExecutionState, task_data: dict[str, Any], adapter: Any, log: ExecutionLogPort, persist_execution: bool, prepared_data: dict[str, Any] | None) -> ExecutionPayload:
         task_id = int(getattr(task, 'id', 0) or 0)
         drama_executor = None
         log.set_stage("validate_account")
@@ -313,7 +319,7 @@ class TaskExecutor:
             },
         )
 
-    def _failure_payload(self, task, task_id, adapter, log, status, stage, message) -> ExecutionPayload:
+    def _failure_payload(self, task: TaskExecutionState, task_id: int, adapter: Any, log: ExecutionLogPort, status: str, stage: str, message: str) -> ExecutionPayload:
         try:
             logger.exception(
                 "任务执行异常 task_id=%s task_uid=%s task_type=%s stage=%s err=%s",
@@ -347,7 +353,7 @@ class TaskExecutor:
             },
         )
 
-    def _finish_execution(self, task_id, payload, share_snapshot, log, persist_execution) -> TaskExecution:
+    def _finish_execution(self, task_id: int, payload: ExecutionPayload, share_snapshot: dict[str, Any], log: ExecutionLogPort, persist_execution: bool) -> TaskExecution:
         execution = TaskExecution(
             task_id=task_id,
             status=payload.status,
@@ -362,13 +368,13 @@ class TaskExecutor:
         if not persist_execution:
             execution.id = 0
             return execution
-        self.db.add(execution)
-        self.db.flush()
+        self._require_session().add(execution)
+        self._require_session().flush()
         if task_id > 0:
             try:
                 from app.application.task_executions import prune_task_executions
 
-                removed = prune_task_executions(self.db, task_id)
+                removed = prune_task_executions(self._require_session(), task_id)
                 if removed:
                     logger.info("清理旧执行记录 task_id=%s removed=%s", task_id, removed)
             except Exception:

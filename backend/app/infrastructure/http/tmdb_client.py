@@ -74,7 +74,7 @@ class TMDBClient:
             except Exception:
                 pass
             return data
-        except Exception as e:
+        except Exception:
             if self.current_url == self.primary_url:
                 self.current_url = self.backup_url
                 try:

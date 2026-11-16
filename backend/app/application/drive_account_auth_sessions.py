@@ -16,6 +16,7 @@ class DriveAccountAuthSession:
     adapter: Any
     payload: dict[str, Any]
     expires_at: float
+    row_version: int | None = None
 
 
 _LOCK = Lock()
@@ -41,6 +42,7 @@ def create_auth_session(
     adapter: Any,
     payload: dict[str, Any],
     ttl_seconds: int = 600,
+    row_version: int | None = None,
 ) -> DriveAccountAuthSession:
     now = time.time()
     session_id = uuid.uuid4().hex
@@ -52,6 +54,7 @@ def create_auth_session(
         adapter=adapter,
         payload=dict(payload or {}),
         expires_at=now + ttl_seconds,
+        row_version=row_version,
     )
     with _LOCK:
         _purge_expired_locked(now)

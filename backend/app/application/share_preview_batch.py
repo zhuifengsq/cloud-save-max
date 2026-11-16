@@ -311,9 +311,7 @@ def fetch_share_file_list(
 
     all_files: list[dict[str, Any]] = []
     changed = False
-    folder_keywords = [kw.strip().lower() for kw in folder_filter.split("|") if kw.strip()] if folder_filter else []
     folder_exclude_keywords = [kw.strip().lower() for kw in folder_exclude.split("|") if kw.strip()] if folder_exclude else []
-    folder_filter_is_any = str(folder_filter_mode or "all").strip().lower() == "any"
     folder_exclude_is_all = str(folder_exclude_mode or "any").strip().lower() == "all"
 
     def _collect_files(fid: str, depth: int, is_root: bool = True) -> None:

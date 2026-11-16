@@ -222,7 +222,7 @@ async def post_run_task_stream_by_payload(request: Request, payload: TaskCreateI
     import uuid
 
     def _prepare() -> dict:
-        with SessionLocal() as adb:
+        with SessionLocal():
             payload_out = {
                 "task_id": 0,
                 "taskname": str(payload.taskname),

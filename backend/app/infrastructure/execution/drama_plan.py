@@ -100,11 +100,8 @@ def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, sh
     mr = MagicRename(magic_regex=(task_data.get("magic_regex") if isinstance(task_data.get("magic_regex"), dict) else None))
     mr.set_taskname(taskname)
     pattern, replace = mr.magic_regex_conv(pattern, replace)
-    compiled_search = re.compile(pattern, re.IGNORECASE) if pattern else None
-    tmdb_series_title = str(task_data.get("tmdb_series_title") or "").strip() or None
-    tmdb_tv_seasons = task_data.get("tmdb_tv_seasons") if isinstance(task_data.get("tmdb_tv_seasons"), list) else None
-    tmdb_year = int(task_data.get("tmdb_year")) if isinstance(task_data.get("tmdb_year"), int) else None
-    tmdb_media_type = str(task_data.get("tmdb_media_type") or "").strip().lower()
+    if pattern:
+        re.compile(pattern, re.IGNORECASE)
 
     def _to_ts(v):
         try:

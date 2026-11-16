@@ -28,6 +28,7 @@ from app.application.drive_account_probe_scheduler import (
     update_drive_account_probe_scheduler_setting,
 )
 from app.application.drive_accounts import (
+    prepare_drive_account_auth,
     build_capacity_overview,
     create_drive_account,
     get_active_account,
@@ -873,20 +874,23 @@ class TelegramBotActions:
     def start_account_auth(self, account_id: int) -> dict[str, Any]:
         account = get_drive_account(self.db, int(account_id))
         if str(account.drive_type or "") == "aliyun":
+            identity, drive_type = account.id, account.drive_type
+            row_version = prepare_drive_account_auth(self.db, identity)
             resp = AliyunAdapter.generate_qrcode()
             if not isinstance(resp, dict) or not resp.get("success"):
                 raise bad_request("DRIVE_ACCOUNT_AUTH_FAILED", "生成二维码失败", detail=str((resp or {}).get("message") or ""))
             data = resp.get("data") or {}
             session = create_auth_session(
-                account_id=account.id,
-                drive_type=account.drive_type,
+                account_id=identity,
+                drive_type=drive_type,
                 method="qrcode",
                 adapter={"t": data.get("t") or "", "ck": data.get("ck") or ""},
                 payload={"qrcode_url": data.get("qrCodeUrl") or "", "status": "NEW"},
+                row_version=row_version,
             )
             return {
-                "account_id": int(account.id),
-                "drive_type": str(account.drive_type or ""),
+                "account_id": int(identity),
+                "drive_type": str(drive_type or ""),
                 "method": "qrcode",
                 "session_id": session.session_id,
                 "payload": dict(session.payload or {}),
@@ -922,19 +926,15 @@ class TelegramBotActions:
         if session.method != "qrcode":
             raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
         meta = session.adapter or {}
+        row_version = prepare_drive_account_auth(self.db, int(session.account_id), session.row_version)
         resp = AliyunAdapter.query_qrcode_status(str(meta.get("t") or ""), str(meta.get("ck") or ""))
         if not isinstance(resp, dict) or not resp.get("success"):
             raise bad_request("DRIVE_ACCOUNT_AUTH_FAILED", "查询二维码状态失败", detail=str((resp or {}).get("message") or ""))
         data = resp.get("data") or {}
         if str(data.get("status") or "") == "CONFIRMED" and str(data.get("refresh_token") or ""):
             delete_auth_session(session_id)
-            account = drive_accounts_repo().get_account(self.db, int(session.account_id))
-            if account is None:
-                raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "驱动账号不存在")
-            config = AdapterRegistry.parse_config_json(account.drive_type, account.config_json, account.cookie)
-            config["refresh_token"] = str(data.get("refresh_token") or "")
-            update_drive_account(self.db, account.id, config=config)
-            account = probe_drive_account(self.db, account.id)
+            account = probe_drive_account(self.db, int(session.account_id),
+                config={'refresh_token': str(data.get('refresh_token') or '')}, expected_version=row_version)
             self.db.commit()
             self.db.refresh(account)
             return {"done": True, "account": serialize_drive_account(account)}
@@ -955,6 +955,7 @@ class TelegramBotActions:
             raise not_found("DRIVE_ACCOUNT_AUTH_SESSION_NOT_FOUND", "认证会话已失效")
         if session.method != "sms":
             raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
+        prepare_drive_account_auth(self.db, int(session.account_id), session.row_version)
         result = session.adapter.send_sms()
         self.db.commit()
         return result if isinstance(result, dict) else {"ok": True, "message": str(result)}
@@ -963,6 +964,7 @@ class TelegramBotActions:
         session = get_auth_session(session_id)
         if session is None:
             raise not_found("DRIVE_ACCOUNT_AUTH_SESSION_NOT_FOUND", "认证会话已失效")
+        row_version = prepare_drive_account_auth(self.db, int(session.account_id), session.row_version)
         if session.method == "captcha":
             try:
                 session.adapter.submit_captcha(code)
@@ -974,6 +976,7 @@ class TelegramBotActions:
                     method=exc.method,
                     adapter=exc.adapter or session.adapter,
                     payload=exc.payload,
+                    row_version=row_version,
                 )
                 return {
                     "done": False,
@@ -988,8 +991,8 @@ class TelegramBotActions:
         else:
             raise bad_request("DRIVE_ACCOUNT_AUTH_METHOD_MISMATCH", "认证方式不匹配")
         delete_auth_session(session_id)
-        update_drive_account(self.db, int(session.account_id), config=session.adapter.export_runtime_config())
-        account = probe_drive_account(self.db, int(session.account_id))
+        account = probe_drive_account(self.db, int(session.account_id), config=session.adapter.export_runtime_config(),
+            auth_completed=session.method == 'sms', expected_version=row_version)
         self.db.commit()
         self.db.refresh(account)
         return {"done": True, "account": serialize_drive_account(account)}

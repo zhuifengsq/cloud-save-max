@@ -8,7 +8,7 @@ PUBLIC_PROFILE_FIELDS = frozenset({
 SAFE_ACCOUNT_ERROR = '账号操作失败，请检查登录状态或重新认证'
 
 
-def public_account_profile(profile: object) -> dict:
+def public_account_profile(profile: object) -> dict[str, str | int | float | bool | None]:
     if not isinstance(profile, dict):
         return {}
     return {key: value for key, value in profile.items() if key in PUBLIC_PROFILE_FIELDS
