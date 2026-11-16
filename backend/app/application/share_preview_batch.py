@@ -5,6 +5,7 @@ import os
 import random
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -13,8 +14,9 @@ from cachetools import TTLCache
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import not_found
+from app.core.errors import ApiError, not_found
 from app.core.settings import settings
+from app.core.runtime.tx import end_read_tx
 from app.application.container import SessionLocal, drive_accounts_repo, system_settings_repo
 from app.application.container import account_manager_cls as _acc_DatabaseAccountManager; DatabaseAccountManager = _acc_DatabaseAccountManager()
 from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
@@ -81,40 +83,45 @@ def _share_preview_batch_cache_set(*, shareurl: str, item: SharePreviewBatchItem
 
 
 def _should_persist_invalid_share_link(message: str | None) -> bool:
-    msg = str(message or "").strip()
-    if not msg:
-        return False
-    lowered = msg.lower()
-    if any(
-        x in lowered
-        for x in (
-            "timeout",
-            "timed out",
-            "connectionerror",
-            "connecterror",
-            "readtimeout",
-            "proxyerror",
-            "connection reset",
-            "name or service not known",
-            "temporary failure",
-        )
-    ):
-        return False
-    if any(x in msg for x in ("超时", "连接超时", "网络", "连接失败", "连接被重置")):
-        return False
-    if "没有可用的驱动账号" in msg:
-        return False
-    if "指定账号不存在" in msg:
-        return False
-    if "登录失败" in msg:
-        return False
-    if "响应解析失败" in msg:
-        return False
-    if "cookie" in lowered and any(x in msg for x in ("失效", "过期", "被限流", "限流")):
-        return False
-    if any(x in msg for x in ("被限流", "限流")) or any(x in lowered for x in ("rate limit", "ratelimit", "too many requests")):
-        return False
-    return True
+    # Historical free-text negatives cannot establish permanent link failure.
+    return message == _CONFIRMED_INVALID
+
+
+_CONFIRMED_INVALID = '分享链接已确认失效'
+_TRANSIENT_FAILURE = '网盘响应异常，可能为网络或账号状态问题，请稍后重试'
+
+
+class _ShareReadError(Exception):
+    def __init__(self, kind: str = 'transient'):
+        self.kind = kind
+        super().__init__({'invalid': _CONFIRMED_INVALID, 'auth': '账号登录状态异常，请重新认证',
+                          'passcode': '分享提取码缺失或错误'}.get(kind, _TRANSIENT_FAILURE))
+
+
+def _response_succeeded(response: Any) -> bool:
+    return (isinstance(response, dict) and response.get('code') in (None, 0, '0')
+            and response.get('status') in (None, 200, '200'))
+
+
+def _token_failure(adapter: Any, response: Any) -> _ShareReadError:
+    if not isinstance(response, dict) or response.get('status') not in (None, 200, '200', 400, '400'):
+        return _ShareReadError()
+    classify = getattr(adapter, 'classify_share_failure', None)
+    if callable(classify):
+        kind = classify(response).get('kind')
+        # Require a documented provider code, never an arbitrary error message.
+        if kind == 'invalid' and str(response.get('code')) in {
+                str(code) for code in getattr(adapter, 'SHARE_INVALID_CODES', ())}:
+            return _ShareReadError('invalid')
+        if kind in ('auth', 'passcode'):
+            return _ShareReadError(kind)
+    return _ShareReadError()
+
+
+@dataclass
+class _BatchProbeResult:
+    item: SharePreviewBatchItemOut
+    confirmed_invalid: bool = False
 
 
 def _bool_is_dir(payload: dict) -> bool:
@@ -209,7 +216,11 @@ def _auto_resolve_latest_video(adapter, pwd_id: str, stoken: str, start_fid: str
     latest: dict | None = None
     for _depth in range(10):
         detail = adapter.get_detail(pwd_id, stoken, current_fid)
-        raw_items = (((detail or {}).get("data") or {}).get("list")) or []
+        if not _response_succeeded(detail) or not isinstance(detail.get('data'), dict):
+            raise _ShareReadError()
+        raw_items = detail['data'].get('list')
+        if not isinstance(raw_items, list) or any(not isinstance(item, dict) for item in raw_items):
+            raise _ShareReadError()
         files = [x for x in raw_items if not _bool_is_dir(x)]
         videos = [x for x in files if _is_video_name(_pick_name(x))]
         if videos:
@@ -538,257 +549,220 @@ def fetch_share_file_list_grouped(
     return _sort_by_priority(groups)
 
 
-def preview_share_batch(db: Session, payload: SharePreviewBatchIn) -> tuple[SharePreviewBatchOut, bool]:
-    def _short_tx(fn):
-        with SessionLocal() as s:
-            s.expire_on_commit = False
-            try:
-                out = fn(s)
-                s.commit()
-                return out
-            except Exception:
-                s.rollback()
-                raise
+def _short_tx(fn):
+    with SessionLocal() as s:
+        s.expire_on_commit = False
+        try:
+            out = fn(s)
+            s.commit()
+            return out
+        except Exception:
+            s.rollback()
+            raise
 
-    shareurls = [str(x or "").strip() for x in (payload.shareurls or [])]
-    shareurls = [x for x in shareurls if x]
-    shareurls = list(dict.fromkeys(shareurls))
-    if not shareurls:
-        return SharePreviewBatchOut(items=[]), False
 
-    cache_changed = False
+def _batch_error(error: Exception) -> str:
+    if isinstance(error, ApiError):
+        return error.message
+    # Exception strings can contain cookies or request URLs. Unknown IO faults
+    # also cannot establish that a share is permanently invalid.
+    return '网盘响应异常，可能为网络或账号状态问题，请稍后重试'
+
+
+def _purge_batch_cache() -> bool:
     try:
-        purged = _short_tx(
-            lambda s: purge_old_preview_batch_cache(
-                s,
-                retention_seconds=int(
-                    getattr(settings, "tasks_share_preview_batch_db_cache_retention_seconds", 7 * 24 * 60 * 60)
-                    or 7 * 24 * 60 * 60
-                ),
-            )
-        )
-        if purged > 0:
-            cache_changed = True
+        return _short_tx(lambda db: purge_old_preview_batch_cache(db, retention_seconds=int(
+            getattr(settings, "tasks_share_preview_batch_db_cache_retention_seconds", 7 * 24 * 60 * 60)
+            or 7 * 24 * 60 * 60))) > 0
     except Exception:
-        purged = 0
+        logger.warning("Preview batch cache cleanup failed")
+        return False
 
-    per_drive: dict[str, list[str]] = {}
+
+def _classify_batch_cache(shareurls: list[str]) -> tuple[list[SharePreviewBatchItemOut], dict[str, list[str]], bool]:
     items: list[SharePreviewBatchItemOut] = []
+    per_drive: dict[str, list[str]] = {}
+    changed = False
     for url in shareurls:
         cached = _share_preview_batch_cache_get(shareurl=url)
         if cached is not None:
             items.append(cached)
             continue
         try:
-            row, hit_changed = _short_tx(lambda s: get_cached_preview_batch_item(s, shareurl=url))
+            row, hit_changed = _short_tx(lambda db: get_cached_preview_batch_item(db, shareurl=url))
         except Exception:
-            row, hit_changed = (None, False)
-        if row is not None:
-            if not bool(row.ok):
-                out = SharePreviewBatchItemOut(shareurl=row.shareurl, drive_type=row.drive_type, ok=bool(row.ok), message=row.message)
-                items.append(out)
-                _share_preview_batch_cache_set(shareurl=url, item=out)
-                if hit_changed:
-                    cache_changed = True
-                continue
-            drive_type = AdapterRegistry.detect_drive_type(url) or row.drive_type
-        else:
-            drive_type = AdapterRegistry.detect_drive_type(url)
+            logger.warning("Preview batch persisted cache read failed")
+            row, hit_changed = None, False
+        if row is not None and not bool(row.ok) and _should_persist_invalid_share_link(row.message):
+            out = SharePreviewBatchItemOut(shareurl=row.shareurl, drive_type=row.drive_type, ok=False, message=row.message)
+            items.append(out)
+            _share_preview_batch_cache_set(shareurl=url, item=out)
+            changed = bool(changed or hit_changed)
+            continue
+        drive_type = (AdapterRegistry.detect_drive_type(url) or row.drive_type) if row is not None else AdapterRegistry.detect_drive_type(url)
         if drive_type is None:
             items.append(SharePreviewBatchItemOut(shareurl=url, drive_type=None, ok=False, message="无法识别的网盘分享链接"))
-            continue
-        per_drive.setdefault(str(drive_type), []).append(url)
+        else:
+            per_drive.setdefault(str(drive_type), []).append(url)
+    return items, per_drive, changed
 
-    if not per_drive:
-        return SharePreviewBatchOut(items=items), cache_changed
 
-    manager = DatabaseAccountManager(db, no_login=True)
-    invalid_changed = False
+def _batch_candidate_names(db: Session, drive_type: str, specified_name: str | None) -> list[str]:
+    rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
+    rows.sort(key=lambda row: (0 if bool(getattr(row, 'is_default', False)) else 1,
+        0 if str(getattr(row, 'runtime_status', '') or '') == 'active' else 1, int(getattr(row, 'id', 0) or 0)))
+    if specified_name:
+        specified = str(specified_name or '').strip()
+        if specified:
+            hit = next((row for row in rows if str(row.name) == specified), None)
+            if hit is None:
+                raise not_found('DRIVE_ACCOUNT_NOT_FOUND', '指定账号不存在或不可用')
+            rows = [hit] + [row for row in rows if str(row.name) != specified]
+    return [str(getattr(row, 'name', '') or '').strip() for row in rows]
 
-    def _safe_error(e: Exception) -> str:
-        text = f"{type(e).__name__}: {str(e)}"
-        text = text.strip() or type(e).__name__
-        if len(text) > 240:
-            text = text[:120] + " ... " + text[-80:]
-        return text
 
-    def _candidate_accounts_for_drive(drive_type: str) -> list[Any]:
-        rows = drive_accounts_repo().list_enabled_by_type(db, drive_type=drive_type)
-        rows.sort(
-            key=lambda x: (
-                0 if bool(getattr(x, "is_default", False)) else 1,
-                0 if str(getattr(x, "runtime_status", "") or "") == "active" else 1,
-                int(getattr(x, "id", 0) or 0),
-            )
-        )
-        if payload.account_name:
-            specified = str(payload.account_name or "").strip()
-            if specified:
-                hit = next((x for x in rows if str(x.name) == specified), None)
-                if hit is None:
-                    raise not_found("DRIVE_ACCOUNT_NOT_FOUND", "指定账号不存在或不可用")
-                rows = [hit] + [x for x in rows if str(x.name) != specified]
-        return rows
+class _BatchAdapters:
+    """Adapter IO and per-batch instance reuse; receives no request Session."""
+    def __init__(self, manager: Any):
+        self.manager = manager
+        self.cache: dict[str, Any] = {}
 
-    adapter_cache: dict[str, object] = {}
-
-    def _get_ready_adapter(account: Any):
-        name = str(getattr(account, "name", "") or "").strip()
+    def get_ready(self, name: str) -> Any:
         if not name:
             return None
-        cached = adapter_cache.get(name)
-        if cached is not None:
-            return cached
-        adapter = manager.manager.get_adapter(name)
+        if name in self.cache:
+            return self.cache[name]
+        adapter = self.manager.manager.get_adapter(name)
         if adapter is None:
             return None
-        if (not bool(getattr(adapter, "is_active", False))) and (not bool(getattr(adapter, "no_login", False))):
+        if not bool(getattr(adapter, 'is_active', False)) and not bool(getattr(adapter, 'no_login', False)):
             try:
-                ok = adapter.init()
+                if not adapter.init():
+                    return None
             except Exception:
-                ok = None
-            if not ok:
                 return None
-        adapter_cache[name] = adapter
+        self.cache[name] = adapter
         return adapter
 
-    for drive_type, urls in per_drive.items():
-        try:
-            candidates = _candidate_accounts_for_drive(drive_type)
-        except Exception as e:
-            message = _safe_error(e)
-            for url in urls:
-                items.append(SharePreviewBatchItemOut(shareurl=url, drive_type=drive_type, ok=False, message=message))
+
+def _probe_batch_url(url: str, drive_type: str, names: list[str], readers: _BatchAdapters) -> _BatchProbeResult:
+    last_error: str | None = None
+    confirmed_invalid = bool(names)
+    author_name = ''
+    for name in names:
+        adapter = readers.get_ready(name)
+        if adapter is None:
+            confirmed_invalid = False
+            last_error = f'账号 {name}: 不可用'
             continue
-        if not candidates:
-            for url in urls:
-                items.append(SharePreviewBatchItemOut(shareurl=url, drive_type=drive_type, ok=False, message="没有可用的驱动账号"))
+        try:
+            pwd_id, passcode, extracted_fid, _ = adapter.extract_url(url)
+        except Exception as error:
+            confirmed_invalid = False
+            last_error = _batch_error(error)
+            break
+        if not pwd_id:
+            confirmed_invalid = False
+            last_error = '无法解析分享链接'
+            break
+        try:
+            token = adapter.get_stoken(pwd_id, passcode or '')
+        except Exception as error:
+            confirmed_invalid = False
+            last_error = f'账号 {name}: {_batch_error(error)}'
+            continue
+        data = token.get('data') if isinstance(token, dict) else None
+        data = data if isinstance(data, dict) else {}
+        stoken = data.get('stoken')
+        author = data.get('author')
+        author_name = ((author.get('nick_name') or author.get('nickname') or author.get('user_name')
+                        or author.get('name') or '').strip()) if isinstance(author, dict) else ''
+        if not stoken or not _response_succeeded(token):
+            failure = _token_failure(adapter, token)
+            confirmed_invalid = confirmed_invalid and failure.kind == 'invalid'
+            last_error = str(failure)
+            continue
+        try:
+            folder_id, latest = _auto_resolve_latest_video(adapter, pwd_id, stoken, extracted_fid or '')
+        except Exception as error:
+            confirmed_invalid = False
+            last_error = f'账号 {name}: {_batch_error(error)}'
+            continue
+        return _BatchProbeResult(SharePreviewBatchItemOut(shareurl=url, drive_type=drive_type, ok=True,
+            suggested_account_name=name or None, pdir_fid=folder_id, resolved_pdir_fid=folder_id,
+            latest_video=latest, share_author_name=author_name))
+    return _BatchProbeResult(SharePreviewBatchItemOut(shareurl=url, drive_type=drive_type, ok=False,
+        message=_CONFIRMED_INVALID if confirmed_invalid else (last_error or '没有可用账号')), confirmed_invalid)
+
+
+def _persist_batch_result(out: SharePreviewBatchItemOut, *, confirmed_invalid: bool = False) -> tuple[bool, bool]:
+    """Only independent short writes; a database fault never repeats drive IO."""
+    cache_changed = invalid_changed = False
+    if not out.ok and not confirmed_invalid:
+        return False, False
+    try:
+        cache_changed = bool(_short_tx(lambda db: upsert_preview_batch_cache(db,
+            shareurl=out.shareurl, drive_type=out.drive_type, ok=out.ok, message=out.message,
+            ttl_seconds=int(getattr(settings, 'tasks_share_preview_batch_db_cache_ttl_seconds', 6 * 60 * 60)
+                            or 6 * 60 * 60))))
+    except Exception:
+        logger.warning('Preview batch cache write failed')
+    if not out.ok and confirmed_invalid:
+        try:
+            invalid_changed = bool(_short_tx(lambda db: upsert_invalid_share_link(db,
+                shareurl=out.shareurl, drive_type=out.drive_type, message=out.message)))
+        except Exception:
+            logger.warning('Preview batch invalid-link write failed')
+    return cache_changed, invalid_changed
+
+
+def _read_batch_accounts(db: Session, payload: SharePreviewBatchIn, per_drive: dict[str, list[str]]) -> tuple[_BatchAdapters, dict[str, list[str]], dict[str, str]]:
+    manager = DatabaseAccountManager(db, no_login=True)
+    candidates: dict[str, list[str]] = {}
+    errors: dict[str, str] = {}
+    for drive in per_drive:
+        try:
+            candidates[drive] = _batch_candidate_names(db, drive, payload.account_name)
+        except Exception as error:
+            errors[drive] = _batch_error(error)
+    # Account names are detached before ending the read transaction; external
+    # stages cannot lazily reload ORM attributes on the request Session.
+    end_read_tx(db)
+    return _BatchAdapters(manager), candidates, errors
+
+
+def preview_share_batch(db: Session, payload: SharePreviewBatchIn) -> tuple[SharePreviewBatchOut, bool]:
+    shareurls = list(dict.fromkeys(str(url or '').strip() for url in (payload.shareurls or []) if str(url or '').strip()))
+    if not shareurls:
+        return SharePreviewBatchOut(items=[]), False
+    if db.new or db.dirty or db.deleted:
+        raise RuntimeError('Batch preview requires a read-only session')
+    end_read_tx(db)
+    cache_changed = _purge_batch_cache()
+    items, per_drive, cache_hit_changed = _classify_batch_cache(shareurls)
+    cache_changed = bool(cache_changed or cache_hit_changed)
+    if not per_drive:
+        return SharePreviewBatchOut(items=items), cache_changed
+    readers, candidates, errors = _read_batch_accounts(db, payload, per_drive)
+    invalid_changed = False
+    for drive, urls in per_drive.items():
+        if drive in errors or not candidates.get(drive):
+            message = errors.get(drive, '没有可用的驱动账号')
+            items.extend(SharePreviewBatchItemOut(shareurl=url, drive_type=drive, ok=False, message=message) for url in urls)
             continue
         for url in urls:
             try:
-                ok = False
-                last_error: str | None = None
-                used_name: str | None = None
-                resolved_pdir_fid: str | None = None
-                latest_video: dict | None = None
-                share_author_name: str = ""
-                for account in candidates:
-                    adapter = _get_ready_adapter(account)
-                    if adapter is None:
-                        last_error = f"账号 {str(getattr(account, 'name', '') or '').strip()}: 不可用"
-                        continue
-                    try:
-                        pwd_id, passcode, extracted_pdir_fid, _ = adapter.extract_url(url)
-                    except Exception as e:
-                        last_error = _safe_error(e)
-                        break
-                    if not pwd_id:
-                        last_error = "无法解析分享链接"
-                        break
-                    try:
-                        token_response = adapter.get_stoken(pwd_id, passcode or "")
-                    except Exception as e:
-                        last_error = f"账号 {str(getattr(account, 'name', '') or '').strip()}: {_safe_error(e)}"
-                        continue
-                    stoken = ((token_response or {}).get("data") or {}).get("stoken")
-                    # 提取分享者信息
-                    author_obj = ((token_response or {}).get("data") or {}).get("author")
-                    if isinstance(author_obj, dict):
-                        share_author_name = (
-                            author_obj.get("nick_name")
-                            or author_obj.get("nickname")
-                            or author_obj.get("user_name")
-                            or author_obj.get("name")
-                            or ""
-                        ).strip()
-                    else:
-                        share_author_name = ""
-                    if not stoken:
-                        message = (token_response or {}).get("message") or "获取分享 token 失败"
-                        last_error = f"账号 {str(getattr(account, 'name', '') or '').strip()}: {str(message)}"
-                        continue
-                    try:
-                        resolved_pdir_fid, latest_video = _auto_resolve_latest_video(adapter, pwd_id, stoken, extracted_pdir_fid or "")
-                    except Exception as e:
-                        last_error = f"账号 {str(getattr(account, 'name', '') or '').strip()}: {_safe_error(e)}"
-                        continue
-                    if latest_video and latest_video.get("name"):
-                        pass
-                    ok = True
-                    used_name = str(getattr(account, "name", "") or "").strip() or None
-                    break
-                out = SharePreviewBatchItemOut(
-                    shareurl=url,
-                    drive_type=drive_type,
-                    ok=ok,
-                    message=None if ok else (last_error or "没有可用账号"),
-                    suggested_account_name=used_name,
-                    pdir_fid=resolved_pdir_fid if ok else None,
-                    resolved_pdir_fid=resolved_pdir_fid if ok else None,
-                    latest_video=latest_video if ok else None,
-                    share_author_name=share_author_name if ok else None,
-                )
-                items.append(out)
+                result = _probe_batch_url(url, drive, candidates[drive], readers)
+            except Exception as error:
+                result = _BatchProbeResult(SharePreviewBatchItemOut(shareurl=url, drive_type=drive, ok=False, message=_batch_error(error)))
+            out = result.item
+            items.append(out)
+            if out.ok or result.confirmed_invalid:
                 _share_preview_batch_cache_set(shareurl=url, item=out)
-                try:
-                    if _short_tx(
-                        lambda s: upsert_preview_batch_cache(
-                            s,
-                            shareurl=out.shareurl,
-                            drive_type=out.drive_type,
-                            ok=out.ok,
-                            message=out.message,
-                            ttl_seconds=int(
-                                getattr(settings, "tasks_share_preview_batch_db_cache_ttl_seconds", 6 * 60 * 60) or 6 * 60 * 60
-                            ),
-                        )
-                    ):
-                        cache_changed = True
-                except Exception:
-                    pass
-                if (not out.ok) and _should_persist_invalid_share_link(out.message):
-                    try:
-                        if _short_tx(
-                            lambda s: upsert_invalid_share_link(
-                                s, shareurl=out.shareurl, drive_type=out.drive_type, message=out.message
-                            )
-                        ):
-                            invalid_changed = True
-                    except Exception:
-                        pass
-            except Exception as e:
-                out = SharePreviewBatchItemOut(shareurl=url, drive_type=drive_type, ok=False, message=_safe_error(e))
-                items.append(out)
-                _share_preview_batch_cache_set(shareurl=url, item=out)
-                try:
-                    if _short_tx(
-                        lambda s: upsert_preview_batch_cache(
-                            s,
-                            shareurl=out.shareurl,
-                            drive_type=out.drive_type,
-                            ok=out.ok,
-                            message=out.message,
-                            ttl_seconds=int(
-                                getattr(settings, "tasks_share_preview_batch_db_cache_ttl_seconds", 6 * 60 * 60) or 6 * 60 * 60
-                            ),
-                        )
-                    ):
-                        cache_changed = True
-                except Exception:
-                    pass
-                if _should_persist_invalid_share_link(out.message):
-                    try:
-                        if _short_tx(
-                            lambda s: upsert_invalid_share_link(
-                                s, shareurl=out.shareurl, drive_type=out.drive_type, message=out.message
-                            )
-                        ):
-                            invalid_changed = True
-                    except Exception:
-                        pass
-            finally:
-                time.sleep(random.uniform(0.06, 0.22))
-
+            saved_cache, saved_invalid = _persist_batch_result(out, confirmed_invalid=result.confirmed_invalid)
+            cache_changed = bool(cache_changed or saved_cache)
+            invalid_changed = bool(invalid_changed or saved_invalid)
+            time.sleep(random.uniform(0.06, 0.22))
     return SharePreviewBatchOut(items=items), bool(invalid_changed or cache_changed)
 
 

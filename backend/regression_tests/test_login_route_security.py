@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 from app.api.routes import auth
 from app.application import auth as auth_service
 from app.application.login_throttle import LoginThrottle
+from app.application.login_failure_audit import LoginFailureAudit
+from app.application import audit
+import json
 from app.core.errors import ApiError
 from app.core.exception_handlers import api_error_handler
 from app.core.security import hash_password
@@ -29,6 +32,15 @@ def login_client(tmp_path, monkeypatch):
     guard = LoginThrottle()
     monkeypatch.setattr(auth_service, 'login_throttle', guard)
     app = FastAPI()
+    def write_batch(batch):
+        with Session(engine) as db:
+            for ip, count in batch:
+                audit.write_audit_log(db, actor_user_id=None, action='auth.login', ip=ip,
+                                      success=False, detail=json.dumps({'failure_count': count}))
+            db.commit()
+    failure_audit = LoginFailureAudit(writer=write_batch, autostart=False)
+    monkeypatch.setattr(auth_service, 'record_login_failure', failure_audit.record)
+    app.state.failure_audit = failure_audit
     app.add_exception_handler(ApiError, api_error_handler)
     app.include_router(auth.router, prefix='/auth')
     def database():
@@ -37,6 +49,7 @@ def login_client(tmp_path, monkeypatch):
     app.dependency_overrides[auth.get_db] = database
     with TestClient(app) as client:
         yield client, engine
+    failure_audit.close()
     engine.dispose()
 
 
@@ -49,9 +62,11 @@ def test_route_bad_credentials_throttle_and_safe_audit(login_client):
     assert response.status_code == 429
     assert response.json()['code'] == 'AUTH_LOGIN_THROTTLED'
     assert int(response.headers['retry-after']) > 0
+    assert client.app.state.failure_audit.flush()
     with Session(engine) as db:
         rows = db.scalars(select(AuditLog)).all()
-        assert len(rows) == 5
+        assert len(rows) == 1
+        assert json.loads(rows[0].detail)['failure_count'] == 5
         assert all(not row.success and row.actor_user_id is None for row in rows)
         assert all('SecretWrong!' not in (row.detail or '') for row in rows)
     assert 'SecretWrong!' not in response.text
@@ -99,11 +114,12 @@ def test_audit_failure_cannot_reset_throttle_or_fake_success(login_client, monke
     client, _ = login_client
     def broken(*args, **kwargs):
         raise RuntimeError('fake-password-must-not-escape')
-    monkeypatch.setattr(auth_service.audit, 'write_audit_log', broken)
+    monkeypatch.setattr(audit, 'write_audit_log', broken)
     for _ in range(5):
         assert client.post('/auth/login', data={'username': 'missing', 'password': 'wrong'}).status_code == 401
     assert client.post('/auth/login', data={'username': 'missing', 'password': 'wrong'}).status_code == 429
-    assert 'audit could not be persisted' in caplog.text
+    assert not client.app.state.failure_audit.flush()
+    assert 'audit batch failed' in caplog.text
     assert 'fake-password' not in caplog.text
 
 
@@ -131,6 +147,7 @@ def test_proxy_middleware_only_trusts_configured_peer(login_client):
     with TestClient(wrapped, client=('192.0.2.1', 1234)) as direct_client:
         direct_client.post('/auth/login', data={'username': 'absent', 'password': 'wrong'},
                            headers={'X-Forwarded-For': 'spoofed'})
+    assert client.app.state.failure_audit.flush()
     with Session(engine) as db:
         assert set(db.scalars(select(AuditLog.ip))) == {'203.0.113.8', '192.0.2.1'}
 
@@ -165,3 +182,22 @@ def test_login_configuration_requires_positive_limits(field):
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         Settings(**{'login_throttle_' + field: 0})
+
+
+@pytest.mark.parametrize('field,size', [('username', 65), ('password', 4097)])
+def test_login_rejects_oversized_fields_without_echo_or_retention(login_client, field, size):
+    client, _ = login_client
+    data = {'username': 'admin', 'password': 'wrong'}
+    data[field] = 'sensitive-marker-' + 'x' * size
+    response = client.post('/auth/login', data=data)
+    assert response.status_code == 400
+    assert 'sensitive-marker' not in response.text
+    assert not auth_service.login_throttle._pairs
+
+
+def test_login_bounds_actual_body_even_without_content_length(login_client):
+    client, _ = login_client
+    response = client.post('/auth/login', content=iter([b'username=admin&password=', b'x' * 20000]),
+        headers={'content-type': 'application/x-www-form-urlencoded'})
+    assert response.status_code == 413
+    assert not auth_service.login_throttle._pairs

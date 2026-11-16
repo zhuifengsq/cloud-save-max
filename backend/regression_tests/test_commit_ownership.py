@@ -59,6 +59,7 @@ TOTAL_BUDGET = 94
 
 # 允许直接实例化 SessionLocal 的文件（旁路会话必须登记理由；路由层只允许 SSE 流）。
 SESSION_LOCAL_ALLOWED: dict[str, str] = {
+    "infrastructure/persistence/login_failure_audit.py": "有界聚合失败审计独立批事务，隔离请求会话",
     "application/container.py": "容器 db_session() 的唯一出口",
     "infrastructure/persistence/session.py": "SessionLocal 定义处",
     "main.py": "lifespan 启动期写入",

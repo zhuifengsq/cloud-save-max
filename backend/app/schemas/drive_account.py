@@ -21,6 +21,7 @@ class DriveAccountCreateIn(DriveAccountBase):
 
 
 class DriveAccountUpdateIn(BaseModel):
+    clear_credentials: list[str] = Field(default_factory=list)
     name: str | None = Field(default=None, min_length=1, max_length=128)
     cookie: str | None = None
     config: dict[str, Any] | None = None
@@ -38,6 +39,8 @@ class DriveAccountOut(BaseModel):
     name: str
     drive_type: str
     config: dict[str, Any] = {}
+    credential_present: bool = False
+    credential_fields: list[str] = Field(default_factory=list)
     profile: dict[str, Any] = {}
     enabled: bool
     is_default: bool

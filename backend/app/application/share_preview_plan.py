@@ -4,13 +4,31 @@ import os
 import re
 import logging
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence, TypedDict, NotRequired, SupportsFloat, SupportsIndex
 from app.application.dto.task_browse import SharePreviewItemOut
 from app.application.drive_payload import bool_is_dir, pick_children_count, pick_fid, pick_fid_token, pick_name, pick_size, pick_updated_at
 from app.core.errors import bad_request
 from app.domain.ports.share_preview import PreviewRenamerPort
 
 logger = logging.getLogger(__name__)
+
+class PreviewRow(TypedDict):
+    fid: str
+    fid_token: str | None
+    file_name: str
+    dir: bool
+    updated_at: object
+    size: int | None
+    include_items: int | None
+    file_name_re: str | None
+    file_name_saved: str | None
+    priority_match: NotRequired[bool]
+    filtered_by_folder: NotRequired[str]
+    filtered_by_search: NotRequired[bool]
+    filtered_by_size: NotRequired[bool]
+    filtered_by_keyword: NotRequired[bool]
+    filtered_by_file_filter: NotRequired[bool]
+    filtered_by_file_date: NotRequired[bool]
 
 @dataclass(frozen=True)
 class PreviewPlanOptions:
@@ -32,26 +50,93 @@ class PreviewPlanOptions:
     max_items: int = 200
     ignore_extension: bool | None = None
 
-def plan_preview_items(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[str, Any]],
+def plan_preview_items(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[str, object]],
                        destination_names: Sequence[str], mr: PreviewRenamerPort,
                        *, min_bytes: int | None = None) -> list[SharePreviewItemOut]:
-    taskname = str(payload.taskname or '')
     pattern = str(payload.pattern or '')
     replace = str(payload.replace or '')
     ignore_ext = bool(payload.ignore_extension)
-    dir_filename_list = list(destination_names)
     pattern, replace = mr.magic_regex_conv(pattern, replace)
     try:
         compiled_search = re.compile(pattern, re.IGNORECASE) if pattern else None
     except re.error as e:
         raise bad_request("TASK_REGEX_INVALID", f"pattern 正则不合法: {e}")
-    def _to_ts(v):
-        try:
-            return float(v)
-        except (TypeError, ValueError, OverflowError):
-            return None
+    preview_list = _collect_rows(payload, raw_items, destination_names, mr, pattern, replace, compiled_search)
+    _apply_filters(preview_list, payload, min_bytes)
+    _mark_conflicts(preview_list, ignore_ext)
+    return _present_rows(preview_list)
 
-    preview_list: list[dict] = []
+def _to_ts(v: object) -> float | None:
+    if not isinstance(v, (SupportsFloat, SupportsIndex, str, bytes, bytearray)):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _mark_folder(item: PreviewRow, payload: PreviewPlanOptions) -> None:
+    file_name = item["file_name"]
+    updated_at = item["updated_at"]
+    # 文件夹筛选/过滤检查
+    folder_filter_str = str(payload.folder_filter or "").strip()
+    folder_exclude_str = str(payload.folder_exclude or "").strip()
+    dir_min_date_str = str(payload.dir_min_date or "").strip()
+    folder_priority_str = str(payload.folder_priority or "").strip()
+    folder_priority_mode_str = str(payload.folder_priority_mode or "").strip()
+    if folder_filter_str or folder_exclude_str or dir_min_date_str or folder_priority_str:
+        name_lower = file_name.lower()
+        # 优先级匹配检查
+        if folder_priority_str:
+            priority_keywords = [w.strip().lower() for w in folder_priority_str.split("|") if w.strip()]
+            priority_is_any = str(folder_priority_mode_str or "all").strip().lower() == "any"
+            if priority_keywords:
+                if priority_is_any:
+                    if any(kw in name_lower for kw in priority_keywords):
+                        item["priority_match"] = True
+                else:
+                    if all(kw in name_lower for kw in priority_keywords):
+                        item["priority_match"] = True
+        if folder_filter_str:
+            folder_filter_words = [w.strip().lower() for w in folder_filter_str.split("|") if w.strip()]
+            folder_filter_is_any = str(payload.folder_filter_mode or "all").strip().lower() == "any"
+            if folder_filter_words:
+                if folder_filter_is_any:
+                    if not any(w in name_lower for w in folder_filter_words):
+                        item["filtered_by_folder"] = "不包含筛选词"
+                else:
+                    if not all(w in name_lower for w in folder_filter_words):
+                        item["filtered_by_folder"] = "不包含筛选词"
+        if folder_exclude_str and not item.get("filtered_by_folder"):
+            folder_exclude_words = [w.strip().lower() for w in folder_exclude_str.split("|") if w.strip()]
+            folder_exclude_is_all = str(payload.folder_exclude_mode or "any").strip().lower() == "all"
+            if folder_exclude_words:
+                if folder_exclude_is_all:
+                    if all(w in name_lower for w in folder_exclude_words):
+                        item["filtered_by_folder"] = "匹配过滤词"
+                else:
+                    if any(w in name_lower for w in folder_exclude_words):
+                        item["filtered_by_folder"] = "匹配过滤词"
+        if dir_min_date_str and not item.get("filtered_by_folder"):
+            dir_ts = updated_at
+            if dir_ts is not None:
+                try:
+                    from datetime import datetime as _dt
+                    if isinstance(dir_ts, (int, float)) and dir_ts > 0:
+                        dir_date = _dt.fromtimestamp(dir_ts / 1000 if dir_ts > 1e12 else dir_ts).strftime("%Y-%m-%d")
+                    else:
+                        dir_date = str(dir_ts)[:10]
+                    if dir_date < dir_min_date_str:
+                        item["filtered_by_folder"] = "早于文件夹时间过滤"
+                except (TypeError, ValueError, OverflowError, OSError):
+                    logger.warning("Preview directory date could not be interpreted")
+
+def _collect_rows(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[str, object]],
+                  destination_names: Sequence[str], mr: PreviewRenamerPort, pattern: str, replace: str,
+                  compiled_search: re.Pattern[str] | None) -> list[PreviewRow]:
+    ignore_ext = bool(payload.ignore_extension)
+    dir_filename_list = list(destination_names)
+    preview_list: list[PreviewRow] = []
     for raw in raw_items[: payload.max_items]:
         fid = pick_fid(raw)
         file_name = pick_name(raw)
@@ -62,7 +147,7 @@ def plan_preview_items(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[
         size = pick_size(raw)
         include_items = pick_children_count(raw) if is_dir else None
 
-        item: dict = {
+        item: PreviewRow = {
             "fid": fid,
             "fid_token": pick_fid_token(raw),
             "file_name": file_name,
@@ -75,58 +160,7 @@ def plan_preview_items(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[
         }
 
         if is_dir:
-            # 文件夹筛选/过滤检查
-            folder_filter_str = str(payload.folder_filter or "").strip()
-            folder_exclude_str = str(payload.folder_exclude or "").strip()
-            dir_min_date_str = str(payload.dir_min_date or "").strip()
-            folder_priority_str = str(payload.folder_priority or "").strip()
-            folder_priority_mode_str = str(payload.folder_priority_mode or "").strip()
-            if folder_filter_str or folder_exclude_str or dir_min_date_str or folder_priority_str:
-                name_lower = file_name.lower()
-                # 优先级匹配检查
-                if folder_priority_str:
-                    priority_keywords = [w.strip().lower() for w in folder_priority_str.split("|") if w.strip()]
-                    priority_is_any = str(folder_priority_mode_str or "all").strip().lower() == "any"
-                    if priority_keywords:
-                        if priority_is_any:
-                            if any(kw in name_lower for kw in priority_keywords):
-                                item["priority_match"] = True
-                        else:
-                            if all(kw in name_lower for kw in priority_keywords):
-                                item["priority_match"] = True
-                if folder_filter_str:
-                    folder_filter_words = [w.strip().lower() for w in folder_filter_str.split("|") if w.strip()]
-                    folder_filter_is_any = str(payload.folder_filter_mode or "all").strip().lower() == "any"
-                    if folder_filter_words:
-                        if folder_filter_is_any:
-                            if not any(w in name_lower for w in folder_filter_words):
-                                item["filtered_by_folder"] = "不包含筛选词"
-                        else:
-                            if not all(w in name_lower for w in folder_filter_words):
-                                item["filtered_by_folder"] = "不包含筛选词"
-                if folder_exclude_str and not item.get("filtered_by_folder"):
-                    folder_exclude_words = [w.strip().lower() for w in folder_exclude_str.split("|") if w.strip()]
-                    folder_exclude_is_all = str(payload.folder_exclude_mode or "any").strip().lower() == "all"
-                    if folder_exclude_words:
-                        if folder_exclude_is_all:
-                            if all(w in name_lower for w in folder_exclude_words):
-                                item["filtered_by_folder"] = "匹配过滤词"
-                        else:
-                            if any(w in name_lower for w in folder_exclude_words):
-                                item["filtered_by_folder"] = "匹配过滤词"
-                if dir_min_date_str and not item.get("filtered_by_folder"):
-                    dir_ts = updated_at
-                    if dir_ts is not None:
-                        try:
-                            from datetime import datetime as _dt
-                            if isinstance(dir_ts, (int, float)) and dir_ts > 0:
-                                dir_date = _dt.fromtimestamp(dir_ts / 1000 if dir_ts > 1e12 else dir_ts).strftime("%Y-%m-%d")
-                            else:
-                                dir_date = str(dir_ts)[:10]
-                            if dir_date < dir_min_date_str:
-                                item["filtered_by_folder"] = "早于文件夹时间过滤"
-                        except (TypeError, ValueError, OverflowError, OSError):
-                            logger.warning("Preview directory date could not be interpreted")
+            _mark_folder(item, payload)
             preview_list.append(item)
             continue
 
@@ -146,6 +180,9 @@ def plan_preview_items(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[
                 item["filtered_by_search"] = True
         preview_list.append(item)
 
+    return preview_list
+
+def _apply_filters(preview_list: list[PreviewRow], payload: PreviewPlanOptions, min_bytes: int | None) -> None:
     # 最小文件大小过滤标记
     min_size_str = str(payload.min_size or "").strip()
     if min_size_str:
@@ -213,6 +250,8 @@ def plan_preview_items(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[
                 except (TypeError, ValueError, OverflowError, OSError):
                     logger.warning("Preview file date could not be interpreted")
 
+
+def _mark_conflicts(preview_list: list[PreviewRow], ignore_ext: bool) -> None:
     # 过滤完成后再判断重命名冲突，避免已被关键词/文件规则排除的文件参与冲突。
     best: dict[str, tuple[tuple[float, float], int]] = {}
     for idx, f in enumerate(preview_list):
@@ -237,6 +276,8 @@ def plan_preview_items(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[
                 f["file_name_saved"] = "重命名冲突（保留最大）"
                 f["file_name_re"] = None
 
+
+def _present_rows(preview_list: list[PreviewRow]) -> list[SharePreviewItemOut]:
     items: list[SharePreviewItemOut] = []
     for it in preview_list:
         items.append(

@@ -6,8 +6,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import SupportsInt, SupportsIndex
 
-def bool_is_dir(payload: dict) -> bool:
+
+def _integer(value: object) -> int:
+    if not isinstance(value, (str, bytes, bytearray, SupportsInt, SupportsIndex)):
+        raise TypeError("Invalid numeric directory metadata")
+    return int(value)
+
+
+def bool_is_dir(payload: Mapping[str, object]) -> bool:
     if payload.get("is_dir") is not None:
         return bool(payload.get("is_dir"))
     if payload.get("isdir") is not None:
@@ -31,7 +40,7 @@ def bool_is_dir(payload: dict) -> bool:
     return False
 
 
-def pick_name(payload: dict) -> str:
+def pick_name(payload: Mapping[str, object]) -> str:
     return str(
         payload.get("file_name")
         or payload.get("server_filename")
@@ -44,40 +53,40 @@ def pick_name(payload: dict) -> str:
     )
 
 
-def pick_fid(payload: dict) -> str:
+def pick_fid(payload: Mapping[str, object]) -> str:
     return str(payload.get("fid") or payload.get("fs_id") or payload.get("file_id") or payload.get("id") or payload.get("fileId") or "")
 
 
-def pick_fid_token(payload: dict) -> str | None:
+def pick_fid_token(payload: Mapping[str, object]) -> str | None:
     value = payload.get("fid_token") or payload.get("share_fid_token") or payload.get("token")
     if value is None:
         return None
     return str(value)
 
 
-def pick_updated_at(payload: dict):
+def pick_updated_at(payload: Mapping[str, object]) -> object:
     return payload.get("updated_at") or payload.get("update_time") or payload.get("mtime") or payload.get("modified_at")
 
 
-def pick_size(payload: dict) -> int | None:
+def pick_size(payload: Mapping[str, object]) -> int | None:
     if payload.get("size") is None:
         return None
     try:
-        return int(payload.get("size"))
+        return _integer(payload.get("size"))
     except (TypeError, ValueError):
         return None
 
 
-def pick_children_count(payload: dict) -> int | None:
+def pick_children_count(payload: Mapping[str, object]) -> int | None:
     if payload.get("include_items") is not None:
         try:
-            return int(payload.get("include_items"))
+            return _integer(payload.get("include_items"))
         except (TypeError, ValueError):
             pass
     for key in ("children_count", "child_count", "child_cnt", "count", "cnt", "total"):
         if payload.get(key) is not None:
             try:
-                return int(payload.get(key))
+                return _integer(payload.get(key))
             except (TypeError, ValueError):
                 pass
     file_count = None
@@ -85,14 +94,14 @@ def pick_children_count(payload: dict) -> int | None:
     for key in ("file_count", "file_cnt", "files", "fileCount", "fileCnt", "sub_file_cnt", "subFileCount"):
         if payload.get(key) is not None:
             try:
-                file_count = int(payload.get(key))
+                file_count = _integer(payload.get(key))
                 break
             except (TypeError, ValueError):
                 pass
     for key in ("dir_count", "dir_cnt", "dirs", "dirCount", "dirCnt", "sub_dir_cnt", "subDirCount"):
         if payload.get(key) is not None:
             try:
-                dir_count = int(payload.get(key))
+                dir_count = _integer(payload.get(key))
                 break
             except (TypeError, ValueError):
                 pass

@@ -245,6 +245,28 @@
       "scanned_directories": "<class 'int'>"
     }
   },
+  "drive_account_response": {
+    "id": "<class 'int'>",
+    "name": "<class 'str'>",
+    "drive_type": "<class 'str'>",
+    "config": "dict[str, typing.Any]",
+    "credential_present": "<class 'bool'>",
+    "credential_fields": "list[str]",
+    "profile": "dict[str, typing.Any]",
+    "enabled": "<class 'bool'>",
+    "is_default": "<class 'bool'>",
+    "capacity_warning_threshold": "<class 'int'>",
+    "used_space": "int | None",
+    "total_space": "int | None",
+    "usage_ratio": "float | None",
+    "runtime_status": "str | None",
+    "probe_fail_count": "<class 'int'>",
+    "last_checked_at": "datetime.datetime | None",
+    "profile_updated_at": "datetime.datetime | None",
+    "last_error": "str | None",
+    "created_at": "<class 'datetime.datetime'>",
+    "updated_at": "<class 'datetime.datetime'>"
+  },
   "frontend_types": {
     "TaskExtraConfig": [
       "auto_update_115_shareurl",

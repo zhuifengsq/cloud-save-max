@@ -10,9 +10,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from alembic import command
 from alembic.config import Config
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.api.router import api_router
-from app.core.exception_handlers import api_error_handler, http_error_handler, validation_error_handler
+from app.core.exception_handlers import api_error_handler, http_error_handler, validation_error_handler, concurrent_update_error_handler
 from app.core.errors import ApiError
 from app.core.logging import setup_logging
 from app.core.settings import settings
@@ -24,6 +25,7 @@ from app.infrastructure.scheduling.task_scheduler import task_scheduler_manager
 from app.middlewares.timing import TimingMiddleware
 from app.application.proxy_image_cache import ensure_dir, resolve_proxy_image_cache_dir
 from app.application.setup import ensure_permissions_and_roles
+from app.application.container import login_failure_audit_service
 
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,7 @@ def create_app() -> FastAPI:
             task_scheduler_manager.start()
         telegram_bot_manager.start()
         yield
+        login_failure_audit_service().close()
         telegram_bot_manager.shutdown()
         if bool(getattr(settings, "scheduler_enabled", True)):
             task_scheduler_manager.shutdown()
@@ -112,6 +115,7 @@ def create_app() -> FastAPI:
         )
 
     app.add_exception_handler(ApiError, api_error_handler)
+    app.add_exception_handler(StaleDataError, concurrent_update_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(Exception, http_error_handler)
 

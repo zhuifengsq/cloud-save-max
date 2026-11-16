@@ -1,5 +1,7 @@
 # 网盘凭据保护方案与恢复验证设计
 
+后续已实现可选AES-GCM持久化、API不回显及显式离线转换/恢复测试，见 [实现报告](backend-credential-encryption-report.md) 和 [API报告](backend-credential-api-report.md)。下文仍为最初完整设计；独立凭据表、nonce账本、凭据revision CAS等增强项尚未全部实现，不把实现的子集当成整份设计完成，也没有转换真实库。
+
 日期：2026-11-16。工作包 H，仅源码盘点与设计。未读取运行数据库、secrets.json、Cookie或真实密钥；未安装加密库，未实施加密或线上迁移。下文的密钥ID、协议名与测试值均为设计/假数据。
 
 ## 字段分类与源码入口

@@ -13,6 +13,12 @@ from app.core.errors import ApiError
 logger = logging.getLogger(__name__)
 
 
+def concurrent_update_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=409, content={
+        'code': 'DRIVE_ACCOUNT_CONFLICT', 'message': '账号已被其他操作修改，请刷新后重试', 'detail': None,
+    })
+
+
 def api_error_handler(_: Request, exc: ApiError) -> JSONResponse:
     if exc.http_status >= 500:
         logger.error("API error: %s", exc.code, exc_info=True)

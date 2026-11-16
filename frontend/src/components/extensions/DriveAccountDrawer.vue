@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { useIsMobile } from '@/composables/useIsMobile'
 import type { ConfigFieldItem, DriveAccountItem, DriveTypeItem } from '@/types/extensions'
+import { buildAccountConfigUpdate } from '@/utils/driveAccountConfig'
 
 type DriveAccountFormPayload = {
   name: string
   drive_type: string
   config: Record<string, any>
+  clear_credentials: string[]
   enabled: boolean
   is_default: boolean
   capacity_warning_threshold: number
@@ -33,6 +35,7 @@ const state = reactive({
   name: '',
   drive_type: '',
   configData: {} as Record<string, any>,
+  clearCredentials: [] as string[],
   enabled: true,
   is_default: false,
   capacity_warning_threshold: 85,
@@ -48,6 +51,7 @@ const currentDriveFields = computed<ConfigFieldItem[]>(() => currentDriveType.va
 const isMobile = useIsMobile()
 
 function syncState() {
+  state.clearCredentials = []
   if (props.account) {
     state.name = props.account.name
     state.drive_type = props.account.drive_type
@@ -92,7 +96,8 @@ function submit() {
   emit('save', {
     name: state.name.trim(),
     drive_type: state.drive_type,
-    config: cloneConfig(state.configData),
+    ...buildAccountConfigUpdate(cloneConfig(state.configData), currentDriveFields.value,
+      props.account?.credential_fields || [], state.clearCredentials, isEditing.value),
     enabled: state.enabled,
     is_default: state.is_default,
     capacity_warning_threshold: state.capacity_warning_threshold,
@@ -135,7 +140,7 @@ function submit() {
         <div class="drawer-form__section-title">登录配置</div>
         <el-alert
           v-if="isEditing"
-          title="当前显示的是已保存的结构化登录参数，保存后会直接覆盖当前账号配置。"
+          title="已保存的登录凭据不会显示。留空保持不变，输入新值替换；勾选清除才会删除。"
           type="info"
           :closable="false"
           style="margin-bottom: 16px"
@@ -157,16 +162,19 @@ function submit() {
             v-model="state.configData[field.key]"
             type="textarea"
             :rows="field.secret ? 4 : 3"
-            :placeholder="field.placeholder || ''"
+            :placeholder="account?.credential_fields?.includes(field.key) ? '已保存，留空保持不变' : (field.placeholder || '')"
           />
           <el-input
             v-else
             v-model="state.configData[field.key]"
             :type="field.input_type === 'password' ? 'password' : 'text'"
-            :placeholder="field.placeholder || ''"
+            :placeholder="account?.credential_fields?.includes(field.key) ? '已保存，留空保持不变' : (field.placeholder || '')"
             :show-password="field.input_type === 'password'"
           />
           <div v-if="field.description" class="drawer-form__hint">{{ field.description }}</div>
+          <el-checkbox-group v-if="isEditing && account?.credential_fields?.includes(field.key)" v-model="state.clearCredentials">
+            <el-checkbox :value="field.key">清除已保存的此项凭据</el-checkbox>
+          </el-checkbox-group>
         </el-form-item>
       </div>
     </el-form>

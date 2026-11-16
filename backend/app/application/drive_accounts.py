@@ -7,8 +7,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.errors import ApiError, bad_request, not_found
+from app.core.account_privacy import SAFE_ACCOUNT_ERROR, public_account_profile
+from app.core.credential_crypto import is_secret_key, public_config_keys
 from app.core.runtime.cache_version import invalidate_drive_accounts
 from app.application.container import adapter_factory as _acc_AdapterFactory; AdapterFactory = _acc_AdapterFactory()
 from app.application.container import drive_auth_required as _acc_DriveAuthRequired; DriveAuthRequired = _acc_DriveAuthRequired()
@@ -61,22 +64,27 @@ def create_drive_account(db: Session, **payload) -> Any:
 def update_drive_account(db: Session, account_id: int, **payload) -> Any:
     invalidate_drive_accounts()
     account = get_drive_account(db, account_id)
+    clear_credentials = payload.pop('clear_credentials', []) or []
     for key, value in payload.items():
         if key in {'cookie', 'config'}:
             continue
         if value is not None:
             setattr(account, key, value)
-    if 'config' in payload or 'cookie' in payload:
+    if 'config' in payload or 'cookie' in payload or clear_credentials:
         config, cookie = _normalize_account_payload(
             account.drive_type,
             payload.get('config'),
             payload.get('cookie'),
             current_config_json=account.config_json,
             current_cookie=account.cookie,
+            clear_credentials=clear_credentials,
         )
         account.config_json = json.dumps(config, ensure_ascii=False)
         account.cookie = cookie
-    db.flush()
+    try:
+        db.flush()
+    except StaleDataError:
+        raise ApiError(code='DRIVE_ACCOUNT_CONFLICT', message='账号已被其他操作修改，请刷新后重试', http_status=409) from None
     if payload.get('is_default'):
         set_default_drive_account(db, account.id)
     return account
@@ -157,9 +165,9 @@ def probe_drive_account(db: Session, account_id: int) -> Any:
                     ensure_ascii=False,
                 ),
             )
-        except Exception as exc:
+        except Exception:
             account.runtime_status = 'error'
-            account.last_error = str(exc)
+            account.last_error = SAFE_ACCOUNT_ERROR
 
     if ok:
         account.probe_fail_count = 0
@@ -185,11 +193,14 @@ def sign_in_drive_account(db: Session, account_id: int) -> dict[str, Any]:
     )
     if adapter is None:
         raise bad_request("DRIVE_SIGNIN_FAILED", "驱动实例创建失败")
-    result = adapter.sign_in()
+    try:
+        result = adapter.sign_in()
+    except Exception:
+        raise ApiError(code='DRIVE_SIGNIN_FAILED', message=SAFE_ACCOUNT_ERROR, http_status=502) from None
     if not isinstance(result, dict) or not result.get("supported"):
         raise bad_request("DRIVE_SIGNIN_UNSUPPORTED", "该网盘暂不支持签到")
     if not result.get("ok", True):
-        raise bad_request("DRIVE_SIGNIN_FAILED", result.get("message") or "签到失败", detail=str(result.get("reward") or result.get("message") or ""))
+        raise bad_request('DRIVE_SIGNIN_FAILED', SAFE_ACCOUNT_ERROR)
     config_snapshot = adapter.export_runtime_config()
     if isinstance(config_snapshot, dict) and config_snapshot:
         account.config_json = json.dumps(config_snapshot, ensure_ascii=False)
@@ -198,8 +209,14 @@ def sign_in_drive_account(db: Session, account_id: int) -> dict[str, Any]:
     return result
 
 
-def supported_drive_types() -> list[dict[str, str]]:
-    return AdapterRegistry.supported_drive_types()
+def supported_drive_types() -> list[dict[str, Any]]:
+    types = [dict(item, config_fields=[dict(field) for field in item.get('config_fields', [])])
+             for item in AdapterRegistry.supported_drive_types()]
+    for item in types:
+        for field in item.get('config_fields', []):
+            if field['key'] not in _public_config_keys(item['code']):
+                field['secret'] = True
+    return types
 
 
 def resolve_drive_account_config(account: Any) -> dict:
@@ -235,13 +252,19 @@ def extract_capacity_metrics(profile: dict[str, Any]) -> tuple[int | None, int |
 
 
 def serialize_drive_account(account: Any) -> dict[str, Any]:
-    profile = resolve_drive_account_profile(account)
+    raw_profile = resolve_drive_account_profile(account)
+    profile = public_account_profile(raw_profile)
+    config = resolve_drive_account_config(account)
+    public_keys = _public_config_keys(account.drive_type)
+    credential_fields = sorted(key for key, value in config.items() if key not in public_keys and value not in (None, '', False))
     used_space, total_space, usage_ratio = extract_capacity_metrics(profile)
     return {
         'id': account.id,
         'name': account.name,
         'drive_type': account.drive_type,
-        'config': resolve_drive_account_config(account),
+        'config': {key: value for key, value in config.items() if key in public_keys},
+        'credential_present': bool(credential_fields),
+        'credential_fields': credential_fields,
         'profile': profile,
         'enabled': account.enabled,
         'is_default': account.is_default,
@@ -253,7 +276,7 @@ def serialize_drive_account(account: Any) -> dict[str, Any]:
         'probe_fail_count': int(getattr(account, "probe_fail_count", 0) or 0),
         'last_checked_at': normalize_api_datetime(account.last_checked_at),
         'profile_updated_at': normalize_api_datetime(account.last_checked_at),
-        'last_error': account.last_error,
+        'last_error': '账号操作失败，请检查登录状态或重新认证' if account.last_error else None,
         'created_at': normalize_api_datetime(account.created_at),
         'updated_at': normalize_api_datetime(account.updated_at),
     }
@@ -318,8 +341,7 @@ def _build_account_profile(adapter: Any, account: Any) -> dict[str, Any] | None:
     profile.setdefault('username', '')
     profile.setdefault('used_space', None)
     profile.setdefault('total_space', None)
-    profile.setdefault('raw', None)
-    return profile
+    return public_account_profile(profile)
 
 
 def normalize_api_datetime(value: datetime | None) -> datetime | None:
@@ -330,6 +352,13 @@ def normalize_api_datetime(value: datetime | None) -> datetime | None:
     return value.astimezone(BEIJING_TZ)
 
 
+def _public_config_keys(drive_type: str) -> set[str]:
+    fields = AdapterRegistry.get_drive_type_meta(drive_type).get('config_fields', [])
+    return {str(field['key']) for field in fields
+            if not field.get('secret') and field.get('input_type') != 'password'
+            and not is_secret_key(str(field['key'])) and field['key'] in public_config_keys(drive_type)}
+
+
 def _normalize_account_payload(
     drive_type: str,
     config: dict | None,
@@ -337,17 +366,42 @@ def _normalize_account_payload(
     *,
     current_config_json: str | None = None,
     current_cookie: str | None = None,
+    clear_credentials: list[str] | None = None,
 ) -> tuple[dict, str]:
+    current = (AdapterRegistry.parse_config_json(drive_type, current_config_json, current_cookie)
+               if current_config_json is not None or current_cookie is not None else {})
+    public_keys = _public_config_keys(drive_type)
+    clear = set(clear_credentials or [])
+    if any(key in public_keys or key not in current for key in clear):
+        raise bad_request('DRIVE_CREDENTIAL_CLEAR_INVALID', '只能清除已保存的登录凭据字段')
+    if config is None and cookie is not None:
+        if cookie.strip() in {'********', '••••••••', '******'}:
+            raise bad_request('DRIVE_CREDENTIAL_MASK_INVALID', '请填写新的登录凭据，或留空保持不变')
+        meta = AdapterRegistry.get_drive_type_meta(drive_type)
+        decoded = AdapterRegistry.deserialize_cookie(drive_type, cookie)
+        if meta.get('config_format') == 'kv':
+            provided = {part.split('=', 1)[0].strip() for part in cookie.split(';') if '=' in part}
+        else:
+            fields = meta.get('config_fields') or []
+            provided = {str(fields[0]['key'])} if fields else {'cookie'}
+        config = {key: value for key, value in decoded.items() if key in provided}
     if config is not None:
-        normalized_config = AdapterRegistry.normalize_config(drive_type, config)
-    elif cookie is not None:
-        normalized_config = AdapterRegistry.deserialize_cookie(drive_type, cookie)
+        incoming = dict(config)
+        for key, value in list(incoming.items()):
+            if key not in public_keys:
+                if isinstance(value, str) and value.strip() in {'********', '••••••••', '******'}:
+                    raise bad_request('DRIVE_CREDENTIAL_MASK_INVALID', '请填写新的登录凭据，或留空保持不变')
+                if current and value in (None, ''):
+                    incoming.pop(key)
+        normalized_config = AdapterRegistry.normalize_config(drive_type, {**current, **incoming})
     elif current_config_json is not None or current_cookie is not None:
         normalized_config = AdapterRegistry.parse_config_json(drive_type, current_config_json, current_cookie)
     else:
         raise bad_request('DRIVE_ACCOUNT_CONFIG_REQUIRED', '请填写驱动账号登录参数')
+    for key in clear:
+        normalized_config[key] = ''
     runtime_cookie = AdapterRegistry.serialize_config(drive_type, normalized_config)
-    if not runtime_cookie.strip():
+    if not runtime_cookie.strip() and not clear:
         raise bad_request('DRIVE_ACCOUNT_CONFIG_REQUIRED', '请填写驱动账号登录参数')
     return normalized_config, runtime_cookie
 

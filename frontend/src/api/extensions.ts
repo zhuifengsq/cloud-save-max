@@ -30,6 +30,7 @@ export async function updateDriveAccount(
     name: string
     cookie: string
     config: Record<string, any>
+    clear_credentials: string[]
     enabled: boolean
     is_default: boolean
     capacity_warning_threshold: number

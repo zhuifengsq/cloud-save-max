@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     login_throttle_window_seconds: int = Field(default=600, gt=0)
     login_throttle_cooldown_seconds: int = Field(default=900, gt=0)
     login_throttle_capacity: int = Field(default=10000, gt=0)
+    login_throttle_sweep_interval_seconds: float = Field(default=30, gt=0)
+    login_throttle_wait_timeout_seconds: float = Field(default=2, ge=0)
+    login_throttle_max_waiters: int = Field(default=16, gt=0)
 
     refresh_token_expires_seconds: int = 14 * 24 * 60 * 60
     refresh_token_cookie_name: str = "refresh_token"

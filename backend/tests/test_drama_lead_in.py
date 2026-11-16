@@ -324,6 +324,23 @@ class DramaLeadInAcceptanceTests(unittest.TestCase):
     def _preview(self, task: Task) -> dict:
         return lead_usecase.TaskLeadInUseCase(None)._preview(self.db, task)
 
+    def test_preview_rejects_uncommitted_caller_writes(self):
+        task_id = self.quark_task.id
+        self.quark_task.taskname = 'uncommitted'
+        with self.assertRaisesRegex(RuntimeError, 'read-only'):
+            lead_usecase.TaskLeadInUseCase(self.db).preview(lead_usecase.LeadInCommand(task_id))
+        self.assertTrue(self.db.dirty)
+
+    def test_preview_reads_network_without_transaction_and_never_adds_material(self):
+        original = self.adapter.lead_in_resolve_material.side_effect
+        def material(*args):
+            self.assertFalse(self.db.in_transaction())
+            return original(*args)
+        self.adapter.lead_in_resolve_material.side_effect = material
+        preview = self._preview(self.quark_task)
+        self.assertTrue(preview['available'], preview['reason'])
+        self.adapter.lead_in_add.assert_not_called()
+
     def _preview_token(self, task: Task) -> str:
         preview = self._preview(task)
         self.assertTrue(preview["available"], preview.get("reason"))

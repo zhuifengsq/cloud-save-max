@@ -35,6 +35,8 @@ export type DriveAccountItem = {
   name: string
   drive_type: string
   config: Record<string, any>
+  credential_present: boolean
+  credential_fields: string[]
   profile: DriveAccountProfile
   enabled: boolean
   is_default: boolean

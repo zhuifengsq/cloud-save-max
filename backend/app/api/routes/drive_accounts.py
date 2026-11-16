@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 import json
 
@@ -372,7 +373,12 @@ def post_account_sign_in(request: Request, account_id: int, current: CurrentUser
         with transaction(db):
             audit.write_audit_log(db, actor_user_id=current.user.id, action='drive_account.sign_in', target_type='drive_account', target_id=str(account_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True)
         return result
+    except StaleDataError:
+        raise
     except ApiError as e:
+        db.rollback()
+        if e.code == 'DRIVE_ACCOUNT_CONFLICT':
+            raise
         with transaction(db):
             audit.write_audit_log(
                 db,
@@ -383,10 +389,11 @@ def post_account_sign_in(request: Request, account_id: int, current: CurrentUser
                 ip=request.client.host if request.client else None,
                 user_agent=request.headers.get('user-agent'),
                 success=False,
-                detail=f"{e.code}:{e.message}",
+                detail=e.code,
             )
         raise
-    except Exception as e:
+    except Exception:
+        db.rollback()
         with transaction(db):
             audit.write_audit_log(
                 db,
@@ -397,9 +404,9 @@ def post_account_sign_in(request: Request, account_id: int, current: CurrentUser
                 ip=request.client.host if request.client else None,
                 user_agent=request.headers.get('user-agent'),
                 success=False,
-                detail=str(e)[:500],
+                detail='DRIVE_ACCOUNT_SIGN_IN_FAILED',
             )
-        raise ApiError(code="DRIVE_ACCOUNT_SIGN_IN_FAILED", message="签到失败", http_status=500, detail=str(e))
+        raise ApiError(code='DRIVE_ACCOUNT_SIGN_IN_FAILED', message='签到失败，请检查登录状态或稍后重试', http_status=502) from None
 
 
 @router.post('/refresh-profiles', response_model=list[DriveAccountOut], dependencies=[Depends(require_permissions(DRIVE_ACCOUNT_WRITE))])

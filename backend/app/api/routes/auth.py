@@ -7,10 +7,11 @@ from app.core.settings import settings
 from app.application.container import commit, get_db
 from app.schemas.auth import LoginOut, LoginThrottleError, MeOut, TokenOut
 from app.application import audit
+from app.api.login_body_limit import LoginBodyLimitRoute
 from app.application.auth import authenticate_user, clear_refresh_cookie, refresh_access_token, revoke_refresh_token, issue_tokens
 
 
-router = APIRouter()
+router = APIRouter(route_class=LoginBodyLimitRoute)
 
 
 @router.post("/login", response_model=LoginOut, responses={429: {

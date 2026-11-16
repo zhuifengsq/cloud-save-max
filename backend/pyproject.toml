@@ -2,9 +2,9 @@
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["F821", "F822", "F823"]
+select = ["F6", "F7", "F82"]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["app/domain/ports"]
+files = ["app/domain/ports", "app/application/login_throttle.py", "app/application/login_failure_audit.py", "app/application/share_preview_plan.py", "app/application/drive_payload.py", "app/scripts/container_entrypoint.py"]
 strict = true

@@ -211,6 +211,7 @@ async function submitForm(payload: {
   name: string
   drive_type: string
   config: Record<string, any>
+  clear_credentials: string[]
   enabled: boolean
   is_default: boolean
   capacity_warning_threshold: number

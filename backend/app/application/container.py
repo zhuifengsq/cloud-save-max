@@ -11,6 +11,8 @@ from contextlib import contextmanager
 
 from types import ModuleType
 from typing import Any
+from threading import Lock
+from app.application.login_failure_audit import LoginFailureAudit
 from app.domain.ports.share_preview import PreviewRenamerPort, SharePreviewReaderPort
 from sqlalchemy.orm import Session
 
@@ -29,6 +31,21 @@ def share_preview_min_bytes(value: str) -> int | None:
 
 
 _SYSTEM_CLOCK: Any = None
+_LOGIN_FAILURE_AUDIT: LoginFailureAudit | None = None
+_LOGIN_FAILURE_AUDIT_LOCK = Lock()
+
+
+def login_failure_audit_service() -> LoginFailureAudit:
+    global _LOGIN_FAILURE_AUDIT
+    with _LOGIN_FAILURE_AUDIT_LOCK:
+        if _LOGIN_FAILURE_AUDIT is None or _LOGIN_FAILURE_AUDIT.closed:
+            _LOGIN_FAILURE_AUDIT = LoginFailureAudit(writer=write_login_failure_audit_batch)
+        return _LOGIN_FAILURE_AUDIT
+
+
+def write_login_failure_audit_batch(batch: list[tuple[str, int]]) -> None:
+    from app.infrastructure.persistence.login_failure_audit import write_batch
+    write_batch(batch)
 
 # ---------------------------------------------------------------------------
 # 请求作用域数据库依赖的装配出口（composition root re-export）

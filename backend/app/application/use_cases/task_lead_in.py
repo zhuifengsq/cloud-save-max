@@ -225,6 +225,43 @@ class LeadInTask:
     shareurl: str
 
 
+@dataclass(frozen=True)
+class _PreviewReadPlan:
+    task_id: int
+    drive_type: str
+    capability: dict[str, Any]
+    config: dict[str, Any]
+    mode: str
+    account_name: str
+    account: Any
+    dir_path: str
+
+
+@dataclass(frozen=True)
+class _PreviewMaterial:
+    value: dict[str, Any]
+    token_name: str
+    token_path: str
+    token_size: int | None
+
+
+def _preview_token_payload(plan: _PreviewReadPlan, material: _PreviewMaterial,
+                           directory: dict[str, Any], expires_at: datetime) -> dict[str, Any]:
+    """Pure token plan from detached inputs; never opens DB or drive IO."""
+    return {
+        "task_id": plan.task_id, "drive_type": plan.drive_type,
+        "account_name": plan.account_name, "dir_path": plan.dir_path,
+        "dir_fid": str(directory.get("fid") or ""),
+        "material_fid": str(material.value["fid"]), "material_name": material.token_name,
+        "material_mode": plan.mode,
+        "material_account": str(plan.config.get("account_name") or "")
+            if plan.mode == lead_materials.MATERIAL_MODE_OWN_FILE else "",
+        "material_path": material.token_path, "material_size": material.token_size,
+        "config_version": int(plan.config.get("config_version") or 0),
+        "exp": int(expires_at.timestamp()),
+    }
+
+
 class TaskLeadInUseCase:
     def __init__(self, db, *, provider=None):
         self.db = db
@@ -249,6 +286,8 @@ class TaskLeadInUseCase:
         )
 
     def preview(self, command: LeadInCommand) -> LeadInResult:
+        if self.db.new or self.db.dirty or self.db.deleted:
+            raise RuntimeError('Lead-in preview requires a read-only session')
         return LeadInResult(self._preview(self.db, self._task(command.task_id)))
 
     def confirm(self, command: LeadInCommand) -> LeadInResult:
@@ -264,6 +303,35 @@ class TaskLeadInUseCase:
         )
 
     def _preview(self, db: Session, task: Any) -> dict[str, Any]:
+        if db.new or db.dirty or db.deleted:
+            raise RuntimeError('Lead-in preview requires a read-only session')
+        result, plan = self._prepare_preview(db, task)
+        if plan is None:
+            return result
+        end_read_tx(db)
+        adapter = self.provider.create(plan.account) if self.provider is not None else lead_materials._build_adapter(plan.account)
+        if adapter is None:
+            result["reason"] = "网盘账号不可用"
+            return result
+        end_read_tx(db)
+        if not lead_materials._init_adapter(adapter):
+            result["reason"] = "网盘账号不可用"
+            return result
+        target = self._read_preview_directory(adapter, plan, result)
+        if target is None:
+            return result
+        material = self._read_preview_material(adapter, plan, result)
+        if material is None or not self._inspect_preview(adapter, material, target, result):
+            return result
+        self._sync_preview_record(db, plan, result)
+        expires_at = datetime.now(BEIJING_TZ) + timedelta(seconds=lead_tokens.preview_token_ttl_seconds())
+        result["preview_token"] = lead_tokens.create_preview_token(
+            _preview_token_payload(plan, material, result["directory"], expires_at))
+        result["expires_at"] = expires_at
+        result["available"] = True
+        return result
+
+    def _prepare_preview(self, db: Session, task: Any) -> tuple[dict[str, Any], _PreviewReadPlan | None]:
         """按契约第 3.2 节的顺序生成预览；任何一步不可用都返回 available=False + 中文原因。"""
         task_id = int(task.id)
         task_savepath = str(getattr(task, "savepath", "") or "")
@@ -291,26 +359,26 @@ class TaskLeadInUseCase:
         }
         if not available:
             result["reason"] = "该网盘暂不支持引流"
-            return result
+            return result, None
         if not lead_settings.get_drama_lead_in_enabled(db):
             result["reason"] = "引流功能已关闭"
-            return result
+            return result, None
         material_config = lead_settings.get_drama_lead_in_material(db, drive_type)
         if material_config is None:
             result["reason"] = "该网盘未配置引流素材"
-            return result
+            return result, None
         mode = lead_materials.material_mode(material_config)
         if (
             mode == lead_materials.MATERIAL_MODE_OWN_FILE
             and not capability["own_file_supported"]
         ):
             result["reason"] = f"{capability['drive_name']}暂不支持本账号文件引流"
-            return result
+            return result, None
         if account is None or str(account.drive_type or "") != drive_type:
             account = lead_materials._default_account(db, drive_type)
         if account is None:
             result["reason"] = "网盘账号不可用"
-            return result
+            return result, None
         account_name = str(account.name or "")
         if mode == lead_materials.MATERIAL_MODE_OWN_FILE:
             material_account = str(material_config.get("account_name") or "")
@@ -319,7 +387,7 @@ class TaskLeadInUseCase:
                     f"引流素材属于账号「{material_account}」，与任务使用的账号「{account_name}」不一致，"
                     "无法内部复制；请改用分享链接素材"
                 )
-                return result
+                return result, None
         profile = resolve_drive_account_profile(account) or {}
         result["account"] = {
             "account_name": account_name,
@@ -327,180 +395,94 @@ class TaskLeadInUseCase:
         }
         dir_path = lead_materials.normalize_savepath(task_savepath)
         account = lead_materials.account_snapshot(account)
-        end_read_tx(db)
-        adapter = (
-            self.provider.create(account)
-            if self.provider is not None
-            else lead_materials._build_adapter(account)
-        )
-        if adapter is None:
-            result["reason"] = "网盘账号不可用"
-            return result
-        # 读取到此结束：网盘调用期间不持有数据库事务。
-        end_read_tx(db)
-        if not lead_materials._init_adapter(adapter):
-            result["reason"] = "网盘账号不可用"
-            return result
+        return result, _PreviewReadPlan(task_id, drive_type, capability, material_config, mode,
+                                        account_name, account, dir_path)
 
-        dir_response = lead_materials._safe_call(adapter.lead_in_resolve_dir, dir_path)
-        if not lead_materials._call_ok(dir_response):
-            result["reason"] = lead_materials._directory_failure_reason(dir_response)
-            return result
-        dir_payload = dir_response.get("data") or {}
-        dir_info = dir_payload.get("dir") if isinstance(dir_payload, dict) else None
-        dir_info = dir_info if isinstance(dir_info, dict) else {}
-        dir_fid = str(dir_info.get("fid") or "")
-        result["directory"] = {
-            "path": str(dir_info.get("path") or dir_path),
-            "fid": dir_fid,
-            "exists": True,
-        }
-        target = dir_payload if isinstance(dir_payload, dict) else {}
+    def _read_preview_directory(self, adapter, plan: _PreviewReadPlan, result: dict[str, Any]) -> dict[str, Any] | None:
+        response = lead_materials._safe_call(adapter.lead_in_resolve_dir, plan.dir_path)
+        if not lead_materials._call_ok(response):
+            result["reason"] = lead_materials._directory_failure_reason(response)
+            return None
+        payload = response.get("data") or {}
+        target = payload if isinstance(payload, dict) else {}
+        directory = target.get("dir")
+        directory = directory if isinstance(directory, dict) else {}
+        result["directory"] = {"path": str(directory.get("path") or plan.dir_path),
+                               "fid": str(directory.get("fid") or ""), "exists": True}
+        return target
 
-        material: dict[str, Any]
-        material_fid = ""
-        material_name = ""
-        token_material_name = ""
-        token_material_path = ""
-        token_material_size: int | None = None
-        if mode == lead_materials.MATERIAL_MODE_OWN_FILE:
-            own_path = str(material_config.get("file_path") or "")
-            resolver = getattr(adapter, "lead_in_resolve_own_file", None)
-            if resolver is None:
-                result["reason"] = f"{capability['drive_name']}暂不支持本账号文件引流"
-                return result
-            own_response = lead_materials._safe_call(resolver, own_path)
-            if not lead_materials._call_ok(own_response):
-                result["reason"] = str(
-                    own_response.get("message") or "素材文件不存在，请检查路径"
-                )
-                return result
-            file_info = lead_materials._own_file_data(own_response)
-            if file_info is None or not file_info["name"]:
-                result["reason"] = "素材文件不存在，请检查路径"
-                return result
-            material_fid = str(
-                file_info.get("fid") or material_config.get("file_fid") or ""
-            )
-            material_name = str(
-                file_info.get("name") or material_config.get("file_name") or ""
-            )
-            if not material_fid:
-                result["reason"] = "引流素材不可用"
-                return result
-            material = {
-                "source": lead_materials.MATERIAL_MODE_OWN_FILE,
-                "fid": material_fid,
-                "name": material_name,
-                "path": str(file_info.get("path") or own_path),
-                "size": file_info.get("size"),
-                "md5": str(file_info.get("md5") or ""),
-                "account_name": account_name,
-                "dir": False,
-            }
-            result["material"] = {
-                "name": material_name,
-                "fid": material_fid,
-                "source": lead_materials.MATERIAL_MODE_OWN_FILE,
-                "account_name": account_name,
-                "path": str(material.get("path") or own_path),
-            }
-            # 令牌里的名称/路径必须与保存的配置一致，确认时据此判断配置是否变化。
-            token_material_name = str(material_config.get("file_name") or material_name)
-            token_material_path = own_path
-            token_material_size = file_info.get("size")
-        else:
-            material_response = lead_materials._safe_call(
-                adapter.lead_in_resolve_material,
-                str(material_config.get("shareurl") or ""),
-                str(material_config.get("passcode") or ""),
-                str(material_config.get("file_fid") or ""),
-            )
-            if not lead_materials._call_ok(material_response):
-                result["reason"] = str(
-                    material_response.get("message") or "引流素材不可用"
-                )
-                return result
-            material_payload = material_response.get("data") or {}
-            resolved_material = (
-                material_payload.get("material")
-                if isinstance(material_payload, dict)
-                else None
-            )
-            material = (
-                dict(resolved_material) if isinstance(resolved_material, dict) else {}
-            )
-            material_fid = str(
-                material.get("fid") or material_config.get("file_fid") or ""
-            )
-            material_name = str(
-                material.get("name") or material_config.get("file_name") or ""
-            )
-            if not material_fid:
-                result["reason"] = "引流素材不可用"
-                return result
-            material["source"] = lead_materials.MATERIAL_MODE_SHARE
-            material["fid"] = material_fid
-            material["name"] = material_name
-            result["material"] = {"name": material_name, "fid": material_fid}
-            token_material_name = material_name
-            token_material_path = ""
-            raw_size = material.get("size")
-            token_material_size = (
-                raw_size
-                if isinstance(raw_size, int) and not isinstance(raw_size, bool)
-                else None
-            )
+    def _read_preview_material(self, adapter, plan: _PreviewReadPlan, result: dict[str, Any]) -> _PreviewMaterial | None:
+        if plan.mode == lead_materials.MATERIAL_MODE_OWN_FILE:
+            return self._read_own_preview_material(adapter, plan, result)
+        return self._read_shared_preview_material(adapter, plan, result)
 
-        inspect_response = lead_materials._safe_call(
-            adapter.lead_in_inspect, material, target
-        )
-        if not lead_materials._call_ok(inspect_response):
-            result["reason"] = str(
-                inspect_response.get("message") or "查重失败，请稍后重试"
-            )
-            return result
-        inspect_data = inspect_response.get("data") or {}
-        inspect_data = inspect_data if isinstance(inspect_data, dict) else {}
-        result["state"] = str(inspect_data.get("state") or "absent")
-        result["state_message"] = str(inspect_data.get("message") or "")
+    def _read_own_preview_material(self, adapter, plan: _PreviewReadPlan, result: dict[str, Any]) -> _PreviewMaterial | None:
+        config = plan.config
+        own_path = str(config.get("file_path") or "")
+        resolver = getattr(adapter, "lead_in_resolve_own_file", None)
+        if resolver is None:
+            result["reason"] = f"{plan.capability['drive_name']}暂不支持本账号文件引流"
+            return None
+        response = lead_materials._safe_call(resolver, own_path)
+        if not lead_materials._call_ok(response):
+            result["reason"] = str(response.get("message") or "素材文件不存在，请检查路径")
+            return None
+        file_info = lead_materials._own_file_data(response)
+        if file_info is None or not file_info["name"]:
+            result["reason"] = "素材文件不存在，请检查路径"
+            return None
+        fid = str(file_info.get("fid") or config.get("file_fid") or "")
+        name = str(file_info.get("name") or config.get("file_name") or "")
+        if not fid:
+            result["reason"] = "引流素材不可用"
+            return None
+        material = {"source": lead_materials.MATERIAL_MODE_OWN_FILE, "fid": fid, "name": name,
+                    "path": str(file_info.get("path") or own_path), "size": file_info.get("size"),
+                    "md5": str(file_info.get("md5") or ""), "account_name": plan.account_name, "dir": False}
+        result["material"] = {"name": name, "fid": fid, "source": lead_materials.MATERIAL_MODE_OWN_FILE,
+                              "account_name": plan.account_name, "path": str(material.get("path") or own_path)}
+        return _PreviewMaterial(material, str(config.get("file_name") or name), own_path, file_info.get("size"))
 
-        record = lead_records.get_lead_in_record(db, task_id, drive_type)
+    def _read_shared_preview_material(self, adapter, plan: _PreviewReadPlan, result: dict[str, Any]) -> _PreviewMaterial | None:
+        config = plan.config
+        response = lead_materials._safe_call(adapter.lead_in_resolve_material,
+            str(config.get("shareurl") or ""), str(config.get("passcode") or ""), str(config.get("file_fid") or ""))
+        if not lead_materials._call_ok(response):
+            result["reason"] = str(response.get("message") or "引流素材不可用")
+            return None
+        payload = response.get("data") or {}
+        resolved = payload.get("material") if isinstance(payload, dict) else None
+        material = dict(resolved) if isinstance(resolved, dict) else {}
+        fid = str(material.get("fid") or config.get("file_fid") or "")
+        name = str(material.get("name") or config.get("file_name") or "")
+        if not fid:
+            result["reason"] = "引流素材不可用"
+            return None
+        material.update(source=lead_materials.MATERIAL_MODE_SHARE, fid=fid, name=name)
+        result["material"] = {"name": name, "fid": fid}
+        size = material.get("size")
+        return _PreviewMaterial(material, name, "", size if isinstance(size, int) and not isinstance(size, bool) else None)
+
+    def _inspect_preview(self, adapter, material: _PreviewMaterial, target: dict[str, Any], result: dict[str, Any]) -> bool:
+        response = lead_materials._safe_call(adapter.lead_in_inspect, material.value, target)
+        if not lead_materials._call_ok(response):
+            result["reason"] = str(response.get("message") or "查重失败，请稍后重试")
+            return False
+        data = response.get("data") or {}
+        data = data if isinstance(data, dict) else {}
+        result["state"] = str(data.get("state") or "absent")
+        result["state_message"] = str(data.get("message") or "")
+        return True
+
+    def _sync_preview_record(self, db: Session, plan: _PreviewReadPlan, result: dict[str, Any]) -> None:
+        """Short DB phase after all external reads; no task execution is persisted."""
+        record = lead_records.get_lead_in_record(db, plan.task_id, plan.drive_type)
         if result["state"] == "absent":
-            # 目标目录里已经查不到该文件（例如用户在网盘手动删除）：清掉过期记录，
-            # 让任务列表的「引流」列回到「—」，最近添加时间也一并消失。
             if record is not None:
                 db.delete(record)
                 db.commit()
         elif record is not None and record.status == "added":
             result["last_added_at"] = normalize_api_datetime(record.updated_at)
-
-        ttl = lead_tokens.preview_token_ttl_seconds()
-        expires_at = datetime.now(BEIJING_TZ) + timedelta(seconds=ttl)
-        result["preview_token"] = lead_tokens.create_preview_token(
-            {
-                "task_id": task_id,
-                "drive_type": drive_type,
-                "account_name": account_name,
-                "dir_path": dir_path,
-                "dir_fid": dir_fid,
-                "material_fid": material_fid,
-                "material_name": token_material_name,
-                "material_mode": mode,
-                "material_account": (
-                    str(material_config.get("account_name") or "")
-                    if mode == lead_materials.MATERIAL_MODE_OWN_FILE
-                    else ""
-                ),
-                "material_path": token_material_path,
-                "material_size": token_material_size,
-                "config_version": int(material_config.get("config_version") or 0),
-                "exp": int(expires_at.timestamp()),
-            }
-        )
-        result["expires_at"] = expires_at
-        result["available"] = True
-        return result
 
     def _confirm(
         self,

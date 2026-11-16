@@ -1,6 +1,6 @@
 {
   "violations": 0,
-  "deferred_imports": 110,
+  "deferred_imports": 111,
   "cycles": 0,
   "approved_deferred_edges": [
     "app.api.routes.tasks -> app.application.magic_regex",
@@ -34,6 +34,7 @@
     "app.application.container -> app.infrastructure.http.douban_client",
     "app.application.container -> app.infrastructure.http.tmdb_client",
     "app.application.container -> app.infrastructure.http.tmdb_client",
+    "app.application.container -> app.infrastructure.persistence.login_failure_audit",
     "app.application.container -> app.infrastructure.persistence.repositories",
     "app.application.container -> app.infrastructure.persistence.repositories",
     "app.application.container -> app.infrastructure.persistence.repositories",
@@ -146,6 +147,7 @@
     "app.application.container: from app.infrastructure.http.douban_client import DoubanClient",
     "app.application.container: from app.infrastructure.http.tmdb_client import BASE_LANGUAGE",
     "app.application.container: from app.infrastructure.http.tmdb_client import TMDBClient",
+    "app.application.container: from app.infrastructure.persistence.login_failure_audit import write_batch",
     "app.application.container: from app.infrastructure.persistence.repositories import audit",
     "app.application.container: from app.infrastructure.persistence.repositories import drive_account_probe_scheduler_setting",
     "app.application.container: from app.infrastructure.persistence.repositories import drive_accounts",

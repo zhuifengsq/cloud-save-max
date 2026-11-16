@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from contextlib import contextmanager
-import logging
 from typing import Any, Iterator
 
 from fastapi import Request, Response
 from sqlalchemy.orm import Session
 
-from app.application.container import commit, refresh_tokens_repo, users_repo
-from app.application import audit
+from app.application.container import refresh_tokens_repo, users_repo, login_failure_audit_service
 from app.application.login_throttle import LoginThrottle, LoginThrottled
 from app.core.errors import ApiError, bad_request, unauthorized
 from app.core.security import (
@@ -21,14 +19,20 @@ from app.core.security import (
 from app.core.settings import settings
 from app.application.auth_context import load_user_roles_permissions
 
-logger = logging.getLogger(__name__)
 login_throttle = LoginThrottle(
     pair_limit=settings.login_throttle_pair_limit,
     ip_limit=settings.login_throttle_ip_limit,
     window=settings.login_throttle_window_seconds,
     cooldown=settings.login_throttle_cooldown_seconds,
     capacity=settings.login_throttle_capacity,
+    sweep_interval=settings.login_throttle_sweep_interval_seconds,
+    wait_timeout=settings.login_throttle_wait_timeout_seconds,
+    max_waiters=settings.login_throttle_max_waiters,
 )
+
+
+def record_login_failure(ip: str) -> None:
+    login_failure_audit_service().record(ip)
 
 
 def _utcnow() -> datetime:
@@ -75,18 +79,15 @@ def clear_refresh_cookie(response: Response) -> None:
 @contextmanager
 def authenticate_user(db: Session, username: str, password: str, *, request: Request | None = None) -> Iterator[Any]:
     """Hold admission until token issuance and the successful login commit complete."""
+    if len(username) > 64 or len(password) > 4096:
+        raise bad_request('AUTH_INPUT_TOO_LONG', '用户名或密码超过允许长度')
     ip = _client_ip(request) if request is not None else None
     try:
         with login_throttle.attempt(ip or 'unknown', username) as attempt:
             user = users_repo().get_user_by_username(db, username)
             if user is None or not user.is_active or not verify_password(password, user.hashed_password):
                 attempt.failed = True
-                try:
-                    audit.write_audit_log(db, actor_user_id=None, action='auth.login', ip=ip, success=False)
-                    commit(db)
-                except Exception:
-                    logger.warning('Login failure audit could not be persisted')
-                    db.rollback()
+                record_login_failure(ip or 'unknown')
                 raise unauthorized("AUTH_BAD_CREDENTIALS", "用户名或密码错误")
             yield user
     except LoginThrottled as exc:

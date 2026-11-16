@@ -200,7 +200,7 @@ def test_configuration_changed_during_scan_rejects_writeback(db, monkeypatch, ch
             assert not db.in_transaction()
             if change == 'path': db.execute(update(Task).where(Task.id == 1).values(savepath='/other'))
             if change == 'extra': db.execute(update(Task).where(Task.id == 1).values(extra_json='{"saved_latest":{"episode":35}}'))
-            if change == 'account': db.execute(update(DriveAccount).where(DriveAccount.id == 1).values(cookie='changed'))
+            if change == 'account': db.get(DriveAccount, 1).cookie = 'changed'
             db.commit()
             return SavedProgressScan(SavedLatestProgress(10, 1, 'Show.S01E10.mkv', 'now'), 1, 1)
     with pytest.raises(ApiError) as error:
@@ -295,7 +295,7 @@ def test_late_account_or_rule_change_is_guarded_by_the_update_itself(db, change)
             if self.calls == 2:
                 # Interleave after validation but before the guarded UPDATE.
                 with Session(db.bind) as other:
-                    if change == 'account': other.execute(update(DriveAccount).where(DriveAccount.id == 1).values(cookie='new-cookie'))
+                    if change == 'account': other.get(DriveAccount, 1).cookie = 'new-cookie'
                     elif change == 'new_default': other.add(DriveAccount(name='new-default', drive_type='quark', cookie='new', enabled=True, is_default=True, config_json='{}'))
                     else: other.add(MagicRegexRule(key='$new', pattern='abc', replace='def', enabled=True))
                     other.commit()

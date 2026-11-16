@@ -141,6 +141,64 @@ class TaskExecutor:
             log.section("分享链接检测")
             log.line(_generated_share_check["message"])
         share_snapshot = {SNAPSHOT_KEY: _generated_share_check} if _generated_share_check else {}
+        task_data = self._prepare_task_data(task, prepared_data, manual_run)
+
+        if init_account_for_task:
+            account_manager.init_for_tasks([task_data])
+        adapter = account_manager.get_adapter_for_task(task_data)
+        if adapter is None and external_manager:
+            try:
+                fallback_manager = DatabaseAccountManager(self.db)
+                fallback_manager.init_for_tasks([task_data])
+                account_manager = fallback_manager
+                adapter = account_manager.get_adapter_for_task(task_data)
+            except Exception:
+                adapter = None
+        started_at = log.started_at
+        task_id = int(getattr(task, "id", 0) or 0)
+        if adapter is None:
+            log.set_stage("select_account")
+            log.section("验证账户")
+            log.line("FAIL: 没有可用的驱动账号")
+            log.set_stage("end")
+            execution = TaskExecution(
+                task_id=task_id,
+                status='failed',
+                started_at=started_at,
+                finished_at=datetime.now(),
+                message='没有可用的驱动账号',
+                stage=log.stage,
+                run_log=log.render(),
+                adapter_snapshot=json.dumps({**share_snapshot, 'execution_log': log.metadata()}, ensure_ascii=False),
+            )
+            if not persist_execution:
+                execution.id = 0
+                return execution
+            self.db.add(execution)
+            self.db.flush()
+            return execution
+
+        try:
+            payload = self._execute_adapter(task, task_data, adapter, log, persist_execution, prepared_data)
+        except Exception as exc:
+            status = 'skipped' if isinstance(exc, SkipTask) else 'failed'
+            stage = log.stage or "unknown"
+            message = str(exc).strip() or type(exc).__name__
+
+            if recover is not None and status == 'failed' and stage in {"share_parse", "get_stoken", "fetch_share_items"} and _auto_update_depth < 5:
+                if _tried_shareurls is None:
+                    _tried_shareurls = set()
+                if recover(task, log, _tried_shareurls):
+                    return self.run_task(task, log=log, persist_execution=False,
+                        account_manager=account_manager, init_account_for_task=False,
+                        manual_run=manual_run, _auto_update_depth=_auto_update_depth + 1,
+                        _tried_shareurls=_tried_shareurls, _generated_share_check=_generated_share_check,
+                        prepared_data=prepared_data, recover=recover)
+            payload = self._failure_payload(task, task_id, adapter, log, status, stage, message)
+
+        return self._finish_execution(task_id, payload, share_snapshot, log, persist_execution)
+
+    def _prepare_task_data(self, task, prepared_data, manual_run):
         task_data = self._task_to_dict(task)
         if prepared_data is not None:
             task_data = dict(prepared_data, shareurl=task.shareurl)
@@ -181,159 +239,119 @@ class TaskExecutor:
 
 
 
-        if init_account_for_task:
-            account_manager.init_for_tasks([task_data])
-        adapter = account_manager.get_adapter_for_task(task_data)
-        if adapter is None and external_manager:
-            try:
-                fallback_manager = DatabaseAccountManager(self.db)
-                fallback_manager.init_for_tasks([task_data])
-                account_manager = fallback_manager
-                adapter = account_manager.get_adapter_for_task(task_data)
-            except Exception:
-                adapter = None
-        started_at = log.started_at
-        task_id = int(getattr(task, "id", 0) or 0)
+        return task_data
+
+    def _record_drama_progress(self, task, task_data, drama_executor, log, persist_execution, prepared_data):
+        task_id = int(getattr(task, 'id', 0) or 0)
+        if (persist_execution or prepared_data is not None) and task_id > 0 and task_data.get('task_type') == 'drama':
+            # 已存进度：执行时顺手算出来的最大集数，写进任务 extra（不建快照表）
+            saved_latest = getattr(drama_executor, "saved_latest", None)
+            if isinstance(saved_latest, dict) and saved_latest:
+                try:
+                    from app.application.task_share_links import merge_task_extra
+
+                    merge_task_extra(task, {"saved_latest": saved_latest})
+                    if self.db is not None:
+                        self.db.flush()
+                    episode = saved_latest.get("episode")
+                    if episode:
+                        log.line(f"已存进度: 第{int(episode)}集")
+                except Exception:
+                    logger.warning("写入已存进度失败 task_id=%s", task_id, exc_info=True)
+
+    def _execute_adapter(self, task, task_data, adapter, log, persist_execution, prepared_data) -> ExecutionPayload:
+        task_id = int(getattr(task, 'id', 0) or 0)
         drama_executor = None
+        log.set_stage("validate_account")
+        log.section("验证账户")
+        if not getattr(adapter, 'is_active', False):
+            adapter.init()
+        log.line(f"OK: 账户 '{getattr(adapter, 'nickname', '')}' ({getattr(adapter, 'DRIVE_TYPE', '')}) 已就绪")
+        if task_data.get('task_type') == 'drama':
+            log.set_stage("execute_drama")
+            log.section("转存任务")
+            drama_executor = DramaTaskExecutor(adapter=adapter, task_data=task_data, log=log)
+            tree = drama_executor.execute()
+        else:
+            log.set_stage("execute_generic")
+            log.section("转存任务")
+            tree = self._execute_with_adapter(adapter, task_data)
+        self._record_drama_progress(task, task_data, drama_executor, log, persist_execution, prepared_data)
+        log.set_stage("end")
+        log.section("程序结束")
+        finished_at_local = datetime.now()
+        duration_s = (finished_at_local - log.started_at).total_seconds()
+        log.line(f"状态: success")
+        log.line(f"运行时长: {duration_s:.2f}s")
+        allow_once = bool((task_data.get("extra") or {}).get("allow_once"))
+        if (
+            (persist_execution or prepared_data is not None)
+            and task_id > 0
+            and str(task_data.get("task_type") or "") == "drama"
+            and allow_once
+            and bool(getattr(task, "enabled", False))
+        ):
+            task.enabled = False
+            if self.db is not None:
+                self.db.flush()
+            log.line("运行一次: 本次执行成功，已自动禁用任务")
+        full_tree = str(tree)
+        new_files = _new_files_from_tree(tree)
+        display_tree, tree_truncated = bounded_text(full_tree, settings.execution_tree_max_bytes)
+        return ExecutionPayload(
+            status='success',
+            message='执行完成',
+            tree_summary=display_tree,
+            stage=log.stage,
+            run_log=log.render(),
+            adapter_snapshot={
+                'new_files': new_files,
+                'tree_truncated': tree_truncated,
+                'name': getattr(adapter, 'nickname', ''),
+                'drive_type': getattr(adapter, 'DRIVE_TYPE', ''),
+                'active': bool(getattr(adapter, 'is_active', False)),
+            },
+        )
 
-        if adapter is None:
-            log.set_stage("select_account")
-            log.section("验证账户")
-            log.line("FAIL: 没有可用的驱动账号")
-            log.set_stage("end")
-            execution = TaskExecution(
-                task_id=task_id,
-                status='failed',
-                started_at=started_at,
-                finished_at=datetime.now(),
-                message='没有可用的驱动账号',
-                stage=log.stage,
-                run_log=log.render(),
-                adapter_snapshot=json.dumps({**share_snapshot, 'execution_log': log.metadata()}, ensure_ascii=False),
-            )
-            if not persist_execution:
-                execution.id = 0
-                return execution
-            self.db.add(execution)
-            self.db.flush()
-            return execution
-
+    def _failure_payload(self, task, task_id, adapter, log, status, stage, message) -> ExecutionPayload:
         try:
-            log.set_stage("validate_account")
-            log.section("验证账户")
-            if not getattr(adapter, 'is_active', False):
-                adapter.init()
-            log.line(f"OK: 账户 '{getattr(adapter, 'nickname', '')}' ({getattr(adapter, 'DRIVE_TYPE', '')}) 已就绪")
-            if task_data.get('task_type') == 'drama':
-                log.set_stage("execute_drama")
-                log.section("转存任务")
-                drama_executor = DramaTaskExecutor(adapter=adapter, task_data=task_data, log=log)
-                tree = drama_executor.execute()
-            else:
-                log.set_stage("execute_generic")
-                log.section("转存任务")
-                tree = self._execute_with_adapter(adapter, task_data)
-            if (persist_execution or prepared_data is not None) and task_id > 0 and task_data.get('task_type') == 'drama':
-                # 已存进度：执行时顺手算出来的最大集数，写进任务 extra（不建快照表）
-                saved_latest = getattr(drama_executor, "saved_latest", None)
-                if isinstance(saved_latest, dict) and saved_latest:
-                    try:
-                        from app.application.task_share_links import merge_task_extra
-
-                        merge_task_extra(task, {"saved_latest": saved_latest})
-                        if self.db is not None:
-                            self.db.flush()
-                        episode = saved_latest.get("episode")
-                        if episode:
-                            log.line(f"已存进度: 第{int(episode)}集")
-                    except Exception:
-                        logger.warning("写入已存进度失败 task_id=%s", task_id, exc_info=True)
-            log.set_stage("end")
-            log.section("程序结束")
-            finished_at_local = datetime.now()
-            duration_s = (finished_at_local - log.started_at).total_seconds()
-            log.line(f"状态: success")
-            log.line(f"运行时长: {duration_s:.2f}s")
-            allow_once = bool((task_data.get("extra") or {}).get("allow_once"))
-            if (
-                (persist_execution or prepared_data is not None)
-                and task_id > 0
-                and str(task_data.get("task_type") or "") == "drama"
-                and allow_once
-                and bool(getattr(task, "enabled", False))
-            ):
-                task.enabled = False
-                if self.db is not None:
-                    self.db.flush()
-                log.line("运行一次: 本次执行成功，已自动禁用任务")
-            full_tree = str(tree)
-            new_files = _new_files_from_tree(tree)
-            display_tree, tree_truncated = bounded_text(full_tree, settings.execution_tree_max_bytes)
-            payload = ExecutionPayload(
-                status='success',
-                message='执行完成',
-                tree_summary=display_tree,
-                stage=log.stage,
-                run_log=log.render(),
-                adapter_snapshot={
-                    'new_files': new_files,
-                    'tree_truncated': tree_truncated,
-                    'name': getattr(adapter, 'nickname', ''),
-                    'drive_type': getattr(adapter, 'DRIVE_TYPE', ''),
-                    'active': bool(getattr(adapter, 'is_active', False)),
-                },
+            logger.exception(
+                "任务执行异常 task_id=%s task_uid=%s task_type=%s stage=%s err=%s",
+                task_id,
+                str(getattr(task, "task_uid", "") or ""),
+                str(getattr(task, "task_type", "") or ""),
+                stage,
+                message,
             )
-        except Exception as exc:
-            status = 'skipped' if isinstance(exc, SkipTask) else 'failed'
-            stage = log.stage or "unknown"
-            message = str(exc).strip() or type(exc).__name__
+        except Exception:
+            pass
+        log.section("异常")
+        log.line(f"阶段={stage}: {message}")
 
-            if recover is not None and status == 'failed' and stage in {"share_parse", "get_stoken", "fetch_share_items"} and _auto_update_depth < 5:
-                if _tried_shareurls is None:
-                    _tried_shareurls = set()
-                if recover(task, log, _tried_shareurls):
-                    return self.run_task(task, log=log, persist_execution=False,
-                        account_manager=account_manager, init_account_for_task=False,
-                        manual_run=manual_run, _auto_update_depth=_auto_update_depth + 1,
-                        _tried_shareurls=_tried_shareurls, _generated_share_check=_generated_share_check,
-                        prepared_data=prepared_data, recover=recover)
-            try:
-                logger.exception(
-                    "任务执行异常 task_id=%s task_uid=%s task_type=%s stage=%s err=%s",
-                    task_id,
-                    str(getattr(task, "task_uid", "") or ""),
-                    str(getattr(task, "task_type", "") or ""),
-                    stage,
-                    message,
-                )
-            except Exception:
-                pass
-            log.section("异常")
-            log.line(f"阶段={stage}: {message}")
+        log.set_stage(stage)
+        log.section("程序结束")
+        finished_at_local = datetime.now()
+        duration_s = (finished_at_local - log.started_at).total_seconds()
+        log.line(f"状态: {status}")
+        log.line(f"运行时长: {duration_s:.2f}s")
+        return ExecutionPayload(
+            status=status,
+            message=f"阶段={stage}：{message}",
+            tree_summary=None,
+            stage=stage,
+            run_log=log.render(),
+            adapter_snapshot={
+                'name': getattr(adapter, 'nickname', ''),
+                'drive_type': getattr(adapter, 'DRIVE_TYPE', ''),
+                'active': bool(getattr(adapter, 'is_active', False)),
+            },
+        )
 
-            log.set_stage(stage)
-            log.section("程序结束")
-            finished_at_local = datetime.now()
-            duration_s = (finished_at_local - log.started_at).total_seconds()
-            log.line(f"状态: {status}")
-            log.line(f"运行时长: {duration_s:.2f}s")
-            payload = ExecutionPayload(
-                status=status,
-                message=f"阶段={stage}：{message}",
-                tree_summary=None,
-                stage=stage,
-                run_log=log.render(),
-                adapter_snapshot={
-                    'name': getattr(adapter, 'nickname', ''),
-                    'drive_type': getattr(adapter, 'DRIVE_TYPE', ''),
-                    'active': bool(getattr(adapter, 'is_active', False)),
-                },
-            )
-
+    def _finish_execution(self, task_id, payload, share_snapshot, log, persist_execution) -> TaskExecution:
         execution = TaskExecution(
             task_id=task_id,
             status=payload.status,
-            started_at=started_at,
+            started_at=log.started_at,
             finished_at=datetime.now(),
             tree_summary=payload.tree_summary,
             message=payload.message,

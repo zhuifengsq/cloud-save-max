@@ -24,7 +24,9 @@ from app.infrastructure.persistence.repositories import drive_accounts
 _TASK_FIELDS = ('task_type', 'taskname', 'shareurl', 'savepath', 'account_name', 'pattern', 'replace',
                 'ignore_extension', 'addition_json', 'extra_json', 'tmdb_id', 'tmdb_media_type')
 _NON_EPISODE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg', '.ico', '.txt', '.md', '.nfo', '.json', '.url', '.ass', '.srt', '.sub', '.pdf', '.db', '.ini', '.log', '.torrent'}
-_ACCOUNT_FIELDS = ('id', 'name', 'drive_type', 'cookie', 'config_json', 'enabled', 'is_default', 'runtime_status')
+_ACCOUNT_FIELDS = ('id', 'name', 'drive_type', '_stored_cookie', '_stored_config_json',
+                   'credential_uuid', 'credential_version', 'credential_blob',
+                   'enabled', 'is_default', 'runtime_status')
 _MAGIC_FIELDS = ('id', 'key', 'label', 'pattern', 'replace', 'enabled')
 
 

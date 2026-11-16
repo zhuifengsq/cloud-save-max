@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
@@ -17,6 +18,19 @@ def test_pair_cooldown_and_monotonic_recovery():
     assert error.value.retry_after == 900
     now[0] = 901
     with guard.attempt('ip', 'user'):
+        pass
+
+
+def test_retained_pair_keys_have_bounded_size_without_merging_users():
+    guard = LoginThrottle(pair_limit=1)
+    large = 'x' * 65536
+    with guard.attempt('ip', large) as attempt:
+        attempt.failed = True
+    assert len(str(next(iter(guard._pairs)))) < 200
+    with pytest.raises(LoginThrottled):
+        with guard.attempt('ip', large):
+            pass
+    with guard.attempt('ip', large + 'different'):
         pass
 
 
@@ -77,3 +91,33 @@ def test_cooldown_expiry_recovers_even_with_longer_window():
         attempt.failed = True
     now[0] = 11
     assert _allowed(guard, 'ip', 'b')
+
+
+def test_rejected_requests_do_not_repeat_global_sweeps(monkeypatch):
+    guard = LoginThrottle(pair_limit=1)
+    calls = []
+    sweep = guard._sweep
+    def tracked(*args):
+        calls.append(1)
+        return sweep(*args)
+    monkeypatch.setattr(guard, '_sweep', tracked)
+    with guard.attempt('ip', 'user') as attempt:
+        attempt.failed = True
+    for _ in range(100):
+        with pytest.raises(LoginThrottled):
+            with guard.attempt('ip', 'user'):
+                pass
+    assert len(calls) == 2
+
+
+def test_same_pair_waits_then_rechecks_failure_threshold():
+    guard = LoginThrottle()
+    entered = Event()
+    def second():
+        entered.set()
+        return _allowed(guard, 'ip', 'user')
+    with ThreadPoolExecutor() as pool:
+        with guard.attempt('ip', 'user'):
+            pending = pool.submit(second)
+            assert entered.wait(1)
+        assert pending.result(timeout=3)

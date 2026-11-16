@@ -264,6 +264,7 @@ def _build_snapshot() -> dict[str, object]:
     return {
         "_comment": "由 regression_tests/test_frontend_contract_golden.py 生成；改动请连同 diff 一起提交",
         "backend_models": _backend_models(),
+        "drive_account_response": _model_fields('app.schemas.drive_account', 'DriveAccountOut'),
         "frontend_types": _ts_types(),
         "sse": {
             "run_stream": {
@@ -298,6 +299,14 @@ def _load_golden() -> dict[str, object]:
 def test_backend_models_match_golden():
     golden = _load_golden()
     assert _backend_models() == golden["backend_models"]
+
+
+def test_drive_account_response_matches_golden_and_frontend_fields():
+    golden = _load_golden()
+    assert _model_fields('app.schemas.drive_account', 'DriveAccountOut') == golden['drive_account_response']
+    source = (REPO_ROOT / 'frontend/src/types/extensions.ts').read_text(encoding='utf-8')
+    assert 'credential_present: boolean' in source
+    assert 'credential_fields: string[]' in source
 
 
 def test_frontend_types_match_golden():

@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.application.use_cases.run_task import RunPolicy
 from app.core.settings import settings
@@ -29,6 +30,7 @@ from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.infrastructure.drive.account_manager import DatabaseAccountManager
 from app.infrastructure.scheduling.task_admission import task_admission
 from app.core.errors import ApiError
+from app.core.account_privacy import SAFE_ACCOUNT_ERROR
 
 
 logger = logging.getLogger(__name__)
@@ -329,7 +331,7 @@ def run_drive_account_probe() -> None:
                     probed = probe_drive_account(db, account_id)
                     new_status = getattr(probed, "runtime_status", None)
                     new_enabled = bool(getattr(probed, "enabled", True))
-                    last_error = str(getattr(probed, "last_error", "") or "").strip()
+                    last_error = SAFE_ACCOUNT_ERROR if getattr(probed, 'last_error', None) else ''
                     notify_content = None
                     if (prev_enabled and not new_enabled) or (
                         prev_status == "active" and new_status in {"inactive", "error"} and new_status != prev_status
@@ -356,7 +358,14 @@ def run_drive_account_probe() -> None:
                     if attempt < max_attempts and _is_sqlite_locked(exc):
                         time.sleep(0.2 * attempt)
                         continue
-                    logger.warning("驱动账号自动探测异常 account_id=%s err=%s", account_id, str(exc))
+                    logger.warning("驱动账号自动探测异常 account_id=%s error_type=%s", account_id, type(exc).__name__)
+                    failed += 1
+                    break
+                except StaleDataError:
+                    # A newer account write won. Do not mark its credentials as failed
+                    # or repeat external IO using the stale probe's snapshot.
+                    db.rollback()
+                    logger.info('驱动账号自动探测结果已过期 account_id=%s', account_id)
                     failed += 1
                     break
                 except Exception as exc:
@@ -367,7 +376,7 @@ def run_drive_account_probe() -> None:
                         prev_enabled = bool(getattr(account, "enabled", True)) if account is not None else True
                         if account is not None:
                             account.runtime_status = "inactive"
-                            account.last_error = str(exc)
+                            account.last_error = SAFE_ACCOUNT_ERROR
                             db.commit()
                             if prev_enabled or prev_status == "active":
                                 lines = [
@@ -377,12 +386,12 @@ def run_drive_account_probe() -> None:
                                     f"类型: {getattr(account, 'drive_type', '')}",
                                     f"状态: {prev_status or '-'} -> inactive",
                                     f"启用: {prev_enabled} -> {bool(getattr(account, 'enabled', True))}",
-                                    f"错误: {str(exc)}",
+                                    f"错误: {SAFE_ACCOUNT_ERROR}",
                                 ]
                                 send_runtime(db, DRAMA_NOTIFY_TITLE, "\n".join(lines))
                     except Exception:
                         db.rollback()
-                    logger.warning("驱动账号自动探测失败 account_id=%s err=%s", account_id, str(exc))
+                    logger.warning("驱动账号自动探测失败 account_id=%s error_type=%s", account_id, type(exc).__name__)
                     failed += 1
                     break
 
@@ -405,7 +414,7 @@ def run_drive_account_probe() -> None:
                             "驱动账号自动签到失败 account_id=%s code=%s msg=%s",
                             account_id,
                             exc.code,
-                            exc.message,
+                            SAFE_ACCOUNT_ERROR,
                         )
                     break
                 except OperationalError as exc:
@@ -413,11 +422,11 @@ def run_drive_account_probe() -> None:
                     if attempt < max_signin_attempts and _is_sqlite_locked(exc):
                         time.sleep(0.2 * attempt)
                         continue
-                    logger.warning("驱动账号自动签到异常 account_id=%s err=%s", account_id, str(exc))
+                    logger.warning("驱动账号自动签到异常 account_id=%s error_type=%s", account_id, type(exc).__name__)
                     break
                 except Exception as exc:
                     sdb.rollback()
-                    logger.warning("驱动账号自动签到异常 account_id=%s err=%s", account_id, str(exc))
+                    logger.warning("驱动账号自动签到异常 account_id=%s error_type=%s", account_id, type(exc).__name__)
                     break
 
 

@@ -37,7 +37,7 @@ COPY --from=backend-builder /usr/local /usr/local
 COPY --from=backend-builder /app/backend /app/backend
 COPY --from=frontend-builder /fe/dist /usr/share/nginx/html
 
-COPY default /etc/nginx/http.d/default.conf
+COPY default /etc/nginx/default.conf.template
 
 RUN printf '%s\n' \
     '[unix_http_server]' \
@@ -74,4 +74,4 @@ RUN printf '%s\n' \
     > /etc/supervisord.conf
 
 EXPOSE 5115
-CMD ["/usr/bin/supervisord","-c","/etc/supervisord.conf"]
+CMD ["python", "/app/backend/app/scripts/container_entrypoint.py"]
