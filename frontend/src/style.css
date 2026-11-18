@@ -790,8 +790,8 @@ html:root[data-theme='dark'] .el-alert--info.is-light .el-alert__description {
 body { line-height: 1.6; font-family: Inter, 'Segoe UI', 'Microsoft YaHei', sans-serif; }
 button, input, textarea, select { font: inherit; }
 .app-shell { grid-template-columns: 280px minmax(0, 1fr); gap: 0; padding: 0; margin: 0; }
-.app-aside { top: 0; height: 100dvh; z-index: 4; background: var(--card); border-right: 1px solid var(--line); }
-.app-nav-card { height: 100%; padding: 26px 12px 18px; gap: 20px; border: 0; border-radius: 0; box-shadow: none; overflow-y: auto; }
+.app-aside { top: 0; height: 100dvh; z-index: 4; background: var(--card); border-right: 1px solid var(--line); overflow: hidden; }
+.app-nav-card { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 26px 12px 18px; gap: 20px; border: 0; border-radius: 0; box-shadow: none; overflow: hidden; }
 .app-logo { gap: 10px; padding: 0 8px 12px; }
 .app-logo__mark { flex: 0 0 40px; width: 40px; height: 40px; border-radius: 10px; overflow: hidden; background: transparent; }
 .app-logo__mark img { display: block; width: 100%; height: 100%; object-fit: cover; }
@@ -803,7 +803,11 @@ button, input, textarea, select { font: inherit; }
 .app-menu .el-menu--inline { margin-left: 16px; border-left: 1px solid var(--line); }
 .app-menu .el-menu--inline .el-menu-item { height: 38px; padding-left: 24px !important; font-size: 13px; }
 .app-menu .el-menu--inline .el-icon { display: none; }
-.app-aside-actions { padding: 18px 10px 0; border-top: 1px solid var(--line); gap: 16px; }
+/* 侧边导航分段：小标题 + 分组菜单 */
+.app-nav-sections { flex: 1 1 auto; display: flex; flex-direction: column; gap: 20px; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 2px; }
+.app-nav-section { display: flex; flex-direction: column; gap: 2px; }
+.app-nav-section__title { padding: 0 10px 4px; color: var(--text-secondary); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.app-aside-actions { flex: 0 0 auto; margin-top: 0; padding: 18px 10px 0; border-top: 1px solid var(--line); gap: 16px; }
 .app-aside-actions__label { font-size: 13px; font-weight: 500; }
 .app-content { padding: 28px 24px 48px; gap: 26px; }
 .app-header { display: flex; padding: 0; border: 0; background: transparent; box-shadow: none; min-height: 24px; }

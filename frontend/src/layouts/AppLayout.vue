@@ -1,24 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import {
-  ArrowRight,
-  Bell,
-  Calendar,
-  Cloudy,
-  Document,
-  Film,
-  FolderOpened,
-  HomeFilled,
-  Link,
-  Menu,
-  Picture,
-  Search,
-  Setting,
-  User,
-  VideoPlay,
-} from '@element-plus/icons-vue'
+import { ArrowRight, Menu, User } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import NavMenu from '@/layouts/NavMenu.vue'
 import { resetDynamicRoutes } from '@/router'
 import { useAuthStore } from '@/stores/auth'
 import logoCat from '@/assets/logo-cat.png'
@@ -28,29 +13,22 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-const iconMap = {
-  ArrowRight,
-  Bell,
-  Calendar,
-  Cloudy,
-  Document,
-  Film,
-  FolderOpened,
-  HomeFilled,
-  Link,
-  Menu,
-  Picture,
-  Search,
-  Setting,
-  User,
-  VideoPlay,
-}
-
 const breadcrumbs = computed(() =>
   route.matched.filter((item) => item.meta?.title && item.meta?.breadcrumb !== false),
 )
 
 const currentTitle = computed(() => String(breadcrumbs.value.at(-1)?.meta?.title || '平台首页'))
+
+// 侧边导航分上下两段并带小标题：影视工作区（常用入口 + 链接整理）、系统管理（配置类入口）。
+// 段内仍按路由表的定义顺序展示，权限过滤沿用 auth.menuRoutes 的结果。
+const PRIMARY_NAV_NAMES = ['Dashboard', 'DramaCalendar', 'MediaDiscover', 'DramaTasks', 'LinkExtractor']
+const primaryNav = computed(() =>
+  auth.menuRoutes.filter((item) => PRIMARY_NAV_NAMES.includes(String(item.name))),
+)
+const secondaryNav = computed(() =>
+  auth.menuRoutes.filter((item) => !PRIMARY_NAV_NAMES.includes(String(item.name))),
+)
+
 const mobileNavVisible = ref(false)
 const theme = ref<'light' | 'dark'>(getInitialTheme())
 const isDark = computed({
@@ -69,19 +47,6 @@ function getInitialTheme(): 'light' | 'dark' {
 function applyTheme(value: 'light' | 'dark') {
   if (typeof document === 'undefined') return
   document.documentElement.dataset.theme = value
-}
-
-function routeIndex(path: string) {
-  return path ? `/${path}`.replace(/\/+/g, '/') : '/'
-}
-
-function menuRouteIndex(route: any, parent?: any) {
-  const current = String(route?.path || '').trim()
-  if (!parent) return routeIndex(current)
-  if (!current) return routeIndex(String(parent?.path || '').trim())
-  if (current.startsWith('/')) return routeIndex(current)
-  const base = String(parent?.path || '').trim()
-  return routeIndex(`${base}/${current}`)
 }
 
 function collectRouteNames(routes: any[]) {
@@ -136,45 +101,26 @@ watch(
           </div>
         </div>
 
-        <el-menu router :default-active="route.path" class="app-menu">
-          <template v-for="item in auth.menuRoutes" :key="String(item.name)">
-            <el-sub-menu v-if="item.children?.some((child) => !child.meta?.hidden)" :index="routeIndex(item.path)">
-              <template #title>
-                <el-icon>
-                  <component :is="iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
-                </el-icon>
-                <span>{{ item.meta?.title }}</span>
-              </template>
-              <el-menu-item
-                v-for="child in item.children?.filter((c) => !c.meta?.hidden) || []"
-                :key="String(child.name)"
-                :index="menuRouteIndex(child, item)"
-              >
-                <el-icon>
-                  <component :is="iconMap[child.meta?.icon as keyof typeof iconMap] || iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
-                </el-icon>
-                <span>{{ child.meta?.title }}</span>
-              </el-menu-item>
-            </el-sub-menu>
-            <el-menu-item v-else :index="routeIndex(item.path)">
-              <el-icon>
-                <component :is="iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
-              </el-icon>
-              <span>{{ item.meta?.title }}</span>
-            </el-menu-item>
-          </template>
-        </el-menu>
-
-        <div class="app-aside-actions">
-          <div class="app-aside-actions__row">
-            <span class="app-aside-actions__label">主题</span>
-            <el-switch v-model="isDark" inline-prompt active-text="暗" inactive-text="亮" />
+        <nav class="app-nav-sections">
+          <div class="app-nav-section">
+            <div class="app-nav-section__title">影视工作区</div>
+            <NavMenu :items="primaryNav" :active-path="route.path" />
           </div>
-          <div class="app-aside-actions__row">
-            <span class="app-aside-actions__label">账号</span>
-            <el-button type="primary" @click="handleLogout">退出登录</el-button>
+          <div class="app-nav-section">
+            <div class="app-nav-section__title">系统管理</div>
+            <NavMenu :items="secondaryNav" :active-path="route.path" />
+            <div class="app-aside-actions">
+              <div class="app-aside-actions__row">
+                <span class="app-aside-actions__label">主题</span>
+                <el-switch v-model="isDark" inline-prompt active-text="暗" inactive-text="亮" />
+              </div>
+              <div class="app-aside-actions__row">
+                <span class="app-aside-actions__label">账号</span>
+                <el-button type="primary" @click="handleLogout">退出登录</el-button>
+              </div>
+            </div>
           </div>
-        </div>
+        </nav>
       </div>
     </aside>
 
@@ -196,39 +142,26 @@ watch(
           </div>
         </div>
       </template>
-      <el-menu
-        router
-        :default-active="route.path"
-        class="app-menu app-menu--drawer"
-        @select="handleMenuSelect"
-      >
-        <template v-for="item in auth.menuRoutes" :key="String(item.name)">
-          <el-sub-menu v-if="item.children?.some((child) => !child.meta?.hidden)" :index="routeIndex(item.path)">
-            <template #title>
-              <el-icon>
-                <component :is="iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
-              </el-icon>
-              <span>{{ item.meta?.title }}</span>
-            </template>
-            <el-menu-item
-              v-for="child in item.children?.filter((c) => !c.meta?.hidden) || []"
-              :key="String(child.name)"
-              :index="menuRouteIndex(child, item)"
-            >
-              <el-icon>
-                <component :is="iconMap[child.meta?.icon as keyof typeof iconMap] || iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
-              </el-icon>
-              <span>{{ child.meta?.title }}</span>
-            </el-menu-item>
-          </el-sub-menu>
-          <el-menu-item v-else :index="routeIndex(item.path)">
-            <el-icon>
-              <component :is="iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
-            </el-icon>
-            <span>{{ item.meta?.title }}</span>
-          </el-menu-item>
-        </template>
-      </el-menu>
+      <nav class="app-nav-sections">
+        <div class="app-nav-section">
+          <div class="app-nav-section__title">影视工作区</div>
+          <NavMenu
+            class="app-menu--drawer"
+            :items="primaryNav"
+            :active-path="route.path"
+            @select="handleMenuSelect"
+          />
+        </div>
+        <div class="app-nav-section">
+          <div class="app-nav-section__title">系统管理</div>
+          <NavMenu
+            class="app-menu--drawer"
+            :items="secondaryNav"
+            :active-path="route.path"
+            @select="handleMenuSelect"
+          />
+        </div>
+      </nav>
     </el-drawer>
 
     <main class="app-content">

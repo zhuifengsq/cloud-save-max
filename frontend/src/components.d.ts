@@ -20,6 +20,7 @@ declare module 'vue' {
     DramaLeadInDialog: typeof import('./components/tasks/DramaLeadInDialog.vue')['default']
     DramaLeadInDirPicker: typeof import('./components/extensions/DramaLeadInDirPicker.vue')['default']
     DramaTaskDrawer: typeof import('./components/tasks/DramaTaskDrawer.vue')['default']
+    DramaTaskGroup: typeof import('./components/tasks/DramaTaskGroup.vue')['default']
     DramaTrend: typeof import('./components/dashboard/DramaTrend.vue')['default']
     DriveAccountDrawer: typeof import('./components/extensions/DriveAccountDrawer.vue')['default']
     DriveTypeIcon: typeof import('./components/tasks/DriveTypeIcon.vue')['default']

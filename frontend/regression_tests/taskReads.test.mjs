@@ -56,27 +56,48 @@ test('overview requests coalesce and late response cannot repopulate invalidated
 
 const view=readFileSync(new URL('../src/views/tasks/DramaTaskView.vue',import.meta.url),'utf8')
 function extract(start,end){return ts.transpileModule(view.slice(view.indexOf(start),view.indexOf(end,view.indexOf(start))),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText}
+
+function makeViewPageReader(currentPage = 1) {
+ const pending = []
+ const tasks = {value: []}
+ const state = {
+   page: {value: currentPage}, pageSize: {value: 1}, tasks, taskTotal: {value: 0},
+   facets: {value: {}}, loading: {value: false}, pageLoaded: {value: false}, pageError: {value: ''},
+   taskGroups: {get value() { return Array.from(new Set(tasks.value.map(row => row.tmdb_id ?? row.id))) }},
+ }
+ const reader = extract('const TASK_FETCH_PAGE_SIZE', '\nwatch(() => [filters.keyword')
+ const skeleton = extract('const showSkeleton = computed(', '\nconst hasActiveFilter')
+ const {loadPage, showSkeleton} = new Function(
+   ...Object.keys(state), 'loadTaskPage', 'readFilters', 'taskSort', 'computed', 'prefetchGroupTitles',
+   'let readVersion=0;' + reader + skeleton + ';return {loadPage, showSkeleton}',
+ )(
+   ...Object.values(state), () => new Promise(resolve => pending.push(resolve)), () => ({}), {order: ''},
+   fn => ({get value() { return fn() }}), () => {},
+ )
+ return {state, pending, loadPage, showSkeleton}
+}
+
 test('late task page cannot overwrite newer filters; deleting last row selects valid page',async()=>{
- const pending=[]
- const js=extract('async function loadPage()', '\nwatch(() => [filters.keyword')
- const state={page:{value:3},pageSize:{value:20},tasks:{value:[]},total:{value:0},facets:{value:{}},loading:{value:false},pageLoaded:{value:false},pageError:{value:''}}
- const load=new Function(...Object.keys(state),'loadTaskPage','readFilters','taskSort','let readVersion=0;'+js+';return loadPage')(...Object.values(state),()=>new Promise(resolve=>pending.push(resolve)),()=>({}),{order:''})
- const old=load(),fresh=load()
- pending[1]({items:[{id:2}],total:45,facets:{failed_count:5}});await fresh
- pending[0]({items:[{id:1}],total:45,facets:{failed_count:1}});await old
- assert.deepEqual(state.tasks.value,[{id:2}]); assert.equal(state.facets.value.failed_count,5)
- const removed=load();pending[2]({items:[],total:40,facets:{}});await removed
+ const {state, pending, loadPage} = makeViewPageReader(3)
+ const freshItems = [{id: 1, tmdb_id: 11}, {id: 2, tmdb_id: 11}, {id: 3}, {id: 4}]
+ const old = loadPage()
+ const fresh = loadPage()
+ pending[1]({items: freshItems, total: 4, facets: {failed_count: 2}})
+ await fresh
+ pending[0]({items: [{id: 1}], total: 1, facets: {failed_count: 1}})
+ await old
+ assert.deepEqual(state.tasks.value, freshItems)
+ assert.equal(state.facets.value.failed_count, 2)
+ assert.equal(state.page.value, 3)
+ const removed = loadPage()
+ pending[2]({items: freshItems.slice(0, -1), total: 3, facets: {}})
+ await removed
+ assert.equal(state.taskTotal.value, 3)
  assert.equal(state.page.value,2)
 })
 
 test('switching filters after an empty result keeps the list visible instead of restarting skeletons',async()=>{
- const pending=[]
- const js=extract('async function loadPage()', '\nwatch(() => [filters.keyword')
- const skeleton=extract('const showSkeleton = computed(', '\nconst hasActiveFilter')
- const state={page:{value:1},pageSize:{value:20},tasks:{value:[]},total:{value:0},facets:{value:{}},loading:{value:false},pageLoaded:{value:false},pageError:{value:''}}
- const {loadPage,showSkeleton}=new Function(...Object.keys(state),'loadTaskPage','readFilters','taskSort','computed',
-  'let readVersion=0;'+js+skeleton+';return {loadPage,showSkeleton}')(
-  ...Object.values(state),()=>new Promise(resolve=>pending.push(resolve)),()=>({}),{order:''},fn=>({get value(){return fn()}}))
+ const {state, pending, loadPage, showSkeleton} = makeViewPageReader()
  const initial=loadPage()
  assert.equal(showSkeleton.value,true)
  pending.shift()({items:[],total:0,facets:{}});await initial

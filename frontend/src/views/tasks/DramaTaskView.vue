@@ -3,8 +3,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import DramaLeadInDialog from '@/components/tasks/DramaLeadInDialog.vue'
 import DramaTaskDrawer from '@/components/tasks/DramaTaskDrawer.vue'
-import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
-import GeneratedShareStatus from '@/components/tasks/GeneratedShareStatus.vue'
+import DramaTaskGroup from '@/components/tasks/DramaTaskGroup.vue'
+import type { DramaTaskGroupData } from '@/components/tasks/DramaTaskGroup.vue'
 import {
   createTask,
   createTaskShareLink,
@@ -24,12 +24,14 @@ import { useAuthStore } from '@/stores/auth'
 import type { TaskLeadInSummary } from '@/types/dramaLeadIn'
 import type { DriveAccountItem } from '@/types/extensions'
 import { loadTaskPage, loadTaskOrderIndex, dropSharedTasks } from '@/stores/taskCache'
+import { ensureTmdbDetail, tmdbDetailsById } from '@/stores/tmdbDetailCache'
 import { markTasksChanged, subscribeTasksChanged } from '@/utils/taskChangeBus'
 import type { TaskDetail, TaskExecutionSummary, TaskReadFilters, TaskFacets, TaskSummary as TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/tasks'
 import { validateCrontab5, validateTimezone, describeCrontab, getNextExecutions } from '@/utils/cron'
 import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 import { readTaskRunError } from '@/utils/failureMessage'
+import { findGeneratedShareCheck } from '@/utils/generatedShareCheck'
 import type { DriveType } from '@/utils/driveType'
 
 const auth = useAuthStore()
@@ -137,7 +139,6 @@ function setRunAllPreRef(taskId: number) {
 
 const viewport = reactive({ width: window.innerWidth })
 const isMobile = computed(() => viewport.width <= 768)
-const showAllActions = computed(() => isMobile.value || viewport.width >= 1560)
 
 const runAllStats = computed(() => {
   const items = runAllDialog.items
@@ -217,17 +218,12 @@ function autoSwapEnabled(task: TaskItem): boolean {
   return Boolean(extra.auto_update_shareurl || extra.auto_update_115_shareurl)
 }
 
-function linkAlert(task: TaskItem): { tip: string; tone: string } | null {
+function linkFailureMessage(task: TaskItem): string | null {
   if (!isLinkFailure(task)) return null
   if (autoSwapEnabled(task)) {
-    return { tip: '源链接已失效，自动换链也没能找到可用链接', tone: 'swap-failed' }
+    return '源链接已失效，自动换链也没能找到可用链接'
   }
-  return { tip: '源链接已失效（未开启自动换链）', tone: 'invalid' }
-}
-
-function taskRowClass({ row }: { row: TaskItem }): string {
-  const exec = row.executions?.[0]
-  return exec && exec.status === 'failed' ? 'task-row--failed' : ''
+  return '源链接已失效（未开启自动换链）'
 }
 
 const DRIVE_FILTER_ORDER: DriveType[] = [
@@ -297,20 +293,99 @@ const taskSort = reactive({
   order: '' as '' | 'ascending' | 'descending',
 })
 
-function onTaskSortChange({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
-  if (!order) {
+const page = ref(1)
+const pageSize = ref(10)
+const taskTotal = ref(0)
+
+// 一部剧一个抽屉：先分页循环拉全量，再按 TMDB（media_type + id）分组，
+// 避免同一部剧的两条任务被服务端分页切开成两个抽屉。
+const TMDB_TITLE_PREFETCH_LIMIT = 60
+function tmdbDisplayTitle(task: TaskItem): string {
+  const id = Number(task.tmdb_id || 0)
+  if (!id) return ''
+  const data = (tmdbDetailsById[id]?.data || {}) as Record<string, any>
+  return String(data.name || data.title || data.original_name || data.original_title || '').trim()
+}
+const taskGroups = computed(() => {
+  const groups = new Map<string, DramaTaskGroupData>()
+  for (const task of tasks.value) {
+    const tmdbId = Number(task.tmdb_id || 0) || null
+    const mediaType = tmdbId ? String(task.tmdb_media_type || '') || null : null
+    // 没有关联 TMDB 的任务各自成组，避免合并同名任务。
+    const key = tmdbId ? `tmdb:${mediaType || 'unknown'}:${tmdbId}` : `task:${task.id}`
+    let group = groups.get(key)
+    if (!group) {
+      group = {
+        key,
+        title: tmdbDisplayTitle(task) || task.taskname,
+        tmdbId,
+        mediaType,
+        items: [],
+        drives: [],
+        failed: 0,
+        invalidShares: 0,
+        enabledCount: 0,
+        ended: mediaType === 'tv' ? '连载' : null,
+      }
+      groups.set(key, group)
+    }
+
+    const drive = taskDriveType(task)
+    const share = storedShareLink(task)
+    if (drive && !group.drives.includes(drive)) group.drives.push(drive)
+    if (task.executions?.[0]?.status === 'failed') group.failed++
+    if (findGeneratedShareCheck(share, task.executions)?.status === 'invalid') group.invalidShares++
+    if (task.enabled) group.enabledCount++
+    if (mediaType === 'tv' && task.tmdb_is_ended === true) group.ended = '完结'
+
+    group.items.push({
+      task,
+      drive,
+      account: formatAccountLabel(task),
+      share,
+      leadIn: leadInBadge(task),
+      leadInTime: formatShareSavedAt(task.lead_in?.last_added_at),
+      linkFailure: linkFailureMessage(task),
+    })
+  }
+  return Array.from(groups.values())
+})
+const taskSortLabel = computed(() => ({
+  ascending: '名称升序 ↑',
+  descending: '名称降序 ↓',
+  '': '默认排序',
+})[taskSort.order])
+
+function toggleTaskSort() {
+  if (taskSort.order === '') {
+    taskSort.prop = 'taskname'
+    taskSort.order = 'ascending'
+  } else if (taskSort.order === 'ascending') {
+    taskSort.prop = 'taskname'
+    taskSort.order = 'descending'
+  } else {
     taskSort.prop = ''
     taskSort.order = ''
-    return
   }
-  taskSort.prop = prop === 'taskname' ? 'taskname' : ''
-  taskSort.order = order
+}
+const total = computed(() => taskGroups.value.length)
+const pagedGroups = computed(() => taskGroups.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
+const openGroups = reactive(new Set<string>())
+const openExecutions = reactive(new Set<number>())
+
+function setExpanded<T>(keys: Set<T>, key: T, open: boolean) {
+  if (open) keys.add(key)
+  else keys.delete(key)
 }
 
-const filteredTasks = computed(() => tasks.value)
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
+async function prefetchGroupTitles() {
+  const ids = taskGroups.value
+    .filter((group) => group.tmdbId && !tmdbDetailsById[group.tmdbId])
+    .map((group) => group.tmdbId as number)
+  for (const id of ids.slice(0, TMDB_TITLE_PREFETCH_LIMIT)) {
+    void ensureTmdbDetail(id).catch(() => null)
+  }
+}
 const facets = ref<TaskFacets>({categories: [], drives: [], failed_count: 0})
 const pageLoaded = ref(false)
 let readVersion = 0
@@ -321,24 +396,45 @@ function readFilters(): TaskReadFilters {
     ...(filters.drive !== 'all' ? {drive_type: filters.drive} : {}),
     ...(filters.category !== 'all' ? {media_category: filters.category} : {}), failed_only: showFailedOnly.value}
 }
+const TASK_FETCH_PAGE_SIZE = 100
+const TASK_FETCH_MAX = 2000
+// 按 100 条一页循环取完筛选结果，分组才不会跨页拆散
+async function loadAllFilteredTasks() {
+  const base = {...readFilters(), name_order: taskSort.order}
+  const first = await loadTaskPage({...base, page: 1, page_size: TASK_FETCH_PAGE_SIZE})
+  const target = Math.min(first.total, TASK_FETCH_MAX)
+  let items = first.items.slice(0, target)
+  let nextPage = 1
+  while (items.length < target) {
+    nextPage += 1
+    const next = await loadTaskPage({...base, page: nextPage, page_size: TASK_FETCH_PAGE_SIZE})
+    if (!next.items.length) break
+    items = items.concat(next.items.slice(0, target - items.length))
+  }
+  return {first, items}
+}
 async function loadPage() {
   const version = ++readVersion
   loading.value = true; pageError.value = ''
   try {
-    const result = await loadTaskPage({...readFilters(), page: page.value, page_size: pageSize.value, name_order: taskSort.order})
+    const {first, items} = await loadAllFilteredTasks()
     if (version !== readVersion) return
-    const last = Math.max(1, Math.ceil(result.total / pageSize.value))
-    if (page.value > last) { page.value = last; return }
-    tasks.value = result.items; total.value = result.total; facets.value = result.facets
+    tasks.value = items; taskTotal.value = first.total; facets.value = first.facets
+    const last = Math.max(1, Math.ceil(taskGroups.value.length / pageSize.value))
+    if (page.value > last) page.value = last
     pageLoaded.value = true
+    void prefetchGroupTitles()
   } catch { if (version === readVersion) pageError.value = '任务加载失败，请重试' }
   finally { if (version === readVersion) loading.value = false }
 }
-watch(() => [filters.keyword, filters.status, filters.drive, filters.category, showFailedOnly.value, taskSort.prop, taskSort.order, pageSize.value], () => {
+watch(() => [filters.keyword, filters.status, filters.drive, filters.category, showFailedOnly.value, taskSort.prop, taskSort.order], () => {
   if (page.value !== 1) page.value = 1
-  else void loadPage()
+  void loadPage()
 })
-watch(page, () => void loadPage())
+watch(pageSize, () => {
+  const last = Math.max(1, Math.ceil(total.value / pageSize.value))
+  if (page.value > last) page.value = last
+})
 const stopTaskChanges = subscribeTasksChanged(() => { void loadPage() })
 
 const showSkeleton = computed(() => loading.value && !pageLoaded.value)
@@ -497,8 +593,8 @@ function handleRowCommand(command: string, row: TaskItem) {
     openLeadInDialog(row)
     return
   }
-  if (command === 'edit') {
-    openEditDrawer(row)
+  if (command === 'toggle') {
+    void handleToggle(row, !row.enabled)
     return
   }
   if (command === 'delete') {
@@ -510,10 +606,6 @@ function storedShareLink(row: TaskItem): TaskShareLink | null {
   const record = row.extra?.share_link
   if (!record || !String(record.share_url || '').trim()) return null
   return record
-}
-
-function storedShareUrl(row: TaskItem): string {
-  return storedShareLink(row)?.share_url || ''
 }
 
 function formatShareSavedAt(value?: string | null) {
@@ -1173,10 +1265,13 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section class="glass-panel dashboard-section task-table-card">
+    <section class="glass-panel dashboard-section task-table-card" aria-labelledby="drama-groups-title">
       <div class="task-card-head">
-        <div class="task-card-head__title">任务列表</div>
-        <div class="task-card-head__hint">共 {{ total }} 条</div>
+        <div>
+          <h2 class="task-card-head__title" id="drama-groups-title">任务列表</h2>
+          <div class="task-card-head__hint">共 {{ total }} 部剧 · {{ taskTotal }} 个任务</div>
+        </div>
+        <el-button v-if="total" size="small" @click="toggleTaskSort">{{ taskSortLabel }}</el-button>
       </div>
 
       <div v-if="facets.failed_count" class="task-alert">
@@ -1202,253 +1297,50 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <el-table
-        v-else-if="!isMobile"
-        :data="filteredTasks"
-        style="width: 100%"
-        row-key="id"
-        :row-class-name="taskRowClass"
-        @sort-change="onTaskSortChange"
-      >
-        <el-table-column type="expand">
-          <template #default="{ row }">
-            <div style="padding: 12px 18px">
-              <div style="font-weight: 600; margin-bottom: 8px">最近执行 <el-button link @click="openHistory(row.id)">全部历史</el-button></div>
-              <div v-if="row.executions?.length" class="task-exec">
-                <div v-for="exec in row.executions.slice(0, 3)" :key="exec.id" class="task-exec__item">
-                  <div class="task-exec__meta">
-                    <span class="task-exec__status">{{ exec.status }}</span>
-                    <span class="task-exec__time">{{ exec.started_at }}</span>
-                    <span class="task-exec__msg">{{ exec.message }}</span>
-                  </div>
-                  <el-button link type="primary" @click="openExecution(row.id, exec.id)">查看日志与目录树</el-button>
-                </div>
-              </div>
-              <div v-else class="empty-copy">暂无执行记录。</div>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="taskname" label="任务名" min-width="200" sortable="custom">
-          <template #default="{ row }">
-            <div class="task-name">
-              <DriveTypeIcon :type="taskDriveType(row as TaskItem)" />
-              <span class="task-name__text" :title="row.taskname">{{ row.taskname }}</span>
-              <el-tooltip v-if="linkAlert(row)" :content="linkAlert(row)!.tip" placement="top">
-                <span class="task-link-alert" :class="linkAlert(row)!.tone === 'swap-failed' ? 'task-link-alert--swap-failed' : 'task-link-alert--invalid'">!</span>
-              </el-tooltip>
-              <span v-else-if="row.executions?.[0]?.status === 'failed'" class="task-badge task-badge--warning">执行失败</span>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="账号" width="140">
-          <template #default="{ row }">
-            <span>{{ formatAccountLabel(row) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="savepath" label="保存路径" min-width="200" show-overflow-tooltip />
-        <el-table-column label="分享链接" width="160">
-          <template #default="{ row }">
-            <div v-if="storedShareUrl(row as TaskItem)" class="task-share-cell">
-              <el-tooltip :content="storedShareUrl(row as TaskItem)" placement="top">
-                <a
-                  class="task-share-link"
-                  :href="storedShareUrl(row as TaskItem)"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  @click.stop
-                >{{ storedShareUrl(row as TaskItem) }}</a>
-              </el-tooltip>
-              <button
-                type="button"
-                class="task-share-copy"
-                title="复制链接"
-                @click.stop="copyStoredShareLink(row as TaskItem)"
-              >复制</button>
-            </div>
-            <span v-else class="task-share-link task-share-link--empty">未生成</span>
-            <GeneratedShareStatus :link="storedShareLink(row as TaskItem)" :executions="row.executions" />
-          </template>
-        </el-table-column>
-        <el-table-column label="引流" width="150">
-          <template #default="{ row }">
-            <div v-if="leadInBadge(row as TaskItem)" class="lead-in-cell">
-              <el-tag :type="leadInBadge(row as TaskItem)!.type" size="small" effect="plain">{{ leadInBadge(row as TaskItem)!.label }}</el-tag>
-              <span v-if="row.lead_in?.last_added_at" class="lead-in-cell__time">{{ formatShareSavedAt(row.lead_in.last_added_at) }}</span>
-            </div>
-            <span v-else class="task-empty">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="完结" width="84">
-          <template #default="{ row }">
-            <el-tag v-if="row.tmdb_media_type === 'tv' && row.tmdb_is_ended === true" type="success" effect="plain">完结</el-tag>
-            <el-tag v-else-if="row.tmdb_media_type === 'tv' && row.tmdb_status" type="warning" effect="plain">连载</el-tag>
-            <span v-else class="task-empty">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="enabled" label="状态" width="92">
-          <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'primary' : 'danger'" effect="light">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" :width="showAllActions ? 430 : 200" fixed="right">
-          <template #default="{ row }">
-            <div v-if="showAllActions" class="task-actions">
-              <el-button v-if="canWrite" :type="row.enabled ? 'danger' : 'primary'" text bg  @click="handleToggle(row, !row.enabled)">{{ row.enabled ? '禁用' : '启用' }}</el-button>
-              <el-button
-                v-if="canRun"
-                text
-                bg
-                type="success"
-                @click="handleRun(row)"
-              >
-                执行
-              </el-button>
-              <el-button v-if="canWrite" text bg @click="openEditDrawer(row)">编辑</el-button>
-              <el-button v-if="canWrite" text bg type="primary" :loading="shareDialog.loadingTaskId === row.id" @click="handleShare(row as TaskItem)">分享</el-button>
-              <el-button v-if="canWrite" text bg type="primary" @click="openLeadInDialog(row as TaskItem)">引流文件</el-button>
-              <el-button v-if="canWrite" text bg type="danger"  @click="openDeleteDialog(row)">删除</el-button>
-            </div>
-            <div v-else class="task-actions">
-              <el-button v-if="canWrite" text bg :type="row.enabled ? 'danger' : 'primary'"  @click="handleToggle(row, !row.enabled)">{{ row.enabled ? '禁用' : '启用' }}</el-button>
-              <el-button
-                v-if="canRun"
-                text
-                bg
-                type="success"
-                @click="handleRun(row)"
-              >
-                执行
-              </el-button>
-              <el-dropdown v-if="canWrite" trigger="click" @command="(cmd: string) => handleRowCommand(cmd, row)">
-                <el-button text bg >更多</el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="edit">编辑</el-dropdown-item>
-                    <el-dropdown-item command="share">分享</el-dropdown-item>
-                    <el-dropdown-item command="lead_in">引流文件</el-dropdown-item>
-                    <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </div>
-          </template>
-        </el-table-column>
-        <template #empty>
-          <div class="empty-state">
-            <div class="empty-state__icon" aria-hidden="true">
-              <svg viewBox="0 0 48 48" width="40" height="40" fill="none">
-                <rect x="7" y="12" width="34" height="26" rx="6" stroke="currentColor" stroke-width="2" />
-                <path d="M7 20h34" stroke="currentColor" stroke-width="2" />
-                <path d="M16 27h10" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-                <path d="M16 32h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-              </svg>
-            </div>
-            <div class="empty-state__title">{{ hasActiveFilter ? '没有符合条件的任务' : '还没有追剧任务' }}</div>
-            <div class="empty-state__desc">
-              {{ hasActiveFilter ? '换个关键词，或把筛选切回「全部」' : '新增任务并填好分享链接和保存路径，之后就会按调度自动追更' }}
-            </div>
-            <div class="empty-state__actions">
-              <el-button v-if="hasActiveFilter" @click="resetFilters">清空筛选</el-button>
-              <el-button v-else-if="canWrite" type="primary" @click="openCreateDrawer">新增任务</el-button>
-            </div>
+      <div v-else-if="!total" class="task-list-empty">
+        <div class="empty-state">
+          <div class="empty-state__icon" aria-hidden="true">
+            <svg viewBox="0 0 48 48" width="40" height="40" fill="none">
+              <rect x="7" y="12" width="34" height="26" rx="6" stroke="currentColor" stroke-width="2" />
+              <path d="M7 20h34" stroke="currentColor" stroke-width="2" />
+              <path d="M16 27h10" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              <path d="M16 32h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
           </div>
-        </template>
-      </el-table>
-      <div v-else class="task-card-list">
-        <div v-if="!filteredTasks.length" class="task-card-list__empty">
-          <div class="empty-state">
-            <div class="empty-state__icon" aria-hidden="true">
-              <svg viewBox="0 0 48 48" width="40" height="40" fill="none">
-                <rect x="7" y="12" width="34" height="26" rx="6" stroke="currentColor" stroke-width="2" />
-                <path d="M7 20h34" stroke="currentColor" stroke-width="2" />
-                <path d="M16 27h10" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-                <path d="M16 32h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-              </svg>
-            </div>
-            <div class="empty-state__title">{{ hasActiveFilter ? '没有符合条件的任务' : '还没有追剧任务' }}</div>
-            <div class="empty-state__desc">
-              {{ hasActiveFilter ? '换个关键词，或把筛选切回「全部」' : '新增任务并填好分享链接和保存路径，之后就会按调度自动追更' }}
-            </div>
-            <div class="empty-state__actions">
-              <el-button v-if="hasActiveFilter" @click="resetFilters">清空筛选</el-button>
-              <el-button v-else-if="canWrite" type="primary" @click="openCreateDrawer">新增任务</el-button>
-            </div>
+          <div class="empty-state__title">{{ hasActiveFilter ? '没有符合条件的任务' : '还没有追剧任务' }}</div>
+          <div class="empty-state__desc">
+            {{ hasActiveFilter ? '换个关键词，或把筛选切回「全部」' : '新增任务并填好分享链接和保存路径，之后就会按调度自动追更' }}
+          </div>
+          <div class="empty-state__actions">
+            <el-button v-if="hasActiveFilter" @click="resetFilters">清空筛选</el-button>
+            <el-button v-else-if="canWrite" type="primary" @click="openCreateDrawer">新增任务</el-button>
           </div>
         </div>
-        <el-card v-for="row in filteredTasks" :key="row.id" class="task-card" shadow="never">
-          <div class="task-card__header">
-            <div class="task-card__title">
-              <DriveTypeIcon :type="taskDriveType(row)" />
-              <span>{{ row.taskname }}</span>
-              <el-tooltip v-if="linkAlert(row)" :content="linkAlert(row)!.tip" placement="top">
-                <span class="task-link-alert" :class="linkAlert(row)!.tone === 'swap-failed' ? 'task-link-alert--swap-failed' : 'task-link-alert--invalid'">!</span>
-              </el-tooltip>
-              <span v-else-if="row.executions?.[0]?.status === 'failed'" class="task-badge task-badge--warning">执行失败</span>
-            </div>
-            <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '禁用' }}</el-tag>
-          </div>
-          <div class="task-card__meta">
-            <div class="task-card__meta-row"><span class="task-card__label">账号</span>{{ formatAccountLabel(row) }}</div>
-            <div class="task-card__meta-row"><span class="task-card__label">路径</span>{{ row.savepath || '-' }}</div>
-            <div v-if="storedShareUrl(row)" class="task-card__meta-row">
-              <span class="task-card__label">分享</span>
-              <div class="task-share-cell">
-                <el-tooltip :content="storedShareUrl(row)" placement="top">
-                  <a
-                    class="task-share-link"
-                    :href="storedShareUrl(row)"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >{{ storedShareUrl(row) }}</a>
-                </el-tooltip>
-                <button type="button" class="task-share-copy" @click.stop="copyStoredShareLink(row)">复制</button>
-              </div>
-              <GeneratedShareStatus :link="storedShareLink(row)" :executions="row.executions" />
-            </div>
-            <div v-if="leadInBadge(row)" class="task-card__meta-row">
-              <span class="task-card__label">引流</span>
-              <el-tag :type="leadInBadge(row)!.type" size="small" effect="plain">{{ leadInBadge(row)!.label }}</el-tag>
-              <span v-if="row.lead_in?.last_added_at" class="lead-in-cell__time">{{ formatShareSavedAt(row.lead_in.last_added_at) }}</span>
-            </div>
-            <div class="task-card__meta-row">
-              <span class="task-card__label">完结</span>
-              <span v-if="row.tmdb_media_type === 'tv' && row.tmdb_is_ended === true">完结</span>
-              <span v-else-if="row.tmdb_media_type === 'tv' && row.tmdb_status">连载</span>
-              <span v-else>-</span>
-            </div>
-          </div>
-          <div v-if="row.executions?.length" class="task-card__exec">
-            <div class="task-card__exec-title">最近执行 <el-button link @click="openHistory(row.id)">全部历史</el-button><el-button link @click="openExecution(row.id, row.executions[0].id)">日志与目录树</el-button></div>
-            <div class="task-card__exec-row">
-              <span class="task-card__exec-status">{{ row.executions[0].status }}</span>
-              <span class="task-card__exec-time">{{ row.executions[0].started_at }}</span>
-            </div>
-            <div class="task-card__exec-msg">{{ row.executions[0].message }}</div>
-          </div>
-          <div class="task-card__actions">
-            <div class="task-actions">
-              <el-button v-if="canWrite" text bg :type="row.enabled ? 'danger' : 'primary'" @click="handleToggle(row, !row.enabled)">{{ row.enabled ? '禁用' : '启用' }}</el-button>
-              <el-button
-                v-if="canRun"
-                text
-                bg
-                type="success"
-                @click="handleRun(row)"
-              >
-                执行
-              </el-button>
-              <el-button v-if="canWrite" text bg @click="openEditDrawer(row)">编辑</el-button>
-              <el-button v-if="canWrite" text bg type="primary" :loading="shareDialog.loadingTaskId === row.id" @click="handleShare(row)">分享</el-button>
-              <el-button v-if="canWrite" text bg type="primary" @click="openLeadInDialog(row)">引流文件</el-button>
-              <el-button v-if="canWrite" text bg type="danger" @click="openDeleteDialog(row)">删除</el-button>
-            </div>
-          </div>
-        </el-card>
+      </div>
+
+      <div v-else class="task-groups">
+        <DramaTaskGroup
+          v-for="group in pagedGroups"
+          :key="group.key"
+          :group="group"
+          :open="openGroups.has(group.key)"
+          :open-executions="openExecutions"
+          :can-run="canRun"
+          :can-write="canWrite"
+          @update:open="setExpanded(openGroups, group.key, $event)"
+          @update:execution-open="(id, open) => setExpanded(openExecutions, id, open)"
+          @run="handleRun"
+          @edit="openEditDrawer"
+          @command="handleRowCommand"
+          @copy="copyStoredShareLink"
+          @history="openHistory"
+          @execution="openExecution"
+        />
       </div>
     </section>
 
     <el-alert v-if="pageError" :title="pageError" type="error" :closable="false"><el-button @click="loadPage">重试</el-button></el-alert>
-    <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[20,50,100]" :total="total" :pager-count="5" :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next'" />
+    <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10,20,50]" :total="total" :pager-count="5" :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next'" />
     <el-dialog v-model="history.visible" title="执行历史">
       <el-alert v-if="history.error" :title="history.error" type="error"><el-button @click="loadHistory">重试</el-button></el-alert>
       <div v-loading="history.loading">
@@ -1612,104 +1504,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.task-exec {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.task-exec__item {
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--el-fill-color-lighter);
-  border: 1px solid var(--el-border-color-lighter);
-}
-
-.task-exec__meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.task-exec__status {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 8px;
-  border-radius: 6px;
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-  font-size: 11.5px;
-  font-weight: 650;
-}
-
-.task-exec__time {
-  font-variant-numeric: tabular-nums;
-}
-
-.task-exec__msg {
-  color: var(--el-text-color-regular);
-}
-
-.task-exec__tree {
-  max-height: 220px;
-  margin: 10px 0 0;
-  padding: 10px 12px;
-  overflow: auto;
-  border-radius: 8px;
-  background: var(--el-fill-color-light);
-  white-space: pre-wrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11.5px;
-  line-height: 1.55;
-  color: var(--el-text-color-regular);
-}
-
-.task-card-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.task-card {
-  border-radius: var(--panel-radius);
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-blank);
-}
-
-.task-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.task-card__title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.task-card__meta {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.task-card__meta-row {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-}
-
 .run-all-pre {
   white-space: pre-wrap;
   font-size: 12px;
@@ -1722,48 +1516,6 @@ onBeforeUnmount(() => {
   overflow: auto;
 }
 
-.task-card__label {
-  width: 36px;
-  color: var(--el-text-color-primary);
-  font-weight: 600;
-}
-
-.task-card__exec {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--el-border-color);
-}
-
-.task-card__exec-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-  margin-bottom: 6px;
-}
-
-.task-card__exec-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.task-card__exec-status {
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.task-card__exec-msg {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.task-card__actions {
-  margin-top: 12px;
-}
-
 .share-result__label {
   margin-bottom: 12px;
   font-weight: 600;
@@ -1773,113 +1525,6 @@ onBeforeUnmount(() => {
 .share-result__hint {
   margin-top: 10px;
   color: var(--el-text-color-secondary);
-}
-
-.task-share-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.task-share-link {
-  display: inline-block;
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: bottom;
-  color: var(--el-color-primary);
-  cursor: pointer;
-}
-
-.task-share-link:hover {
-  text-decoration: underline;
-}
-
-.task-share-copy {
-  flex: 0 0 auto;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--el-border-color-lighter);
-  background: var(--el-fill-color-lighter);
-  color: var(--el-text-color-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 150ms ease, color 150ms ease, border-color 150ms ease;
-}
-
-.task-share-cell:hover .task-share-copy {
-  opacity: 1;
-}
-
-.task-share-copy:hover {
-  color: var(--el-color-primary);
-  border-color: var(--el-color-primary-light-5);
-}
-
-@media (max-width: 768px) {
-  .task-share-copy {
-    opacity: 1;
-  }
-}
-
-.task-share-link--empty {
-  color: var(--el-text-color-placeholder);
-  cursor: default;
-}
-
-.task-empty {
-  color: var(--el-text-color-placeholder);
-}
-
-.lead-in-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: flex-start;
-}
-
-.lead-in-cell__time {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.task-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.task-name__text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.task-actions .el-button {
-  height: 28px;
-  border-radius: 8px;
-}
-
-.task-actions {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 4px;
-}
-
-.task-actions .el-button {
-  padding: 7px 9px;
-  font-size: 12px;
-  white-space: nowrap;
 }
 
 .drama-task-page > .section-header .toolbar__right {
@@ -1910,6 +1555,7 @@ onBeforeUnmount(() => {
 }
 
 .task-card-head__title {
+  margin: 0;
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -1928,14 +1574,14 @@ onBeforeUnmount(() => {
 
 .task-card-head--scheduler { flex-direction: column; align-items: flex-start; gap: 6px; }
 
-.task-table-card > .task-card-head { padding-inline: 0; border-bottom: 0; justify-content: flex-start; }
-
-.task-table-card :deep(.el-table__inner-wrapper::before) {
-  display: none;
+.task-table-card > .task-card-head {
+  padding-inline: 0;
+  border-bottom: 0;
 }
 
-.task-table-card :deep(.el-table__empty-block) {
-  min-height: 232px;
+.task-groups {
+  display: grid;
+  gap: 10px;
 }
 
 /* 骨架屏 */
@@ -2030,7 +1676,7 @@ onBeforeUnmount(() => {
   margin-top: 10px;
 }
 
-.task-card-list__empty {
+.task-list-empty {
   padding: 4px;
 }
 
@@ -2048,22 +1694,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
   color: var(--el-text-color-regular);
   margin-right: 6px;
-}
-
-.task-card {
-  border-radius: 12px;
-}
-
-.task-actions__first {
-  margin-right: 14px;
-}
-
-.task-actions__item {
-  margin-right: 6px;
-}
-
-.task-actions__last {
-  margin-right: 0;
 }
 
 .task-scheduler__timezone-label {
@@ -2100,12 +1730,11 @@ onBeforeUnmount(() => {
     gap: 10px;
   }
 }
-/* 失败提示条 / 行内标记 */
 .task-alert {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 12px 16px 0;
+  margin: 0 0 12px;
   padding: 10px 14px;
   border-radius: 10px;
   border: 1px solid rgba(239, 68, 68, 0.28);
@@ -2139,73 +1768,6 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
-.task-badge {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 7px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-.task-badge--danger {
-  color: #fff;
-  background: #e5484d;
-}
-
-.task-badge--warning {
-  color: #b45309;
-  background: rgba(245, 158, 11, 0.16);
-}
-
-/* 失败行底色必须是「不透明的卡片色 + 红色薄染」：
-   表格横向滚动时，被固定操作列盖住的「完结」「状态」两列（连载 / 启用 标签）会从半透明底色里透出来。 */
-.task-table-card :deep(.task-row--failed) td.el-table__cell {
-  background-color: var(--card);
-  background-image: linear-gradient(rgba(239, 68, 68, 0.045), rgba(239, 68, 68, 0.045));
-}
-
-.task-table-card :deep(.task-row--failed:hover) td.el-table__cell {
-  background-color: var(--card);
-  background-image: linear-gradient(rgba(239, 68, 68, 0.08), rgba(239, 68, 68, 0.08));
-}
-
-.task-table-card :deep(.task-row--failed) td.el-table__cell:first-child {
-  box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.75);
-}
-
-.task-link-alert {
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #e5484d;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1;
-  cursor: default;
-  box-shadow: 0 0 0 2px rgba(229, 72, 77, 0.18), 0 2px 6px rgba(229, 72, 77, 0.35);
-  animation: task-alert-pulse 2s ease-in-out infinite;
-}
-
-.task-link-alert--swap-failed {
-  background: #d92d20;
-  box-shadow: 0 0 0 2px rgba(217, 45, 32, 0.26), 0 2px 8px rgba(217, 45, 32, 0.45);
-}
-
-@keyframes task-alert-pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
-}
-
-
 .task-drive-filter,
 .task-category-filter {
   max-width: 100%;
@@ -2226,4 +1788,5 @@ onBeforeUnmount(() => {
     overflow-x: auto;
   }
 }
+
 </style>

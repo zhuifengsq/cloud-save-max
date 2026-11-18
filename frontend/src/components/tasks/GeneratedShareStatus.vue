@@ -2,22 +2,14 @@
 import { computed } from 'vue'
 
 import type { TaskExecutionSummary, TaskShareLink } from '@/types/tasks'
+import { findGeneratedShareCheck } from '@/utils/generatedShareCheck'
 
 const props = defineProps<{
   link: TaskShareLink | null
   executions?: TaskExecutionSummary[]
 }>()
 
-const check = computed(() => {
-  if (!props.link) return null
-  for (const execution of props.executions || []) {
-    const result = execution.adapter_snapshot?.generated_share_check
-    if (result && result.share_id === (props.link.share_id || '') && result.saved_at === (props.link.saved_at || '')) {
-      return result
-    }
-  }
-  return null
-})
+const check = computed(() => findGeneratedShareCheck(props.link, props.executions))
 
 const labels = {
   valid: { text: '有效', type: 'success' },
