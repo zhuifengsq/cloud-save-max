@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ArrowRight, Menu, User } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -12,6 +12,42 @@ import logoCat from '@/assets/logo-cat.png'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+
+const BASE_CACHED_VIEWS = ['DashboardView', 'DramaCalendarView']
+const copywritingOrigin = ref<{ view: string; path: string; scrollY: number } | null>(null)
+
+function copywritingSourceView(name: typeof route.name) {
+  if (name === 'DramaTasks') return 'DramaTaskView'
+  if (name === 'MediaDiscover') return 'MediaDiscoverView'
+}
+
+const cachedViews = computed(() => {
+  const source = route.name === 'TaskCopywriting'
+    ? copywritingOrigin.value?.view
+    : copywritingSourceView(route.name)
+  return source ? [...BASE_CACHED_VIEWS, source] : BASE_CACHED_VIEWS
+})
+
+watch(
+  () => [route.name, route.fullPath] as const,
+  async ([name, path], [previousName, previousPath]) => {
+    if (name === 'TaskCopywriting') {
+      const view = copywritingSourceView(previousName)
+      if (!view) return
+      copywritingOrigin.value = { view, path: previousPath, scrollY: window.scrollY }
+      await nextTick()
+      if (route.fullPath === path) window.scrollTo(0, 0)
+      return
+    }
+
+    const origin = copywritingOrigin.value
+    copywritingOrigin.value = null
+    if (previousName === 'TaskCopywriting' && origin?.path === path) {
+      await nextTick()
+      if (route.fullPath === path) window.scrollTo(0, origin.scrollY)
+    }
+  },
+)
 
 const breadcrumbs = computed(() =>
   route.matched.filter((item) => item.meta?.title && item.meta?.breadcrumb !== false),
@@ -202,7 +238,7 @@ watch(
 
       <div class="app-main">
         <RouterView v-slot="{ Component }">
-          <keep-alive :include="['DashboardView', 'DramaCalendarView']">
+          <keep-alive :include="cachedViews">
             <component :is="Component" />
           </keep-alive>
         </RouterView>

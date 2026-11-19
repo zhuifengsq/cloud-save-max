@@ -642,6 +642,8 @@ onMounted(async () => {
           <el-pagination
             background
             layout="prev, pager, next"
+            :pager-count="isMobile ? 5 : 7"
+            :size="isMobile ? 'small' : undefined"
             :current-page="searchPager.page"
             :page-size="searchPager.pageSize"
             :total="searchPager.totalResults"
@@ -697,6 +699,8 @@ onMounted(async () => {
           <el-pagination
             background
             layout="prev, pager, next"
+            :pager-count="isMobile ? 5 : 7"
+            :size="isMobile ? 'small' : undefined"
             :current-page="currentPage"
             :page-size="listState.limit"
             :total="listState.total"
@@ -1085,6 +1089,24 @@ onMounted(async () => {
 }
 
 @media (max-width: 767px) {
+  .pager {
+    justify-content: center;
+  }
+
+  .pager :deep(.el-pagination) {
+    --el-pagination-button-height-small: 36px;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .pager :deep(.el-pager) {
+    gap: 4px;
+  }
+
+  .pager :deep(.el-pagination.is-background :is(.btn-prev, .btn-next, .el-pager li)) {
+    margin: 0;
+  }
+
   .poster-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;

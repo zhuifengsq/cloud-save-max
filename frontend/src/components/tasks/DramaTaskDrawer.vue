@@ -64,6 +64,7 @@ const props = withDefaults(
 )
 
 const router = useRouter()
+const showDialog = computed(() => router.currentRoute.value.name !== 'TaskCopywriting')
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -2015,8 +2016,11 @@ async function submitSaveTemplate() {
 
 <template>
   <el-dialog
+    v-if="showDialog"
     :model-value="modelValue"
     class="drama-task-dialog"
+    :class="{ 'drama-task-dialog--open': modelValue }"
+    :lock-scroll="false"
     :width="isMobile ? '100%' : 'min(920px, calc(100vw - 48px))'"
     :fullscreen="isMobile"
     align-center
@@ -2558,6 +2562,12 @@ async function submitSaveTemplate() {
 </template>
 
 <style scoped>
+/* 路由返回可能早于旧弹窗的滚动解锁，按当前弹窗状态控制页面滚动。 */
+:global(html:has(.drama-task-dialog--open)) {
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+
 .drawer-form {
   display: flex;
   flex-direction: column;
@@ -2606,6 +2616,7 @@ async function submitSaveTemplate() {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   padding: 8px 24px 24px;
 }
 
