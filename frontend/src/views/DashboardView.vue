@@ -603,6 +603,51 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <div class="dashboard-log-grid">
+      <ShareLinkHistory
+        v-loading="dramaLoading"
+        :records="dramaOverview?.shareurl_update_logs ?? []"
+        @cleared="onShareLogsCleared"
+      />
+
+      <DashboardLogList
+        v-model:expanded="showAllFailures"
+        v-loading="dramaLoading"
+        title="近期失败"
+        :records="failures"
+        :record-key="record => `${record.task_id}-${record.started_at}-${record.stage}`"
+        empty-text="暂无近期失败记录"
+      >
+        <template #actions>
+          <el-button
+            size="small"
+            text
+            type="danger"
+            :loading="clearingFailures"
+            :disabled="!failures.length"
+            @click="clearFailures"
+          >
+            清理失败记录
+          </el-button>
+        </template>
+        <template #status>
+          <el-tag size="small" type="danger">失败</el-tag>
+        </template>
+        <template #meta="{ record }">
+          <time :datetime="record.started_at">{{ formatDateTime(record.started_at) }}</time>
+          <span v-if="record.stage">{{ failureStageLabel(record.stage) }}</span>
+        </template>
+        <template #default="{ record }">
+          <div class="failure-entry-body">
+            <FailureReason :message="record.message" />
+            <router-link class="failure-task-link" :to="{ name: 'DramaTasks', query: { taskId: record.task_id } }">
+              查看任务
+            </router-link>
+          </div>
+        </template>
+      </DashboardLogList>
+    </div>
+
     <div class="updates-row">
       <section class="glass-panel updates-card" v-loading="dramaLoading">
         <div class="section-header">
@@ -678,51 +723,6 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </section>
-    </div>
-
-    <div class="dashboard-log-grid">
-      <ShareLinkHistory
-        v-loading="dramaLoading"
-        :records="dramaOverview?.shareurl_update_logs ?? []"
-        @cleared="onShareLogsCleared"
-      />
-
-      <DashboardLogList
-        v-model:expanded="showAllFailures"
-        v-loading="dramaLoading"
-        title="近期失败"
-        :records="failures"
-        :record-key="record => `${record.task_id}-${record.started_at}-${record.stage}`"
-        empty-text="暂无近期失败记录"
-      >
-        <template #actions>
-          <el-button
-            size="small"
-            text
-            type="danger"
-            :loading="clearingFailures"
-            :disabled="!failures.length"
-            @click="clearFailures"
-          >
-            清理失败记录
-          </el-button>
-        </template>
-        <template #status>
-          <el-tag size="small" type="danger">失败</el-tag>
-        </template>
-        <template #meta="{ record }">
-          <time :datetime="record.started_at">{{ formatDateTime(record.started_at) }}</time>
-          <span v-if="record.stage">{{ failureStageLabel(record.stage) }}</span>
-        </template>
-        <template #default="{ record }">
-          <div class="failure-entry-body">
-            <FailureReason :message="record.message" />
-            <router-link class="failure-task-link" :to="{ name: 'DramaTasks', query: { taskId: record.task_id } }">
-              查看任务
-            </router-link>
-          </div>
-        </template>
-      </DashboardLogList>
     </div>
 
     <el-dialog v-model="trendDialogVisible" title="任务趋势（成功数 / 失败数 / 成功率）" width="920">
