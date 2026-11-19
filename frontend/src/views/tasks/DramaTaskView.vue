@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+import ResponsivePagination from '@/components/ResponsivePagination.vue'
 import DramaLeadInDialog from '@/components/tasks/DramaLeadInDialog.vue'
 import DramaTaskDrawer from '@/components/tasks/DramaTaskDrawer.vue'
 import DramaTaskGroup from '@/components/tasks/DramaTaskGroup.vue'
@@ -1350,7 +1351,25 @@ onBeforeUnmount(() => {
     </section>
 
     <el-alert v-if="pageError" :title="pageError" type="error" :closable="false"><el-button @click="loadPage">重试</el-button></el-alert>
-    <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="[10,20,50]" :total="total" :pager-count="5" :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next'" />
+    <ResponsivePagination
+      label="追剧任务分页"
+      :current-page="page"
+      :page-size="pageSize"
+      :total="total"
+      :mobile="isMobile"
+      @current-change="page = $event"
+    >
+      <template #desktop>
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="total"
+          :pager-count="5"
+          layout="total, sizes, prev, pager, next"
+        />
+      </template>
+    </ResponsivePagination>
     <el-dialog v-model="history.visible" title="执行历史">
       <el-alert v-if="history.error" :title="history.error" type="error"><el-button @click="loadHistory">重试</el-button></el-alert>
       <div v-loading="history.loading">

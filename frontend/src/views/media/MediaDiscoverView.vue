@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus'
 import { ArrowLeft, Search } from '@element-plus/icons-vue'
 
 import { fetchDoubanCategories, fetchDoubanList, fetchTMDBDetail, searchTMDB } from '@/api/media'
+import ResponsivePagination from '@/components/ResponsivePagination.vue'
 import DramaTaskDrawer from '@/components/tasks/DramaTaskDrawer.vue'
 import { createTask, fetchTaskDetail, updateTask } from '@/api/tasks'
 import { fetchDriveAccounts } from '@/api/extensions'
@@ -638,19 +639,18 @@ onMounted(async () => {
             </div>
           </div>
         </div>
-        <div class="pager" v-if="searchPager.totalResults > 0">
-          <el-pagination
-            background
-            layout="prev, pager, next"
-            :pager-count="isMobile ? 5 : 7"
-            :size="isMobile ? 'small' : undefined"
-            :current-page="searchPager.page"
-            :page-size="searchPager.pageSize"
-            :total="searchPager.totalResults"
-            :disabled="searchState.loading"
-            @current-change="onSearchPageChange"
-          />
-        </div>
+        <ResponsivePagination
+          v-if="searchPager.totalResults > 0"
+          class="discover-pagination"
+          label="影视发现分页"
+          :current-page="searchPager.page"
+          :page-size="searchPager.pageSize"
+          :total="searchPager.totalResults"
+          :total-pages="searchPager.totalPages || undefined"
+          :mobile="isMobile"
+          :disabled="searchState.loading"
+          @current-change="onSearchPageChange"
+        />
       </el-card>
     </template>
 
@@ -695,18 +695,15 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="pager">
-          <el-pagination
-            background
-            layout="prev, pager, next"
-            :pager-count="isMobile ? 5 : 7"
-            :size="isMobile ? 'small' : undefined"
-            :current-page="currentPage"
-            :page-size="listState.limit"
-            :total="listState.total"
-            @current-change="onPageChange"
-          />
-        </div>
+        <ResponsivePagination
+          class="discover-pagination"
+          label="影视发现分页"
+          :current-page="currentPage"
+          :page-size="listState.limit"
+          :total="listState.total"
+          :mobile="isMobile"
+          @current-change="onPageChange"
+        />
       </el-card>
     </template>
 
@@ -934,9 +931,7 @@ onMounted(async () => {
   align-items: center;
   flex-wrap: wrap;
 }
-.pager {
-  display: flex;
-  justify-content: flex-end;
+.discover-pagination {
   margin-top: 12px;
 }
 .poster-grid {
@@ -1089,24 +1084,6 @@ onMounted(async () => {
 }
 
 @media (max-width: 767px) {
-  .pager {
-    justify-content: center;
-  }
-
-  .pager :deep(.el-pagination) {
-    --el-pagination-button-height-small: 36px;
-    flex-wrap: nowrap;
-    gap: 4px;
-  }
-
-  .pager :deep(.el-pager) {
-    gap: 4px;
-  }
-
-  .pager :deep(.el-pagination.is-background :is(.btn-prev, .btn-next, .el-pager li)) {
-    margin: 0;
-  }
-
   .poster-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;

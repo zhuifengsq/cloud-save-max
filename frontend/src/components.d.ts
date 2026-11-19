@@ -79,6 +79,7 @@ declare module 'vue' {
     InteractiveLineChart: typeof import('./components/dashboard/InteractiveLineChart.vue')['default']
     NotificationChannelCard: typeof import('./components/extensions/NotificationChannelCard.vue')['default']
     NotificationChannelDrawer: typeof import('./components/extensions/NotificationChannelDrawer.vue')['default']
+    ResponsivePagination: typeof import('./components/ResponsivePagination.vue')['default']
     RoleAssignDialog: typeof import('./components/users/RoleAssignDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
