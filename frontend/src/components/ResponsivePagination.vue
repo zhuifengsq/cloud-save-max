@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArrowDown, ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 
 const props = defineProps<{
   currentPage: number
@@ -15,6 +15,10 @@ const props = defineProps<{
 const emit = defineEmits<{ 'current-change': [page: number] }>()
 
 const pageCount = computed(() => Math.max(1, props.totalPages ?? Math.ceil(props.total / props.pageSize)))
+const pageOptions = computed(() => Array.from({ length: pageCount.value }, (_, index) => ({
+  value: index + 1,
+  label: `第 ${index + 1} 页`,
+})))
 const selectedPage = computed({
   get: () => Math.min(props.currentPage, pageCount.value),
   set: (page) => emit('current-change', page),
@@ -28,14 +32,21 @@ const selectedPage = computed({
         <ArrowLeft aria-hidden="true" />
         上一页
       </button>
-      <div class="responsive-pagination__picker">
-        <select v-model="selectedPage" aria-label="跳转页码" :disabled="disabled || pageCount <= 1">
-          <option v-for="page in pageCount" :key="page" :value="page">
-            {{ page === selectedPage ? `第 ${page} / ${pageCount} 页` : `第 ${page} 页` }}
-          </option>
-        </select>
-        <ArrowDown class="responsive-pagination__picker-icon" aria-hidden="true" />
-      </div>
+      <el-select-v2
+        v-model="selectedPage"
+        class="responsive-pagination__page-select"
+        aria-label="跳转页码"
+        popper-class="responsive-pagination-dropdown"
+        placement="bottom-start"
+        :fallback-placements="['top-start']"
+        :fit-input-width="true"
+        :options="pageOptions"
+        :item-height="44"
+        :height="220"
+        :disabled="disabled || pageCount <= 1"
+      >
+        <template #label>第 {{ selectedPage }} / {{ pageCount }} 页</template>
+      </el-select-v2>
       <button type="button" :disabled="disabled || selectedPage >= pageCount" @click="selectedPage++">
         下一页
         <ArrowRight aria-hidden="true" />
@@ -73,8 +84,7 @@ const selectedPage = computed({
   margin-inline: auto;
 }
 
-.responsive-pagination__controls button,
-.responsive-pagination__controls select {
+.responsive-pagination__controls button {
   min-width: 44px;
   min-height: 44px;
   border: 1px solid var(--el-border-color-light);
@@ -84,9 +94,6 @@ const selectedPage = computed({
   font: inherit;
   font-size: 13px;
   cursor: pointer;
-}
-
-.responsive-pagination__controls button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -97,43 +104,44 @@ const selectedPage = computed({
   white-space: nowrap;
 }
 
-.responsive-pagination__controls button:disabled,
-.responsive-pagination__controls select:disabled {
+.responsive-pagination__controls button:disabled {
   color: var(--el-text-color-placeholder);
   cursor: default;
 }
 
-.responsive-pagination__controls :is(button, select):focus-visible {
+.responsive-pagination__controls button:focus-visible {
   outline: 2px solid var(--el-color-primary);
   outline-offset: 2px;
 }
 
-.responsive-pagination__picker {
-  position: relative;
-  display: grid;
-  min-width: 0;
+.responsive-pagination__page-select {
+  min-width: 44px;
 }
 
-.responsive-pagination__picker select {
-  width: 100%;
-  padding: 4px 20px 4px 6px;
-  appearance: none;
+.responsive-pagination__page-select :deep(.el-select__wrapper) {
+  min-height: 44px;
+  padding-inline: 8px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.responsive-pagination__page-select :deep(.el-select__placeholder) {
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
-.responsive-pagination__controls svg {
+.responsive-pagination__controls button svg {
   flex: none;
   width: 14px;
   height: 14px;
 }
 
-.responsive-pagination__picker-icon {
-  position: absolute;
-  inset-inline-end: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-  color: var(--el-text-color-secondary);
+:global(.responsive-pagination-dropdown .el-select-dropdown__item) {
+  display: flex;
+  align-items: center;
+}
+
+:global(.responsive-pagination-dropdown .el-select-dropdown__item.is-selected) {
+  background: var(--el-color-primary-light-9);
 }
 </style>
