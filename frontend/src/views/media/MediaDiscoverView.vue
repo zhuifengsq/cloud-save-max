@@ -1085,6 +1085,17 @@ onMounted(async () => {
 }
 
 @media (max-width: 767px) {
+  .poster-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .poster-card {
+    min-width: 0;
+    padding: 8px;
+    overflow-wrap: anywhere;
+  }
+
   .detail {
     padding: 0 0 18px;
   }
