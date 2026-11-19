@@ -306,6 +306,13 @@ function tmdbDisplayTitle(task: TaskItem): string {
   const data = (tmdbDetailsById[id]?.data || {}) as Record<string, any>
   return String(data.name || data.title || data.original_name || data.original_title || '').trim()
 }
+
+function taskGroupDriveRank(drive: DriveType | null): number {
+  if (drive === 'quark') return 0
+  if (drive === 'baidu') return 1
+  return 2
+}
+
 const taskGroups = computed(() => {
   const groups = new Map<string, DramaTaskGroupData>()
   for (const task of tasks.value) {
@@ -347,6 +354,9 @@ const taskGroups = computed(() => {
       leadInTime: formatShareSavedAt(task.lead_in?.last_added_at),
       linkFailure: linkFailureMessage(task),
     })
+  }
+  for (const group of groups.values()) {
+    group.items.sort((a, b) => taskGroupDriveRank(a.drive) - taskGroupDriveRank(b.drive))
   }
   return Array.from(groups.values())
 })
