@@ -27,6 +27,21 @@ def _task(**overrides):
 
 
 class DramaShareAutoUpdateTests(unittest.TestCase):
+    def test_linked_task_searches_by_task_name(self) -> None:
+        task = _task(taskname="  斗罗大陆  ", tmdb_id=228429, tmdb_media_type="tv")
+        with (
+            patch(
+                "app.application.drama_share_autoupdate.get_tmdb_detail_cached",
+                return_value=(True, {"name": "斗罗大陆Ⅱ绝世唐门", "original_name": "斗罗大陆Ⅱ绝世唐门"}, [], [], None),
+                create=True,
+            ),
+            patch("app.application.drama_share_autoupdate.fetch_task_suggestions", return_value=([], False, None)) as search,
+        ):
+            result = resolve_drama_shareurl_update(Mock(), task)
+
+        self.assertEqual(result["reason"], "no_candidates")
+        self.assertEqual([call.kwargs["keyword"] for call in search.call_args_list], ["斗罗大陆"])
+
     def test_repairs_dead_link_and_keeps_folder_for_normal_mode(self) -> None:
         task = _task()
         suggestion = {"shareurl": "https://pan.quark.cn/s/newshare", "taskname": "测试剧", "datetime": "2026-10-27 12:00:00"}

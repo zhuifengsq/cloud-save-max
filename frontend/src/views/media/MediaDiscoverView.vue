@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Search } from '@element-plus/icons-vue'
+import { useRoute } from 'vue-router'
 
 import { fetchDoubanCategories, fetchDoubanList, fetchTMDBDetail, searchTMDB } from '@/api/media'
 import ResponsivePagination from '@/components/ResponsivePagination.vue'
@@ -18,6 +19,8 @@ import type { TaskOverview, TaskDetail } from '@/types/tasks'
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342'
 
 const auth = useAuthStore()
+const route = useRoute()
+const isDiscoverRoute = computed(() => route.name === 'MediaDiscover')
 const canWrite = computed(() => auth.permissions.includes(TASK_WRITE))
 const isMobile = useIsMobile()
 
@@ -216,7 +219,9 @@ function confirmCreateNewTask() {
 }
 
 async function openTaskWithExistingChoice(tmdb: { tmdb_id: number; tmdb_media_type: 'movie' | 'tv' }, presetTaskname: string) {
+  const version = ++editVersion
   await ensureTaskDepsLoaded()
+  if (version !== editVersion) return
   const existed = findExistingDramaTasks(tmdb.tmdb_id, tmdb.tmdb_media_type)
   if (existed.length) {
     const target = pickLatestTask(existed)
@@ -429,6 +434,7 @@ async function openDetailFromDouban(row: DoubanListItem) {
 
   try {
     const data = await searchTMDB({ q: searchTitle, type: type as any, year: year || undefined, page: 1 })
+    if (!detail.visible) return
     if (!data.configured) {
       ElMessage.warning('未配置 TMDB API Key')
       return
@@ -579,6 +585,18 @@ onMounted(async () => {
   await loadCategories()
   await loadDoubanList()
 })
+
+watch(() => route.name, (name, previousName) => {
+  if (name === 'MediaDiscover' || (previousName !== 'MediaDiscover' && previousName !== 'TaskCopywriting')) return
+
+  detail.visible = false
+  tmdbPick.visible = false
+  closeExistingTaskDialog()
+  runLogDialog.visible = false
+  stopRunLogStream()
+  editVersion++
+  if (name !== 'TaskCopywriting') taskDrawer.visible = false
+})
 </script>
 
 <template>
@@ -707,7 +725,14 @@ onMounted(async () => {
       </el-card>
     </template>
 
-    <el-drawer v-model="detail.visible" :title="detailTitle" :size="isMobile ? '100%' : '520px'">
+    <el-dialog
+      v-if="isDiscoverRoute"
+      v-model="detail.visible"
+      :title="detailTitle"
+      class="media-detail-dialog"
+      width="640px"
+      align-center
+    >
       <div v-loading="detail.loading" class="detail">
         <div class="detail__top">
           <el-image v-if="detailPoster" :src="detailPoster" fit="cover" class="detail__poster" />
@@ -749,9 +774,10 @@ onMounted(async () => {
           </el-table>
         </div>
       </div>
-    </el-drawer>
+    </el-dialog>
 
     <el-dialog
+      v-if="isDiscoverRoute"
       v-model="existingTaskDialog.visible"
       title="已存在追剧任务"
       width="560px"
@@ -780,6 +806,7 @@ onMounted(async () => {
     </el-dialog>
 
     <el-dialog
+      v-if="isDiscoverRoute"
       v-model="tmdbPick.visible"
       title="选择 TMDB 条目"
       width="720px"
@@ -823,6 +850,7 @@ onMounted(async () => {
     </el-dialog>
 
     <DramaTaskDrawer
+      v-if="isDiscoverRoute || (route.name === 'TaskCopywriting' && taskDrawer.visible)"
       v-model="taskDrawer.visible"
       :task="taskDrawer.currentTask"
       :accounts="accounts"
@@ -834,6 +862,7 @@ onMounted(async () => {
     />
 
     <el-dialog
+      v-if="isDiscoverRoute"
       v-model="runLogDialog.visible"
       :title="runLogDialog.title"
       :width="isMobile ? '92vw' : '720px'"
@@ -1043,8 +1072,29 @@ onMounted(async () => {
 :deep(.tmdb-pick-dialog .el-table__body tr.current-row:hover > td.el-table__cell) {
   background: var(--el-table-current-row-bg-color) !important;
 }
+
+:global(.media-detail-dialog.el-dialog) {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+}
+
+:global(.media-detail-dialog .el-dialog__header) {
+  flex-shrink: 0;
+  padding-inline-end: 32px;
+  overflow-wrap: anywhere;
+}
+
+:global(.media-detail-dialog .el-dialog__body) {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
 .detail {
   padding: 4px 4px 18px;
+  overflow-wrap: anywhere;
 }
 .detail__top {
   display: flex;
@@ -1059,6 +1109,7 @@ onMounted(async () => {
 }
 .detail__meta {
   flex: 1;
+  min-width: 0;
 }
 .detail__name {
   font-size: 16px;

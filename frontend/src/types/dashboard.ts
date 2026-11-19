@@ -1,4 +1,5 @@
 import type { DriveAccountItem } from '@/types/extensions'
+import type { ShareurlUpdateLog } from '@/types/tasks'
 
 export type CapacitySummary = {
   account_count: number
@@ -51,6 +52,11 @@ export type DramaFailureItem = {
   message?: string | null
 }
 
+export type DramaShareurlUpdateLog = ShareurlUpdateLog & {
+  task_id: number
+  taskname: string
+}
+
 export type DramaOverview = {
   scheduler: {
     enabled: boolean
@@ -60,5 +66,6 @@ export type DramaOverview = {
   summary: DramaSummary
   trend: DramaTrendPoint[]
   recent_failures: DramaFailureItem[]
+  shareurl_update_logs?: DramaShareurlUpdateLog[]
   updated_at?: string | null
 }

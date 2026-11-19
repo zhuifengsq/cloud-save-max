@@ -6,8 +6,42 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.application.container import tasks_repo
+from app.application.repository_records import TaskRecord
 
 from app.application.task_share_links import _load_extra, _store_extra
+
+
+def read_task_shareurl_update_logs(task: TaskRecord) -> list[dict[str, object]]:
+    history = _load_extra(task).get('shareurl_update_logs')
+    if not isinstance(history, list):
+        return []
+
+    records: list[dict[str, object]] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        entry_id, at = entry.get('id'), entry.get('at')
+        source, status = entry.get('source'), entry.get('status')
+        if not isinstance(entry_id, str) or not entry_id or not isinstance(at, str) or not at:
+            continue
+        if source not in ('auto', 'manual') or status not in ('success', 'failed'):
+            continue
+
+        round_number = entry.get('round')
+        records.append({
+            'task_id': task.id,
+            'taskname': task.taskname,
+            'id': entry_id,
+            'at': at,
+            'source': source,
+            'status': status,
+            'round': round_number if isinstance(round_number, int) else None,
+            **{
+                key: entry[key] if isinstance(entry.get(key), str) else ''
+                for key in ('message', 'old_shareurl', 'new_shareurl')
+            },
+        })
+    return records
 
 
 def clear_drama_shareurl_update_logs(db: Session) -> int:

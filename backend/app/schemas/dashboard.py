@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.task_scheduler import TaskSchedulerSettingOut
 
@@ -79,9 +79,23 @@ class DramaFailureItemOut(BaseModel):
     message: str | None = None
 
 
+class DramaShareurlUpdateLogOut(BaseModel):
+    task_id: int
+    taskname: str
+    id: str
+    at: str
+    source: Literal["auto", "manual"]
+    status: Literal["success", "failed"]
+    message: str
+    old_shareurl: str
+    new_shareurl: str
+    round: int | None = None
+
+
 class DramaOverviewOut(BaseModel):
     scheduler: TaskSchedulerSettingOut
     summary: DramaSummaryOut
     trend: list[DramaTrendPointOut]
     recent_failures: list[DramaFailureItemOut]
+    shareurl_update_logs: list[DramaShareurlUpdateLogOut] = Field(default_factory=list)
     updated_at: datetime | None = None

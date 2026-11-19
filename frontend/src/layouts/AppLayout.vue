@@ -13,39 +13,22 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-const BASE_CACHED_VIEWS = ['DashboardView', 'DramaCalendarView']
-const copywritingOrigin = ref<{ view: string; path: string; scrollY: number } | null>(null)
-
-function copywritingSourceView(name: typeof route.name) {
-  if (name === 'DramaTasks') return 'DramaTaskView'
-  if (name === 'MediaDiscover') return 'MediaDiscoverView'
-}
-
-const cachedViews = computed(() => {
-  const source = route.name === 'TaskCopywriting'
-    ? copywritingOrigin.value?.view
-    : copywritingSourceView(route.name)
-  return source ? [...BASE_CACHED_VIEWS, source] : BASE_CACHED_VIEWS
-})
+const CACHED_VIEWS = ['DashboardView', 'DramaCalendarView', 'MediaDiscoverView', 'DramaTaskView']
+const listScrollPositions = new Map<typeof route.name, number>([
+  ['MediaDiscover', 0],
+  ['DramaTasks', 0],
+])
 
 watch(
   () => [route.name, route.fullPath] as const,
-  async ([name, path], [previousName, previousPath]) => {
-    if (name === 'TaskCopywriting') {
-      const view = copywritingSourceView(previousName)
-      if (!view) return
-      copywritingOrigin.value = { view, path: previousPath, scrollY: window.scrollY }
-      await nextTick()
-      if (route.fullPath === path) window.scrollTo(0, 0)
-      return
-    }
+  async ([name, path], [previousName]) => {
+    const leavingList = listScrollPositions.has(previousName)
+    if (leavingList) listScrollPositions.set(previousName, window.scrollY)
 
-    const origin = copywritingOrigin.value
-    copywritingOrigin.value = null
-    if (previousName === 'TaskCopywriting' && origin?.path === path) {
-      await nextTick()
-      if (route.fullPath === path) window.scrollTo(0, origin.scrollY)
-    }
+    const scrollY = name === 'TaskCopywriting' && leavingList ? 0 : listScrollPositions.get(name)
+    if (scrollY === undefined) return
+    await nextTick()
+    if (route.fullPath === path) window.scrollTo(0, scrollY)
   },
 )
 
@@ -238,7 +221,7 @@ watch(
 
       <div class="app-main">
         <RouterView v-slot="{ Component }">
-          <keep-alive :include="cachedViews">
+          <keep-alive :include="CACHED_VIEWS">
             <component :is="Component" />
           </keep-alive>
         </RouterView>

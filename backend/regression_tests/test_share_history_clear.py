@@ -10,15 +10,21 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.api.routes import dashboard
+from app.application.shareurl_update_logs import append_shareurl_update_log
+from app.core.permissions import TASK_READ
 from app.infrastructure.persistence.base import Base
+from app.infrastructure.persistence.models.system_setting import SystemSetting
 from app.infrastructure.persistence.models.task import Task
 from app.infrastructure.persistence.models.task_execution import TaskExecution
+from app.infrastructure.persistence.models.task_scheduler_setting import TaskSchedulerSetting
 
 
 class ClearShareHistoryTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://', connect_args={'check_same_thread': False}, poolclass=StaticPool)
-        Base.metadata.create_all(self.engine, tables=[Task.__table__, TaskExecution.__table__])
+        Base.metadata.create_all(self.engine, tables=[
+            Task.__table__, TaskExecution.__table__, SystemSetting.__table__, TaskSchedulerSetting.__table__,
+        ])
         self.db = Session(self.engine)
         self.extra = {'auto_update_shareurl': True, 'share_link': {'share_url': 'https://pan.quark.cn/s/public'},
                       'saved_latest': {'episode': 12}, 'shareurl_update_logs': [{'id': 'a'}, {'id': 'b'}]}
@@ -52,6 +58,26 @@ class ClearShareHistoryTests(unittest.TestCase):
     def test_clear_again_is_noop(self):
         self.clear()
         self.assertEqual(self.clear(), {'deleted': 0})
+
+    def test_dashboard_returns_saved_drama_history_only_with_task_read_permission(self):
+        entry = append_shareurl_update_log(
+            self.db.get(Task, 1), source='auto', status='success',
+            message='已自动更换源链接', new_shareurl='https://pan.quark.cn/s/replacement', round_number=1,
+        )
+        append_shareurl_update_log(self.db.get(Task, 2), source='auto', status='failed', message='普通任务')
+        self.db.commit()
+
+        def history(permissions):
+            return dashboard.get_drama_overview(
+                days=30, _current=SimpleNamespace(permissions=permissions), db=self.db,
+            ).shareurl_update_logs
+
+        self.assertEqual([row.model_dump() for row in history({TASK_READ})], [
+            {**entry, 'task_id': 1, 'taskname': 'test'},
+        ])
+        self.assertEqual(history(set()), [])
+        self.assertEqual(self.clear(), {'deleted': 3})
+        self.assertEqual(history({TASK_READ}), [])
 
 
 if __name__ == '__main__':

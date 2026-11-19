@@ -3,6 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import CapacityAccountCard from '@/components/dashboard/CapacityAccountCard.vue'
 import CapacityHero from '@/components/dashboard/CapacityHero.vue'
+import DashboardLogList from '@/components/dashboard/DashboardLogList.vue'
 import DramaTrend from '@/components/dashboard/DramaTrend.vue'
 import ShareLinkHistory from '@/components/dashboard/ShareLinkHistory.vue'
 import FailureReason from '@/components/dashboard/FailureReason.vue'
@@ -36,6 +37,7 @@ const DRAMA_REFRESH_MS = 60 * 1000
 const CAPACITY_REFRESH_MS = 5 * 60 * 1000
 const CHECK_TICK_MS = 60 * 1000
 const LIST_DISPLAY_LIMIT = 10
+const RECENT_UPDATE_LIMIT = 3
 
 const dramaDays = ref(30)
 const dramaLoading = ref(false)
@@ -111,6 +113,7 @@ async function clearFailures() {
   clearingFailures.value = true
   try {
     const res = await clearDramaFailures(0)
+    showAllFailures.value = false
     ElMessage.success(`已清理 ${res.deleted} 条失败记录`)
     await refreshDrama({ silent: true })
   } catch (e: any) {
@@ -352,7 +355,7 @@ const recentSuccesses = computed(() => {
   }
   return Array.from(latestByDrama.values())
     .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
-    .slice(0, LIST_DISPLAY_LIMIT)
+    .slice(0, RECENT_UPDATE_LIMIT)
 })
 
 const upcomingAiring = computed(() => {
@@ -388,8 +391,6 @@ const upcomingAiring = computed(() => {
 const displayedUpcomingAiring = computed(() => upcomingAiring.value.slice(0, LIST_DISPLAY_LIMIT))
 
 const failures = computed(() => dramaOverview.value?.recent_failures || [])
-const displayFailures = computed(() => failures.value.slice(0, 3))
-const hiddenFailures = computed(() => failures.value.slice(3))
 
 const trendPoints = computed(() => dramaOverview.value?.trend || [])
 
@@ -643,58 +644,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
-
-        <ShareLinkHistory :tasks="dramaTasks" @cleared="onShareLogsCleared" />
-
-        <div v-if="failures.length" class="failures-card">
-          <div class="failures-card__head">
-            <div class="failures-card__title">近期失败</div>
-            <div class="failures-card__right">
-              <span class="status-pill status-pill--danger">{{ failures.length }} 条</span>
-              <el-button size="small" text @click="showAllFailures = !showAllFailures">
-                {{ showAllFailures ? '收起' : '展开' }}
-              </el-button>
-              <el-button size="small" text type="danger" :loading="clearingFailures" @click="clearFailures">
-                清理失败记录
-              </el-button>
-            </div>
-          </div>
-          <div class="failures-list">
-            <div v-for="f in displayFailures" :key="`${f.task_id}-${f.started_at}-${f.stage}`" class="failure-row">
-              <div class="failure-row__main">
-                <div class="failure-row__title">{{ f.taskname }}</div>
-                <div class="failure-row__desc">
-                  <span>{{ formatDateTime(f.started_at) }}</span>
-                  <span v-if="f.stage" class="meta-dot">·</span>
-                  <span v-if="f.stage">{{ failureStageLabel(f.stage) }}</span>
-                </div>
-                <FailureReason :message="f.message" />
-              </div>
-              <router-link to="/tasks/drama">
-                <el-button size="small">查看</el-button>
-              </router-link>
-            </div>
-
-            <el-collapse-transition>
-              <div v-if="showAllFailures && hiddenFailures.length" class="failures-list">
-                <div v-for="f in hiddenFailures" :key="`${f.task_id}-${f.started_at}-${f.stage}`" class="failure-row">
-                  <div class="failure-row__main">
-                    <div class="failure-row__title">{{ f.taskname }}</div>
-                    <div class="failure-row__desc">
-                      <span>{{ formatDateTime(f.started_at) }}</span>
-                      <span v-if="f.stage" class="meta-dot">·</span>
-                      <span v-if="f.stage">{{ failureStageLabel(f.stage) }}</span>
-                    </div>
-                    <FailureReason :message="f.message" />
-                  </div>
-                  <router-link to="/tasks/drama">
-                    <el-button size="small">查看</el-button>
-                  </router-link>
-                </div>
-              </div>
-            </el-collapse-transition>
-          </div>
-        </div>
       </section>
 
       <section class="glass-panel upcoming-card" v-loading="dramaLoading">
@@ -729,6 +678,51 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </section>
+    </div>
+
+    <div class="dashboard-log-grid">
+      <ShareLinkHistory
+        v-loading="dramaLoading"
+        :records="dramaOverview?.shareurl_update_logs ?? []"
+        @cleared="onShareLogsCleared"
+      />
+
+      <DashboardLogList
+        v-model:expanded="showAllFailures"
+        v-loading="dramaLoading"
+        title="近期失败"
+        :records="failures"
+        :record-key="record => `${record.task_id}-${record.started_at}-${record.stage}`"
+        empty-text="暂无近期失败记录"
+      >
+        <template #actions>
+          <el-button
+            size="small"
+            text
+            type="danger"
+            :loading="clearingFailures"
+            :disabled="!failures.length"
+            @click="clearFailures"
+          >
+            清理失败记录
+          </el-button>
+        </template>
+        <template #status>
+          <el-tag size="small" type="danger">失败</el-tag>
+        </template>
+        <template #meta="{ record }">
+          <time :datetime="record.started_at">{{ formatDateTime(record.started_at) }}</time>
+          <span v-if="record.stage">{{ failureStageLabel(record.stage) }}</span>
+        </template>
+        <template #default="{ record }">
+          <div class="failure-entry-body">
+            <FailureReason :message="record.message" />
+            <router-link class="failure-task-link" :to="{ name: 'DramaTasks', query: { taskId: record.task_id } }">
+              查看任务
+            </router-link>
+          </div>
+        </template>
+      </DashboardLogList>
     </div>
 
     <el-dialog v-model="trendDialogVisible" title="任务趋势（成功数 / 失败数 / 成功率）" width="920">
@@ -928,66 +922,31 @@ onBeforeUnmount(() => {
   color: var(--el-text-color-secondary);
 }
 
-.failures-card {
-  margin-top: 14px;
-  padding: 14px;
-  border-radius: var(--panel-radius);
-  background: var(--el-fill-color-blank);
-  border: 1px solid var(--el-border-color-lighter);
+.dashboard-log-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: 20px;
+  align-items: start;
 }
 
-.failures-card__head {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
+.failure-entry-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
   gap: 12px;
 }
 
-.failures-card__title {
-  font-weight: 700;
+.failure-task-link {
+  margin-top: 8px;
+  padding-block: 3px;
+  color: var(--el-color-primary);
+  font-size: 12px;
   white-space: nowrap;
 }
 
-.failures-card__right {
-  display: flex;
-  flex-wrap: wrap;
-  margin-left: auto;
-  align-items: center;
-  gap: 10px;
+.failure-task-link:hover {
+  text-decoration: underline;
 }
-
-.failures-card__right .status-pill { white-space: nowrap; }
-
-.failures-list {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.failure-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 12px 14px;
-  border-radius: var(--panel-radius);
-  background: var(--el-fill-color-blank);
-  border: 1px solid var(--el-border-color-lighter);
-}
-
-.failure-row__title {
-  font-weight: 650;
-}
-
-.failure-row__desc {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.failure-row__main { min-width: 0; flex: 1; }
-.failure-row > a { flex-shrink: 0; }
 
 .upcoming-card {
   padding: 22px;

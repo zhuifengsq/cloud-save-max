@@ -10,7 +10,6 @@ from app.application.container import drive_accounts_repo
 from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
 from app.application.episode_number import extract_episode, guess_episode, parse_size
 from app.application.resource_search import fetch_task_suggestions
-from app.application.tmdb_cache import get_tmdb_detail_cached
 
 logger = logging.getLogger(__name__)
 
@@ -71,18 +70,6 @@ def is_auto_update_task(db: Session, task: object, *, respect_toggle: bool = Tru
 
 # 兼容旧调用
 is_115_auto_update_task = is_auto_update_task
-
-
-def _dedupe_preserve_order(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for raw in values:
-        value = str(raw or "").strip()
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        out.append(value)
-    return out
 
 
 def _rewrite_shareurl_with_fid(shareurl: str, fid: str | None) -> str:
@@ -281,26 +268,13 @@ def resolve_drama_shareurl_update(
     folder_priority = str(addition.get("folder_priority") or "").strip()
     folder_priority_mode = str(addition.get("folder_priority_mode") or "").strip()
 
-    names = _dedupe_preserve_order([str(getattr(task, "taskname", "") or "").strip()])
-    tmdb_id = int(getattr(task, "tmdb_id", 0) or 0)
-    if tmdb_id > 0:
-        try:
-            configured, detail, _u, _e, _r = get_tmdb_detail_cached(db, media_type="tv", tmdb_id=tmdb_id, **({"close_read_tx": True} if release_read else {}))
-            if configured and isinstance(detail, dict):
-                tmdb_names = _dedupe_preserve_order(
-                    [str(detail.get("name") or "").strip(), str(detail.get("original_name") or "").strip()]
-                )
-                if tmdb_names:
-                    names = tmdb_names
-        except Exception:
-            if release_read:
-                raise
-    if not names:
+    taskname = str(getattr(task, "taskname", "") or "").strip()
+    if not taskname:
         return {"checked": False, "updated": False, "reason": "no_search_keyword"}
 
     suggestions, db_changed, search_stats = _search_candidates(
         db,
-        names=names,
+        names=[taskname],
         drive_type=drive_type,
         search_filter=search_filter,
         search_exclude=search_exclude,
@@ -371,11 +345,11 @@ def resolve_drama_shareurl_update(
                     raise
                 root_dirs = []
             if root_dirs:
-                lowered_names = [str(n).strip().lower() for n in names if str(n).strip()]
+                lowered_taskname = taskname.lower()
 
                 def _dir_score(entry: tuple[str, str]) -> int:
                     name = str(entry[1] or "").lower()
-                    if lowered_names and any(item in name for item in lowered_names):
+                    if lowered_taskname in name:
                         return 1
                     return 0
 

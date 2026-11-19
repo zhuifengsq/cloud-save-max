@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.application.container import system_settings_repo, task_executions_repo, tasks_repo
 from app.application.generated_share_check import FAILURE_STAGE, read_share_check
+from app.application.shareurl_update_logs import read_task_shareurl_update_logs
 from app.application.task_scheduler import get_or_create_task_scheduler_setting
 
 # 「近期失败」清理水位：清理失败记录时写入；早于该时刻的「分享链接检测失败」不再出现在仪表盘。
@@ -106,7 +107,7 @@ def _daterange(start: date, end: date) -> list[date]:
     return days
 
 
-def build_drama_overview(db: Session, *, days: int = 30) -> dict:
+def build_drama_overview(db: Session, *, days: int = 30, include_shareurl_logs: bool = False) -> dict:
     try:
         window_days = int(days)
     except (TypeError, ValueError):
@@ -262,5 +263,8 @@ def build_drama_overview(db: Session, *, days: int = 30) -> dict:
         },
         "trend": trend,
         "recent_failures": recent_failures,
+        "shareurl_update_logs": [
+            entry for task in tasks for entry in read_task_shareurl_update_logs(task)
+        ] if include_shareurl_logs else [],
         "updated_at": now_utc,
     }

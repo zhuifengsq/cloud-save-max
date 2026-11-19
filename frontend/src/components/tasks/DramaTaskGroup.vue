@@ -36,6 +36,7 @@ defineProps<{
   group: DramaTaskGroupData
   open: boolean
   openExecutions: ReadonlySet<number>
+  focusedTaskId?: number | null
   canRun: boolean
   canWrite: boolean
 }>()
@@ -104,7 +105,11 @@ const executionLabels: Record<string, string> = {
       <article
         v-for="{ task, drive, account, share, leadIn, leadInTime, linkFailure } in group.items"
         :key="task.id"
+        :id="`drama-task-${task.id}`"
         class="drama-group-task"
+        :class="{ 'drama-group-task--focused': focusedTaskId === task.id }"
+        :tabindex="focusedTaskId === task.id ? -1 : undefined"
+        :aria-label="focusedTaskId === task.id ? task.taskname : undefined"
       >
         <header class="drama-group-task__header">
           <h3 class="drama-group-task__name">
@@ -355,6 +360,11 @@ summary:focus-visible {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 10px;
   background: var(--card);
+}
+
+.drama-group-task--focused {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
 }
 
 .drama-group-task__header {

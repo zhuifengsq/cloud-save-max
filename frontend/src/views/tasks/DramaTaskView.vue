@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRoute } from 'vue-router'
 
 import ResponsivePagination from '@/components/ResponsivePagination.vue'
 import DramaLeadInDialog from '@/components/tasks/DramaLeadInDialog.vue'
@@ -36,6 +37,8 @@ import { findGeneratedShareCheck } from '@/utils/generatedShareCheck'
 import type { DriveType } from '@/utils/driveType'
 
 const auth = useAuthStore()
+const route = useRoute()
+const isTaskRoute = computed(() => route.name === 'DramaTasks')
 const canWrite = computed(() => auth.permissions.includes(TASK_WRITE))
 const canRun = computed(() => auth.permissions.includes(TASK_RUN))
 
@@ -467,6 +470,60 @@ function resetFilters() {
   showFailedOnly.value = false
 }
 
+const focusedTaskId = computed(() => {
+  const value = route.query.taskId
+  const id = Number(value)
+  return isTaskRoute.value && typeof value === 'string' && Number.isSafeInteger(id) && id > 0 ? id : null
+})
+let revealedTaskId: number | null = null
+
+function groupIndexForTask(taskId: number) {
+  return taskGroups.value.findIndex((group) => group.items.some(({ task }) => task.id === taskId))
+}
+
+async function revealFocusedTask() {
+  const id = focusedTaskId.value
+  if (id === null) {
+    revealedTaskId = null
+    return
+  }
+  if (!pageLoaded.value || loading.value || pageError.value || revealedTaskId === id) return
+
+  let groupIndex = groupIndexForTask(id)
+  if (groupIndex === -1 && hasActiveFilter.value) {
+    resetFilters()
+    return
+  }
+
+  revealedTaskId = id
+  if (groupIndex === -1) {
+    try {
+      const task = await fetchTaskDetail(id)
+      if (focusedTaskId.value !== id || hasActiveFilter.value) return
+      if (task.task_type !== 'drama') {
+        ElMessage.warning('找不到对应的追剧任务')
+        return
+      }
+      if (!tasks.value.some((item) => item.id === id)) tasks.value.push(task)
+      groupIndex = groupIndexForTask(id)
+    } catch {
+      return
+    }
+  }
+
+  const group = taskGroups.value[groupIndex]
+  if (!group) return
+  page.value = Math.floor(groupIndex / pageSize.value) + 1
+  openGroups.add(group.key)
+  await nextTick()
+  if (focusedTaskId.value !== id) return
+  const target = document.getElementById(`drama-task-${id}`)
+  target?.focus({ preventScroll: true })
+  target?.scrollIntoView({ block: 'center' })
+}
+
+watch([focusedTaskId, pageLoaded, loading], () => { void revealFocusedTask() }, { immediate: true })
+
 async function loadData() {
   dropSharedTasks()
   await Promise.all([
@@ -657,7 +714,7 @@ async function generateShare(row: TaskItem) {
     const result = await createTaskShareLink(row.id)
     shareDialog.result = result
     shareDialog.fromStored = false
-    shareDialog.visible = true
+    if (isTaskRoute.value) shareDialog.visible = true
     // 同步到本地任务列表，不必刷新也能看到已保存的链接
     const target = tasks.value.find((item) => item.id === row.id)
     if (target) {
@@ -966,6 +1023,7 @@ async function saveScheduler() {
 async function confirmRunAll() {
   if (runAllDialog.running) return
   const runnable = filters.status === 'disabled' ? [] : await loadTaskOrderIndex({...readFilters(), enabled: true})
+  if (!isTaskRoute.value) return
   if (!runnable.length) {
     ElMessage.warning('当前没有可执行的追剧任务')
     return
@@ -1207,6 +1265,25 @@ onBeforeUnmount(() => {
   stopRunLogStream(); stopRunAllStream()
   window.removeEventListener('resize', onResize)
 })
+
+watch(() => route.name, (name, previousName) => {
+  if (name === 'DramaTasks') return
+  if (name !== 'TaskCopywriting') drawerVisible.value = false
+  if (previousName !== 'DramaTasks') return
+
+  editVersion++
+  historyVersion++
+  logVersion++
+  history.visible = false
+  leadInDialog.visible = false
+  shareDialog.visible = false
+  deleteDialog.visible = false
+  runLogDialog.visible = false
+  runAllDialog.visible = false
+  cronPreviewVisible.value = false
+  stopRunLogStream()
+  if (runAllDialog.running) stopRunAllStream()
+})
 </script>
 
 <template>
@@ -1336,6 +1413,7 @@ onBeforeUnmount(() => {
           :group="group"
           :open="openGroups.has(group.key)"
           :open-executions="openExecutions"
+          :focused-task-id="focusedTaskId"
           :can-run="canRun"
           :can-write="canWrite"
           @update:open="setExpanded(openGroups, group.key, $event)"
@@ -1370,7 +1448,7 @@ onBeforeUnmount(() => {
         />
       </template>
     </ResponsivePagination>
-    <el-dialog v-model="history.visible" title="执行历史">
+    <el-dialog v-if="isTaskRoute" v-model="history.visible" title="执行历史">
       <el-alert v-if="history.error" :title="history.error" type="error"><el-button @click="loadHistory">重试</el-button></el-alert>
       <div v-loading="history.loading">
         <div v-for="execution in history.items" :key="execution.id"><el-button link @click="openExecution(history.taskId, execution.id)">{{ execution.started_at }} · {{ execution.status }}</el-button> {{ execution.message }}</div>
@@ -1378,6 +1456,7 @@ onBeforeUnmount(() => {
       <el-pagination v-model:current-page="history.page" :page-size="20" :total="history.total" layout="prev,pager,next" @current-change="loadHistory" />
     </el-dialog>
     <DramaTaskDrawer
+      v-if="isTaskRoute || (route.name === 'TaskCopywriting' && drawerVisible)"
       v-model="drawerVisible"
       :task="currentTask"
       :accounts="accounts"
@@ -1385,9 +1464,9 @@ onBeforeUnmount(() => {
       @save="submitTask"
     />
 
-    <DramaLeadInDialog v-model="leadInDialog.visible" :task="leadInDialog.task" @updated="onLeadInUpdated" />
+    <DramaLeadInDialog v-if="isTaskRoute" v-model="leadInDialog.visible" :task="leadInDialog.task" @updated="onLeadInUpdated" />
 
-    <el-dialog v-model="shareDialog.visible" title="转存文件分享链接" :width="isMobile ? '92vw' : '580px'">
+    <el-dialog v-if="isTaskRoute" v-model="shareDialog.visible" title="转存文件分享链接" :width="isMobile ? '92vw' : '580px'">
       <template v-if="shareDialog.result">
         <div class="share-result__label">{{ shareDialog.result.title }} · {{ shareDialog.result.account_name }}</div>
         <el-input :model-value="shareDialog.result.share_url" readonly>
@@ -1419,6 +1498,7 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <el-dialog
+      v-if="isTaskRoute"
       v-model="deleteDialog.visible"
       title="删除任务"
       :width="isMobile ? '92vw' : '520px'"
@@ -1443,7 +1523,7 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="runLogDialog.visible" :title="runLogDialog.title" :width="isMobile ? '96vw' : '1100px'" :fullscreen="isMobile">
+    <el-dialog v-if="isTaskRoute" v-model="runLogDialog.visible" :title="runLogDialog.title" :width="isMobile ? '96vw' : '1100px'" :fullscreen="isMobile">
       <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px">
         <el-tag v-if="runLogDialog.status" :type="runLogDialog.status === 'success' ? 'success' : runLogDialog.status === 'running' ? 'warning' : runLogDialog.status === 'skipped' ? 'info' : 'danger'">
           {{ runLogDialog.status }}
@@ -1460,7 +1540,7 @@ onBeforeUnmount(() => {
       <pre ref="runLogPre" style="white-space: pre-wrap; font-size: 12px; line-height: 1.5; background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 16px; padding: 12px; max-height: 65vh; overflow: auto">{{ runLogDialog.content }}</pre>
     </el-dialog>
 
-    <el-dialog v-model="runAllDialog.visible" :title="runAllDialog.title" :width="isMobile ? '96vw' : '1100px'" :fullscreen="isMobile">
+    <el-dialog v-if="isTaskRoute" v-model="runAllDialog.visible" :title="runAllDialog.title" :width="isMobile ? '96vw' : '1100px'" :fullscreen="isMobile">
       <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap">
         <el-tag :type="runAllDialog.running ? 'warning' : 'success'">{{ runAllDialog.running ? 'running' : 'done' }}</el-tag>
         <el-tag v-if="runAllStats.success" type="success">success：{{ runAllStats.success }}</el-tag>
@@ -1507,7 +1587,7 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <!-- Cron 预览弹窗 -->
-    <el-dialog v-model="cronPreviewVisible" title="执行计划预览" width="480px" :close-on-click-modal="true">
+    <el-dialog v-if="isTaskRoute" v-model="cronPreviewVisible" title="执行计划预览" width="480px" :close-on-click-modal="true">
       <div v-if="scheduler">
         <div style="margin-bottom: 16px;">
           <div style="font-weight: 600; margin-bottom: 8px;">执行规则</div>

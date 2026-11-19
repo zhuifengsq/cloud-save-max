@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, get_current_user, require_permissions
-from app.core.permissions import TASK_WRITE
+from app.core.permissions import TASK_READ, TASK_WRITE
 from app.application.container import get_db, transaction
 from app.schemas.dashboard import CapacityOverviewOut, DramaOverviewOut
 from app.application import audit
@@ -26,7 +26,9 @@ def get_drama_overview(
     _current: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return DramaOverviewOut(**build_drama_overview(db, days=days))
+    return DramaOverviewOut(**build_drama_overview(
+        db, days=days, include_shareurl_logs=TASK_READ in _current.permissions,
+    ))
 
 @router.post('/drama/clear-failures', dependencies=[Depends(require_permissions(TASK_WRITE))])
 def clear_drama_failures(
