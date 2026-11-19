@@ -37,7 +37,7 @@ const DRAMA_REFRESH_MS = 60 * 1000
 const CAPACITY_REFRESH_MS = 5 * 60 * 1000
 const CHECK_TICK_MS = 60 * 1000
 const LIST_DISPLAY_LIMIT = 10
-const RECENT_UPDATE_LIMIT = 3
+const RECENT_UPDATE_LIMIT = 6
 
 const dramaDays = ref(30)
 const dramaLoading = ref(false)
