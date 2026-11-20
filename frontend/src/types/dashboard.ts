@@ -52,6 +52,12 @@ export type DramaFailureItem = {
   message?: string | null
 }
 
+export type DramaUpdateItem = {
+  task_id: number
+  started_at: string
+  drive_type?: string | null
+}
+
 export type DramaShareurlUpdateLog = ShareurlUpdateLog & {
   task_id: number
   taskname: string
@@ -65,6 +71,7 @@ export type DramaOverview = {
   }
   summary: DramaSummary
   trend: DramaTrendPoint[]
+  recent_updates: DramaUpdateItem[]
   recent_failures: DramaFailureItem[]
   shareurl_update_logs?: DramaShareurlUpdateLog[]
   updated_at?: string | null

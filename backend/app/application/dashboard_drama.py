@@ -8,12 +8,14 @@ from sqlalchemy.orm import Session
 
 from app.application.container import system_settings_repo, task_executions_repo, tasks_repo
 from app.application.generated_share_check import FAILURE_STAGE, read_share_check
+from app.application.notifications.task_notify import extract_root_new_files
 from app.application.shareurl_update_logs import read_task_shareurl_update_logs
 from app.application.task_scheduler import get_or_create_task_scheduler_setting
 
 # 「近期失败」清理水位：清理失败记录时写入；早于该时刻的「分享链接检测失败」不再出现在仪表盘。
 # 只影响展示，不改写执行记录本身——分享链接的真实状态仍由任务列表的检测徽章如实展示。
 DRAMA_FAILURES_CLEARED_KEY = "dashboard.drama_failures_cleared_at"
+RECENT_UPDATE_LIMIT = 6
 
 
 def _safe_json_object(value: str | None) -> dict:
@@ -154,13 +156,15 @@ def build_drama_overview(db: Session, *, days: int = 30, include_shareurl_logs: 
     }
 
     recent_failures: list[dict] = []
+    recent_updates: dict[tuple[str, int], dict] = {}
+    tmdb_ids = {task.id: task.tmdb_id for task in tasks if (task.tmdb_id or 0) > 0}
     cleared_at = read_failures_cleared_at(db)
 
     # 只取仪表盘需要的列：执行记录含 run_log/tree_summary 等大文本字段，
     # 加载整行会让窗口内的数千条记录额外搬运十几 MB 数据（合成库实测 103ms → 36ms）。
     executions = tasks_repo().list_drama_execution_rows(db, since=since)
 
-    for status, started_at, finished_at, task_id, stage, message, snapshot, taskname in executions:
+    for status, started_at, finished_at, task_id, stage, message, snapshot, taskname, legacy_tree in executions:
         status = str(status or "").strip().lower()
         execution_total += 1
         if status == "success":
@@ -192,6 +196,21 @@ def build_drama_overview(db: Session, *, days: int = 30, include_shareurl_logs: 
 
         if status == "success" and started_at >= month_start:
             monthly_success_count += 1
+
+        if status == "success" and len(recent_updates) < RECENT_UPDATE_LIMIT:
+            drama_key = ("tmdb", tmdb_ids[task_id]) if task_id in tmdb_ids else ("task", task_id)
+            if drama_key not in recent_updates:
+                data = _safe_json_object(snapshot)
+                count = data.get("transfer_count")
+                names = data.get("new_files")
+                if not isinstance(names, list):
+                    names = extract_root_new_files((legacy_tree or "").partition("\n")[2])
+                if names or (type(count) is int and count > 0):
+                    recent_updates[drama_key] = {
+                        "task_id": task_id,
+                        "started_at": started_at,
+                        "drive_type": str(data.get("drive_type") or "") or None,
+                    }
 
         if len(recent_failures) < 12 and status == "failed":
             recent_failures.append(
@@ -262,6 +281,7 @@ def build_drama_overview(db: Session, *, days: int = 30, include_shareurl_logs: 
             "avg_duration_s": avg_duration_s,
         },
         "trend": trend,
+        "recent_updates": list(recent_updates.values()),
         "recent_failures": recent_failures,
         "shareurl_update_logs": [
             entry for task in tasks for entry in read_task_shareurl_update_logs(task)

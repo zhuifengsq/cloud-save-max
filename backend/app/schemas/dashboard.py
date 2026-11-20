@@ -79,6 +79,12 @@ class DramaFailureItemOut(BaseModel):
     message: str | None = None
 
 
+class DramaUpdateItemOut(BaseModel):
+    task_id: int
+    started_at: datetime
+    drive_type: str | None = None
+
+
 class DramaShareurlUpdateLogOut(BaseModel):
     task_id: int
     taskname: str
@@ -96,6 +102,7 @@ class DramaOverviewOut(BaseModel):
     scheduler: TaskSchedulerSettingOut
     summary: DramaSummaryOut
     trend: list[DramaTrendPointOut]
+    recent_updates: list[DramaUpdateItemOut] = Field(default_factory=list)
     recent_failures: list[DramaFailureItemOut]
     shareurl_update_logs: list[DramaShareurlUpdateLogOut] = Field(default_factory=list)
     updated_at: datetime | None = None

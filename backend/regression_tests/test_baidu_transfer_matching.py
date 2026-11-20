@@ -1,6 +1,12 @@
+import json
+from email.message import Message
+from types import SimpleNamespace
 from unittest.mock import Mock
+from urllib.parse import urlsplit
 
 import pytest
+from requests.adapters import HTTPAdapter
+from urllib3.response import HTTPResponse
 
 from app.domain.drive_types import DriveFile, TransferRequest
 from app.infrastructure.drive.adapters.baidu_adapter import BaiduAdapter
@@ -54,6 +60,40 @@ def delayed_listing(monkeypatch, gateway, snapshots):
     reader = Mock(side_effect=read)
     monkeypatch.setattr(gateway._adapter, 'ls_dir_complete', reader)
     return reader
+
+
+def test_baidu_transfer_sends_only_current_share_cookie(monkeypatch):
+    adapter = BaiduAdapter(cookie='BDUSS=fake; BDCLND=old-share')
+    monkeypatch.setattr(adapter, '_throttle_request', lambda: None)
+    snapshots = iter([listing([]), listing(['A.mp4'])])
+    monkeypatch.setattr(adapter, 'ls_dir_complete', lambda path: next(snapshots))
+    transfer_cookies = []
+
+    def send(http_adapter, request, **kwargs):
+        path = urlsplit(request.url).path
+        headers = Message()
+        if path == '/share/verify':
+            headers.add_header('Set-Cookie', 'BDCLND=verified; Domain=.baidu.com; Path=/')
+            body = json.dumps({'errno': 0})
+        elif path == '/s/1share':
+            headers.add_header('Set-Cookie', 'BDCLND=refreshed; Domain=.baidu.com; Path=/')
+            body = '<script>{"share_uk":1,"shareid":2,"file_list":[]}</script>'
+        else:
+            assert path == '/share/transfer'
+            cookies = request.headers['Cookie'].split('; ')
+            transfer_cookies.extend(cookie for cookie in cookies if cookie.startswith('BDCLND='))
+            body = json.dumps({'errno': 0 if transfer_cookies == ['BDCLND=refreshed'] else 200025})
+        raw = HTTPResponse(status=200, original_response=SimpleNamespace(msg=headers))
+        response = http_adapter.build_response(request, raw)
+        response._content = body.encode()
+        return response
+
+    monkeypatch.setattr(HTTPAdapter, 'send', send)
+    result = adapter.save_file(['1'], ['1'], '/dest', '1share', '1share:1234', file_names=['A.mp4'])
+
+    assert transfer_cookies == ['BDCLND=refreshed']
+    assert result['code'] == 0
+    assert result['data']['save_as_top_fids'] == ['/dest/A.mp4']
 
 
 def test_baidu_normalized_name_is_verified_and_associated(monkeypatch):

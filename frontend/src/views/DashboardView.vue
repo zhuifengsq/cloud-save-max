@@ -37,7 +37,6 @@ const DRAMA_REFRESH_MS = 60 * 1000
 const CAPACITY_REFRESH_MS = 5 * 60 * 1000
 const CHECK_TICK_MS = 60 * 1000
 const LIST_DISPLAY_LIMIT = 10
-const RECENT_UPDATE_LIMIT = 6
 
 const dramaDays = ref(30)
 const dramaLoading = ref(false)
@@ -335,27 +334,12 @@ const capacitySpaceText = computed(() => {
   return `${used} / ${total}`
 })
 
-const recentSuccesses = computed(() => {
-  // 同一部剧只保留最近一条成功记录，避免任务多次执行时重复出现
-  const latestByDrama = new Map<number, {
-    task: TaskOverview
-    started_at: string
-    adapter_snapshot: Record<string, any>
-  }>()
-  for (const task of dramaTasks.value) {
-    const dramaKey = Number(task.tmdb_id) > 0 ? Number(task.tmdb_id) : task.id
-    for (const ex of task.executions || []) {
-      if (String(ex.status || '').toLowerCase() !== 'success') continue
-      const started_at = String(ex.started_at)
-      const current = latestByDrama.get(dramaKey)
-      if (!current || new Date(started_at).getTime() > new Date(current.started_at).getTime()) {
-        latestByDrama.set(dramaKey, { task, started_at, adapter_snapshot: ex.adapter_snapshot || {} })
-      }
-    }
-  }
-  return Array.from(latestByDrama.values())
-    .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
-    .slice(0, RECENT_UPDATE_LIMIT)
+const recentUpdates = computed(() => {
+  const tasksById = new Map(dramaTasks.value.map((task) => [task.id, task]))
+  return (dramaOverview.value?.recent_updates ?? []).flatMap((item) => {
+    const task = tasksById.get(item.task_id)
+    return task ? [{ ...item, task }] : []
+  })
 })
 
 const upcomingAiring = computed(() => {
@@ -671,9 +655,9 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <el-empty v-if="!recentSuccesses.length" description="暂无成功记录，手动运行一次任务后再查看。" :image-size="88" />
+        <el-empty v-if="!recentUpdates.length" description="暂无新文件转存记录" :image-size="88" />
         <div v-else class="update-list">
-          <div v-for="item in recentSuccesses" :key="`${item.task.id}-${item.started_at}`" class="update-row">
+          <div v-for="item in recentUpdates" :key="`${item.task_id}-${item.started_at}`" class="update-row">
             <div class="update-row__main">
               <div class="update-row__title">
                 <span class="update-row__icon">📺</span>
@@ -682,7 +666,7 @@ onBeforeUnmount(() => {
               <div class="update-row__desc">
                 <span>{{ timeAgoFromIso(item.started_at) }}</span>
                 <span class="meta-dot">·</span>
-                <span>{{ String(item.adapter_snapshot?.drive_type || item.task.account_name || '自动') }}网盘</span>
+                <span>{{ item.drive_type || item.task.account_name || '自动' }}网盘</span>
                 <span class="meta-dot">·</span>
                 <el-tag size="small" type="success">成功</el-tag>
               </div>

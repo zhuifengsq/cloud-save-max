@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, noload
 
 from app.infrastructure.persistence.models.task import Task
@@ -24,9 +24,16 @@ def list_drama_tasks(db: Session):
 
 
 def list_drama_execution_rows(db: Session, *, since):
-    """仪表盘用：只取概览需要的列（避免加载 run_log/tree_summary 等大字段）。"""
+    """仪表盘用：只取概览需要的列，旧版成功记录按需读取结果树。"""
     from app.infrastructure.persistence.models.task_execution import TaskExecution
 
+    snapshot = TaskExecution.adapter_snapshot
+    safe_snapshot = case((func.json_valid(snapshot), snapshot), else_="{}")
+    legacy_tree = case((
+        (TaskExecution.status == "success")
+        & (func.coalesce(func.json_type(safe_snapshot, "$.new_files"), "") != "array"),
+        TaskExecution.tree_summary,
+    ))
     return db.execute(
         select(
             TaskExecution.status,
@@ -35,12 +42,13 @@ def list_drama_execution_rows(db: Session, *, since):
             TaskExecution.task_id,
             TaskExecution.stage,
             TaskExecution.message,
-            TaskExecution.adapter_snapshot,
+            snapshot,
             Task.taskname,
+            legacy_tree,
         )
         .join(Task, Task.id == TaskExecution.task_id)
         .where(Task.task_type == "drama", TaskExecution.started_at >= since)
-        .order_by(TaskExecution.started_at.desc())
+        .order_by(TaskExecution.started_at.desc(), TaskExecution.id.desc())
     ).all()
 
 
@@ -51,8 +59,6 @@ def list_tasks(db: Session):
 
 def list_tasks_recent_executions(db: Session, *, limit: int = 3):
     """列表页：任务 + 每任务最近 N 条执行记录（显式装配，绝不触发全量懒加载）。"""
-    from sqlalchemy import func
-
     from app.infrastructure.persistence.models.task_execution import TaskExecution
 
     tasks = list_tasks(db)

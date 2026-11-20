@@ -73,6 +73,44 @@ def _snapshot_status(raw: str | None) -> str | None:
     return json.loads(raw).get("generated_share_check", {}).get("status")
 
 
+def test_recent_updates_show_actual_transfers_after_repeated_empty_runs():
+    engine, db = _open_session()
+    now = datetime.now()
+    try:
+        drama = _add_drama_task(db, taskname="正在追剧")
+        same_drama = _add_drama_task(db, taskname="另一网盘")
+        drama.tmdb_id = same_drama.tmdb_id = 100
+        legacy = _add_drama_task(db, taskname="历史转存")
+        folder = _add_drama_task(db, taskname="整包转存")
+        empty = _add_drama_task(db, taskname="无文件转存")
+
+        def run(task, hours_ago, snapshot, *, status="success", tree=None):
+            db.add(TaskExecution(
+                task_id=task.id, status=status, started_at=now - timedelta(hours=hours_ago),
+                adapter_snapshot=json.dumps(snapshot), tree_summary=tree,
+            ))
+
+        for hours_ago in range(1, 5):
+            run(drama, hours_ago, {"new_files": []})
+        run(drama, 5, {"new_files": ["05.mp4"], "drive_type": "baidu"})
+        run(folder, 6, {"new_files": [], "transfer_count": 1})
+        run(legacy, 7, {}, tree="历史转存\n└── 1. old.mp4 -> 01.mp4\n")
+        run(same_drama, 8, {"new_files": ["04.mp4"], "drive_type": "quark"})
+        run(empty, 1, {"new_files": [], "transfer_count": 0})
+        run(empty, 2, {"new_files": ["未确认.mp4"]}, status="failed")
+        db.commit()
+
+        overview = build_drama_overview(db)
+        rows = overview["recent_updates"]
+        assert [row["task_id"] for row in rows] == [drama.id, folder.id, legacy.id]
+        assert rows[0]["started_at"] == now - timedelta(hours=5)
+        assert rows[0]["drive_type"] == "baidu"
+        assert overview["summary"]["execution_success"] == 9
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_clear_hides_share_check_failure_stored_on_success_execution():
     engine, db = _open_session()
     now = datetime.now()

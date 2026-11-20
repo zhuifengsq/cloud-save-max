@@ -315,6 +315,7 @@ class TaskExecutor:
             run_log=log.render(),
             adapter_snapshot={
                 'new_files': new_files,
+                'transfer_count': getattr(drama_executor, 'transfer_count', len(new_files)),
                 'tree_truncated': tree_truncated,
                 'name': getattr(adapter, 'nickname', ''),
                 'drive_type': getattr(adapter, 'DRIVE_TYPE', ''),

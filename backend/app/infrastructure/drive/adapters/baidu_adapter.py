@@ -231,6 +231,12 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 timeout=30,
                 **kwargs,
             )
+            # 浏览器导入的分享 Cookie 没有域信息。有服务端签发的值时，移除导入的旧值。
+            cookies = self._session.cookies
+            if cookies.get("BDCLND", domain="", path="/") is not None and any(
+                cookie.name == "BDCLND" and cookie.domain for cookie in cookies
+            ):
+                cookies.set("BDCLND", None, domain="", path="/")
             return resp
         except Exception as e:
             logger.error(f"[Baidu] HTTP 请求失败: {type(e).__name__}")
@@ -643,19 +649,13 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         headers["Referer"] = init_url
 
         resp = self._request("POST", url, params=params, headers=headers, data=data)
-
-        # 更新 cookies
-        self._session.cookies.update(resp.cookies.get_dict())
-
+        # Session 已保存响应 Cookie，保留服务端设置的域和路径。
         return self._check_response(resp.json())
 
     def _api_shared_paths(self, shared_url: str) -> Dict:
         """获取分享文件列表（从 HTML 解析）"""
         resp = self._request("GET", shared_url, params=None)
         html = resp.text
-
-        # 更新 cookies
-        self._session.cookies.update(resp.cookies.get_dict())
 
         # 新版分享页将数据放在独立 JSON script 中；兼容旧版函数调用。
         # raw_decode 不会被 JSON 字符串里的 `);` 或换行截断。
