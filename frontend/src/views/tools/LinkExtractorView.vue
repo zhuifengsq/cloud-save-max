@@ -272,8 +272,9 @@ async function exportExcel() {
 @media (max-width: 640px) {
   .tool-panel { padding: 4px 14px 18px; }
   .affix-grid { grid-template-columns: 1fr; }
-  .source-actions { flex-wrap: nowrap; gap: 6px; }
+  .source-actions { flex-wrap: nowrap; gap: 8px; }
   .tool-panel .tool-content > .source-actions > .el-button {
+    flex: 1 1 auto;
     min-inline-size: 44px;
     min-block-size: 44px;
     height: auto;
