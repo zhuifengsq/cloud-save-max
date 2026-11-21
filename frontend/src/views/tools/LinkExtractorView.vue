@@ -212,7 +212,7 @@ async function exportExcel() {
             <el-input id="hot-suffix" v-model="hotSuffix" type="textarea" :rows="3" placeholder="可选" />
           </div>
         </div>
-        <div class="tool-actions">
+        <div class="tool-actions source-actions">
           <el-button :disabled="wpsPending === activeTab" @click="clear">清空</el-button>
           <el-button type="primary" :disabled="!current.input.trim() || wpsPending === activeTab" @click="process()">{{ tabInfo.action }}</el-button>
           <el-button v-if="activeTab !== 'dual'" type="primary" plain :loading="wpsPending === activeTab"
@@ -272,6 +272,17 @@ async function exportExcel() {
 @media (max-width: 640px) {
   .tool-panel { padding: 4px 14px 18px; }
   .affix-grid { grid-template-columns: 1fr; }
+  .source-actions { flex-wrap: nowrap; gap: 6px; }
+  .tool-panel .tool-content > .source-actions > .el-button {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+    height: auto;
+    padding-inline: 6px;
+    font-size: 13px;
+    line-height: 1.3;
+    text-align: center;
+    white-space: normal;
+  }
   .result-actions { justify-content: flex-start; }
 }
 </style>

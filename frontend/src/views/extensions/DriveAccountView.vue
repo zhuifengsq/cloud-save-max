@@ -32,6 +32,7 @@ const router = useRouter()
 const loading = ref(false)
 const submitting = ref(false)
 const refreshing = ref(false)
+const togglingAccounts = reactive(new Set<number>())
 const accounts = ref<DriveAccountItem[]>([])
 const driveTypes = ref<DriveTypeItem[]>([])
 const drawerVisible = ref(false)
@@ -259,6 +260,8 @@ async function submitForm(payload: {
 }
 
 async function handleToggle(row: DriveAccountItem, enabled: boolean) {
+  if (togglingAccounts.has(row.id)) return
+  togglingAccounts.add(row.id)
   try {
     await setDriveAccountStatus(row.id, enabled)
     ElMessage.success('状态已更新')
@@ -271,7 +274,7 @@ async function handleToggle(row: DriveAccountItem, enabled: boolean) {
     }
     throw e
   } finally {
-    await loadData()
+    await loadData().finally(() => togglingAccounts.delete(row.id))
   }
 }
 
@@ -432,11 +435,17 @@ onMounted(loadProbeScheduler)
 
     <section v-if="filteredAccounts.length" class="card-grid account-list">
       <CapacityAccountCard v-for="item in filteredAccounts" :key="item.id" :account="item">
+        <template #controls>
+          <el-switch
+            v-if="canWrite"
+            :aria-label="`启用 ${item.name}`"
+            :model-value="item.enabled"
+            :loading="togglingAccounts.has(item.id)"
+            @change="handleToggle(item, Boolean($event))"
+          />
+        </template>
         <template #actions>
-          <el-button v-if="canWrite" text bg @click="openEditDrawer(item)">编辑</el-button>
-          <el-button v-if="canWrite" text bg @click="handleToggle(item, !item.enabled)">
-            {{ item.enabled ? '禁用' : '启用' }}
-          </el-button>
+          <el-button v-if="canWrite" type="primary" text bg @click="openEditDrawer(item)">编辑</el-button>
           <el-button v-if="canWrite && !item.is_default" text bg @click="handleSetDefault(item)">设为默认</el-button>
           <el-button text bg @click="handleProbe(item)">探测</el-button>
           <el-button text bg @click="handleSignIn(item)">签到</el-button>
@@ -573,7 +582,7 @@ onMounted(loadProbeScheduler)
 .account-scheduler .toolbar { padding: 18px 22px; }
 .account-scheduler .toolbar__left { gap: 12px; }
 .account-scheduler :deep(.el-input__wrapper) { min-height: 40px; }
-.account-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; }
+.account-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 16px; }
 @media (max-width: 767px) {
   .drive-accounts-page > .section-header { min-height: 0; }
   .drive-accounts-page .section-header__title h2 { font-size: 19px; }

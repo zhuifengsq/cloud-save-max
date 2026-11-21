@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { useIsMobile } from '@/composables/useIsMobile'
 import type { ConfigFieldItem, DriveAccountItem, DriveTypeItem } from '@/types/extensions'
 import { buildAccountConfigUpdate } from '@/utils/driveAccountConfig'
 
@@ -48,7 +47,6 @@ function cloneConfig<T>(value: T): T {
 const isEditing = computed(() => Boolean(props.account?.id))
 const currentDriveType = computed(() => props.driveTypes.find((item) => item.code === state.drive_type) || null)
 const currentDriveFields = computed<ConfigFieldItem[]>(() => currentDriveType.value?.config_fields || [])
-const isMobile = useIsMobile()
 
 function syncState() {
   state.clearCredentials = []
@@ -88,7 +86,7 @@ watch(
   },
 )
 
-function closeDrawer() {
+function closeForm() {
   emit('update:modelValue', false)
 }
 
@@ -106,11 +104,15 @@ function submit() {
 </script>
 
 <template>
-  <el-drawer
+  <el-dialog
     :model-value="modelValue"
     :title="isEditing ? '编辑账号' : '新增账号'"
-    :size="isMobile ? '100%' : '520px'"
-    @close="closeDrawer"
+    class="drive-account-dialog"
+    width="min(520px, calc(100% - 24px))"
+    align-center
+    append-to-body
+    destroy-on-close
+    @close="closeForm"
   >
     <el-form label-position="top" class="drawer-form">
       <div class="drawer-form__section">
@@ -181,14 +183,28 @@ function submit() {
 
     <template #footer>
       <div class="drawer-form__footer">
-        <el-button @click="closeDrawer">取消</el-button>
+        <el-button @click="closeForm">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="submit">保存</el-button>
       </div>
     </template>
-  </el-drawer>
+  </el-dialog>
 </template>
 
 <style scoped>
+:global(.drive-account-dialog.el-dialog) {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+}
+
+:global(.drive-account-dialog .el-dialog__body) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
 .drawer-form {
   display: flex;
   flex-direction: column;

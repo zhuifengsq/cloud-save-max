@@ -3,7 +3,6 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { clearPythonSearchPluginCache, savePythonSearchPluginConfig } from '@/api/resourceSearch'
 import type { PythonSearchPlugin } from '@/types/resourceSearch'
-import { formatDateTime } from '@/utils/capacity'
 
 const props = defineProps<{ plugin: PythonSearchPlugin; canWrite: boolean }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -48,16 +47,8 @@ async function clear() {
 
 <template>
   <div class="wps-settings">
-    <div class="wps-settings__buttons">
-      <el-button :disabled="!canWrite" @click="open">配置</el-button>
-      <el-button :disabled="!canWrite || saving" :loading="clearing" @click="clear">清除缓存</el-button>
-    </div>
-    <span class="wps-settings__status">
-      <template v-if="plugin.cache?.cached">
-        {{ plugin.cache.expired ? '缓存已过期' : '已缓存' }} · {{ plugin.cache.count }} 条链接 · {{ formatDateTime(plugin.cache.updated_at) }}
-      </template>
-      <template v-else>暂无缓存，首次搜索时读取文档</template>
-    </span>
+    <el-button type="primary" text bg :disabled="!canWrite" @click="open">配置</el-button>
+    <el-button text bg :disabled="!canWrite || saving" :loading="clearing" @click="clear">清除缓存</el-button>
     <el-dialog v-model="visible" :title="`${plugin.name}配置`" width="min(580px, 94vw)" append-to-body :close-on-click-modal="!saving">
       <el-form label-position="top" @submit.prevent="save">
         <el-form-item label="WPS 文档链接">
@@ -83,9 +74,7 @@ async function clear() {
 </template>
 
 <style scoped>
-.wps-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; min-width: 0; }
-.wps-settings__buttons { display: flex; gap: 10px; }
-.wps-settings__buttons .el-button + .el-button { margin-left: 0; }
-.wps-settings__status, .wps-settings__help { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
-.wps-settings__help { width: 100%; margin: 6px 0 0; }
+.wps-settings { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; min-width: 0; }
+.wps-settings > .el-button { margin: 0; }
+.wps-settings__help { width: 100%; margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
 </style>

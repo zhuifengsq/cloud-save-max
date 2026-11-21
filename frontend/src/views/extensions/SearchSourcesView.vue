@@ -16,6 +16,7 @@ import {
 import { PLUGIN_READ, PLUGIN_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import type { ApiSearchSource, ApiSearchSourceInput, PythonSearchPlugin, TaskSuggestionItem } from '@/types/resourceSearch'
+import { formatDateTime } from '@/utils/capacity'
 
 const auth = useAuthStore()
 const canRead = computed(() => auth.permissions.includes(PLUGIN_READ) && auth.roles.includes('admin'))
@@ -27,6 +28,10 @@ const plugins = ref<PythonSearchPlugin[]>([])
 const loading = ref(false)
 const busyKey = ref('')
 const uploadInput = ref<HTMLInputElement | null>(null)
+
+function hasWpsSettings(item: PythonSearchPlugin) {
+  return item.configurable && (item.key === 'wps' || item.key === 'wps_movie')
+}
 
 const editor = reactive({
   visible: false,
@@ -267,24 +272,38 @@ onMounted(() => { if (canRead.value) refresh() })
           <el-button type="primary" :disabled="!canWrite" @click="openApiEditor()">新增 API 源</el-button>
         </div>
         <el-empty v-if="!loading && !apiSources.length" description="还没有 API 搜索源" />
-        <div v-else class="source-list">
-          <el-card v-for="item in apiSources" :key="String(item.id)" shadow="never" class="source-card">
-            <div class="source-card__main">
-              <div class="source-card__identity">
-                <div class="source-card__icon">API</div>
-                <div>
-                  <div class="source-card__title">{{ item.name }} <el-tag size="small" effect="plain">{{ item.method }}</el-tag><el-tag size="small" :type="item.enabled ? 'success' : 'info'" effect="light">{{ item.enabled ? '已启用' : '已停用' }}</el-tag></div>
-                  <div class="source-card__url">{{ item.url }}</div>
-                </div>
-              </div>
-              <el-switch :model-value="item.enabled" :disabled="!canWrite || busyKey === `api:${item.id}`" @change="(value: string | number | boolean) => toggleApi(item, Boolean(value))" />
+        <div v-else class="source-grid">
+          <article v-for="item in apiSources" :key="item.id" class="glass-panel source-card">
+            <header class="source-card__header">
+              <hgroup class="source-card__heading">
+                <h3>{{ item.name }}</h3>
+                <p>{{ item.method }}</p>
+              </hgroup>
+              <el-switch
+                :aria-label="`启用 ${item.name}`"
+                :model-value="item.enabled"
+                :disabled="!canWrite || busyKey === `api:${item.id}`"
+                @change="toggleApi(item, Boolean($event))"
+              />
+            </header>
+
+            <div>
+              <el-tag :type="item.enabled ? 'success' : 'info'" effect="plain" round size="small">
+                {{ item.enabled ? '已启用' : '已停用' }}
+              </el-tag>
             </div>
-            <div class="source-card__actions">
-              <el-button @click="openTest('api', item.id, item.name)">测试搜索</el-button>
-              <el-button :disabled="!canWrite" @click="openApiEditor(item)">编辑</el-button>
-              <el-button type="danger" plain :disabled="!canWrite" @click="removeApi(item)">删除</el-button>
+
+            <div class="source-card__body">
+              <div class="source-card__label">接口 URL</div>
+              <p class="source-card__summary">{{ item.url }}</p>
             </div>
-          </el-card>
+
+            <footer class="source-card__actions">
+              <el-button type="primary" text bg @click="openTest('api', item.id, item.name)">测试搜索</el-button>
+              <el-button type="primary" text bg :disabled="!canWrite" @click="openApiEditor(item)">编辑</el-button>
+              <el-button type="danger" text bg :disabled="!canWrite" @click="removeApi(item)">删除</el-button>
+            </footer>
+          </article>
         </div>
       </el-tab-pane>
 
@@ -310,29 +329,60 @@ class MySearchPlugin(BaseSearchPlugin):
           <p>文件名中的 key 必须与类的 key 一致。上传后在列表中启用，再用“测试搜索”检查结果。</p>
         </details>
         <el-empty v-if="!loading && !plugins.length" description="还没有 Python 搜索插件" />
-        <div v-else class="source-list">
-          <el-card v-for="item in plugins" :key="item.key" shadow="never" class="source-card">
-            <div class="source-card__main">
-              <div class="source-card__identity">
-                <div class="source-card__icon source-card__icon--python">PY</div>
-                <div>
-                  <div class="source-card__title">{{ item.name || item.key }} <el-tag size="small" effect="plain">{{ item.key }}</el-tag><el-tag size="small" :type="item.status !== 'ready' ? 'danger' : item.enabled ? 'success' : 'info'" effect="light">{{ item.status !== 'ready' ? '异常' : item.enabled ? '已启用' : '已停用' }}</el-tag></div>
-                  <div class="source-card__url">{{ item.description || '未填写插件说明' }}</div>
-                  <div v-if="item.error" class="source-card__error">{{ item.error }}</div>
-                </div>
-              </div>
-              <el-switch :model-value="item.enabled" :disabled="!canWrite || item.status !== 'ready' || busyKey === `plugin:${item.key}`" @change="(value: string | number | boolean) => togglePlugin(item, Boolean(value))" />
+        <div v-else class="source-grid">
+          <article v-for="item in plugins" :key="item.key" class="glass-panel source-card">
+            <header class="source-card__header">
+              <hgroup class="source-card__heading">
+                <h3>{{ item.name || item.key }}</h3>
+                <p>{{ item.key }}</p>
+              </hgroup>
+              <el-switch
+                :aria-label="`启用 ${item.name || item.key}`"
+                :model-value="item.enabled"
+                :disabled="!canWrite || item.status !== 'ready' || busyKey === `plugin:${item.key}`"
+                @change="togglePlugin(item, Boolean($event))"
+              />
+            </header>
+
+            <div>
+              <el-tag
+                :type="item.status !== 'ready' ? 'danger' : item.enabled ? 'success' : 'info'"
+                effect="plain" round size="small"
+              >
+                {{ item.status !== 'ready' ? '异常' : item.enabled ? '已启用' : '已停用' }}
+              </el-tag>
             </div>
-            <div class="source-card__actions">
-              <el-button @click="openTest('plugin', item.key, item.name || item.key)">测试搜索</el-button>
-              <WpsPluginSettings v-if="item.configurable && (item.key === 'wps' || item.key === 'wps_movie')" :plugin="item" :can-write="canWrite" @changed="refresh" />
+
+            <div class="source-card__body">
+              <div class="source-card__label">插件说明</div>
+              <p class="source-card__summary">{{ item.description || '未填写插件说明' }}</p>
+              <p v-if="item.error" class="source-card__error">{{ item.error }}</p>
+              <p v-if="hasWpsSettings(item)" class="source-card__cache">
+                <template v-if="item.cache?.cached">
+                  {{ item.cache.expired ? '缓存已过期' : '已缓存' }} · {{ item.cache.count }} 条链接 · {{ formatDateTime(item.cache.updated_at) }}
+                </template>
+                <template v-else>暂无缓存，首次搜索时读取文档</template>
+              </p>
             </div>
-          </el-card>
+
+            <footer class="source-card__actions">
+              <el-button type="primary" text bg @click="openTest('plugin', item.key, item.name || item.key)">测试搜索</el-button>
+              <WpsPluginSettings v-if="hasWpsSettings(item)" :plugin="item" :can-write="canWrite" @changed="refresh" />
+            </footer>
+          </article>
         </div>
       </el-tab-pane>
     </el-tabs>
 
-    <el-dialog v-model="editor.visible" :title="editor.editingId === null ? '新增 API 搜索源' : '修改 API 搜索源'" width="min(920px, 96vw)" class="api-editor-dialog" append-to-body>
+    <el-dialog
+      v-model="editor.visible"
+      :title="editor.editingId === null ? '新增 API 搜索源' : '修改 API 搜索源'"
+      width="min(920px, 96vw)"
+      class="api-editor-dialog"
+      align-center
+      append-to-body
+      destroy-on-close
+    >
       <el-form label-position="top" class="editor-form">
         <div class="editor-card">
           <div class="editor-top-grid">
@@ -404,7 +454,7 @@ class MySearchPlugin(BaseSearchPlugin):
 
 <style scoped>
 .search-sources-page { width: 100%; max-width: 1380px; margin: 0 auto; display: grid; gap: 20px; }
-.page-heading, .tab-heading, .source-card__main, .source-card__actions, .test-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.page-heading, .tab-heading, .test-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .page-heading { padding: 0; }
 .page-heading__eyebrow { display: none; margin-bottom: 6px; color: var(--el-color-primary); font-size: 11px; font-weight: 750; letter-spacing: .18em; }
 .page-heading h1 { margin: 0 0 6px; font-size: 22px; font-weight: 700; line-height: 1.3; letter-spacing: -.02em; }
@@ -418,26 +468,62 @@ class MySearchPlugin(BaseSearchPlugin):
 .tab-heading { margin: 0 0 20px; padding: 2px 0 20px; border-bottom: 1px solid var(--panel-border); }
 .tab-heading p { max-width: 75ch; font-size: 13px; }
 .tab-heading code { padding: 2px 5px; border-radius: 5px; background: var(--el-fill-color-light); color: var(--el-color-primary); }
-.source-list { display: grid; gap: 12px; }
-.source-card { border-color: var(--panel-border) !important; border-radius: 13px !important; box-shadow: none !important; transition: border-color .18s, box-shadow .18s; }
-.source-card:hover { border-color: var(--el-color-primary-light-7) !important; box-shadow: var(--panel-shadow) !important; }
-.source-card :deep(.el-card__body) { padding: 18px 20px 14px; }
-.source-card__main { align-items: center; }
-.source-card__identity { display: flex; align-items: center; min-width: 0; gap: 14px; }
-.source-card__identity > div:last-child { min-width: 0; }
-.source-card__icon { flex: 0 0 42px; width: 42px; height: 42px; display: grid; place-items: center; border-radius: 11px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-size: 12px; font-weight: 800; letter-spacing: .04em; }
-.source-card__icon--python { background: var(--el-color-success-light-9); color: var(--el-color-success); }
-.source-card__title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--el-text-color-primary); font-size: 16px; font-weight: 700; }
-.source-card__url, .source-card__error { margin-top: 6px; color: var(--el-text-color-secondary); font-size: 12.5px; overflow-wrap: anywhere; }
-.source-card__error { color: var(--el-color-danger); }
-.source-card__actions { justify-content: flex-start; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--panel-border); }
-.source-card__actions :deep(.el-button) { margin: 0; }
 .file-input { display: none; }
 .plugin-help { margin: 0 0 18px; color: var(--el-text-color-secondary); }
 .plugin-help summary { cursor: pointer; color: var(--el-color-primary); }
 .plugin-help pre { margin: 10px 0; padding: 12px; overflow-x: auto; border-radius: 8px; background: var(--el-fill-color-light); color: var(--el-text-color-primary); }
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 16px;
+}
+.source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  min-height: 260px;
+  padding: 22px;
+}
+.source-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.source-card__header .el-switch { flex-shrink: 0; }
+.source-card__heading { min-width: 0; overflow-wrap: anywhere; }
+.source-card__heading h3 { margin: 0; font-size: 18px; line-height: 1.35; }
+.source-card__heading p { margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 13px; }
+.source-card__body { display: flex; flex: 1; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
+.source-card__label { color: var(--el-text-color-secondary); font-size: 12px; font-weight: 600; }
+.source-card__summary,
+.source-card__error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--panel-radius);
+  background: var(--el-fill-color-blank);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.source-card__error {
+  border-color: var(--el-color-danger-light-7);
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+}
+.source-card__cache { margin: 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
+.source-card__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.source-card__actions > .el-button { margin: 0; }
 .mapping-help { margin: 0 0 14px; color: var(--el-text-color-secondary); line-height: 1.6; }
-.editor-form { max-height: min(72vh, 760px); overflow-y: auto; padding: 4px 8px 4px 0; display: grid; gap: 18px; }
+:global(.api-editor-dialog.el-dialog) {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+}
+:global(.api-editor-dialog .el-dialog__body) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+.editor-form { padding: 4px 8px 4px 0; display: grid; gap: 18px; }
 .editor-card { padding: 20px; border: 1px solid var(--el-border-color-lighter); border-radius: var(--panel-radius); background: var(--el-fill-color-extra-light); }
 .editor-card :deep(.el-form-item) { margin-bottom: 14px; }
 .editor-card :deep(.el-form-item__label) { font-weight: 700; }
@@ -461,15 +547,13 @@ class MySearchPlugin(BaseSearchPlugin):
 .test-result__source { padding: 1px 8px; border-radius: 999px; background: var(--el-fill-color-light); color: var(--el-text-color-secondary); font-size: 11px; line-height: 18px; }
 .test-result__link { margin-top: 6px; overflow-wrap: anywhere; color: var(--el-color-primary); }
 @media (max-width: 700px) {
-  .page-heading, .tab-heading, .source-card__main { align-items: flex-start; }
+  .page-heading, .tab-heading { align-items: flex-start; }
   .page-heading, .tab-heading { flex-direction: column; }
   .page-heading h1 { font-size: 19px; }
   .source-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
   .source-overview__item { display: block; padding: 12px; font-size: 11px; }
   .source-overview__item strong { display: block; margin-top: 7px; font-size: 21px; }
-  .source-card__identity { align-items: flex-start; gap: 10px; }
-  .source-card__icon { flex-basis: 36px; width: 36px; height: 36px; }
-  .source-card :deep(.el-card__body) { padding: 15px; }
+  .source-card { min-height: auto; padding: 18px; }
   .mapping-grid { grid-template-columns: 1fr; }
   .editor-top-grid { grid-template-columns: 1fr; gap: 0; }
   .editor-card { padding: 14px; }

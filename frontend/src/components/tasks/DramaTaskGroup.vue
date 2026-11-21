@@ -228,7 +228,16 @@ const executionLabels: Record<string, string> = {
               <li v-for="execution in task.executions.slice(0, 3)" :key="execution.id">
                 <span class="drama-group-task__execution">
                   <strong>{{ executionLabels[execution.status] || execution.status }}</strong>
-                  <span class="drama-group-task__muted">{{ execution.started_at }}</span>
+                  <el-button
+                    v-if="execution.started_at"
+                    link
+                    type="primary"
+                    :aria-label="`${execution.started_at}，查看日志与目录树`"
+                    aria-haspopup="dialog"
+                    @click="emit('execution', task.id, execution.id)"
+                  >
+                    {{ execution.started_at }}
+                  </el-button>
                   <span>{{ execution.message }}</span>
                 </span>
                 <el-button link type="primary" @click="emit('execution', task.id, execution.id)">查看日志与目录树</el-button>
