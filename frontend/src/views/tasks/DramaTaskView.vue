@@ -17,6 +17,7 @@ import {
   fetchTaskExecutionDetail,
   stopCompletedDramaTasks,
   setTaskStatus,
+  updateDramaPin,
   updateTask,
   updateTaskSchedulerSetting,
 } from '@/api/tasks'
@@ -45,6 +46,8 @@ const canRun = computed(() => auth.permissions.includes(TASK_RUN))
 const loading = ref(false)
 const submitting = ref(false)
 const tasks = ref<TaskItem[]>([])
+const pinnedTaskIds = ref<ReadonlySet<number>>(new Set())
+const pinSaving = ref<string | null>(null)
 const accounts = ref<DriveAccountItem[]>([])
 const scheduler = ref<TaskSchedulerSetting | null>(null)
 const schedulerSaving = ref(false)
@@ -331,6 +334,7 @@ const taskGroups = computed(() => {
         title: tmdbDisplayTitle(task) || task.taskname,
         tmdbId,
         mediaType,
+        pinned: pinnedTaskIds.value.has(task.id),
         items: [],
         drives: [],
         failed: 0,
@@ -416,6 +420,7 @@ const TASK_FETCH_MAX = 2000
 async function loadAllFilteredTasks() {
   const base = {...readFilters(), name_order: taskSort.order}
   const first = await loadTaskPage({...base, page: 1, page_size: TASK_FETCH_PAGE_SIZE})
+  const pinnedIds = new Set(first.pinned_task_ids)
   const target = Math.min(first.total, TASK_FETCH_MAX)
   let items = first.items.slice(0, target)
   let nextPage = 1
@@ -423,16 +428,18 @@ async function loadAllFilteredTasks() {
     nextPage += 1
     const next = await loadTaskPage({...base, page: nextPage, page_size: TASK_FETCH_PAGE_SIZE})
     if (!next.items.length) break
+    for (const id of next.pinned_task_ids ?? []) pinnedIds.add(id)
     items = items.concat(next.items.slice(0, target - items.length))
   }
-  return {first, items}
+  return {first, items, pinnedIds}
 }
 async function loadPage() {
   const version = ++readVersion
   loading.value = true; pageError.value = ''
   try {
-    const {first, items} = await loadAllFilteredTasks()
+    const {first, items, pinnedIds} = await loadAllFilteredTasks()
     if (version !== readVersion) return
+    pinnedTaskIds.value = pinnedIds
     tasks.value = items; taskTotal.value = first.total; facets.value = first.facets
     const last = Math.max(1, Math.ceil(taskGroups.value.length / pageSize.value))
     if (page.value > last) page.value = last
@@ -450,6 +457,23 @@ watch(pageSize, () => {
   if (page.value > last) page.value = last
 })
 const stopTaskChanges = subscribeTasksChanged(() => { void loadPage() })
+
+async function toggleDramaPin(group: DramaTaskGroupData) {
+  if (!canWrite.value || pinSaving.value || loading.value) return
+  const task = group.items[0]?.task
+  if (!task) return
+  const pinned = !group.pinned
+  pinSaving.value = group.key
+  try {
+    await updateDramaPin(task.id, pinned)
+    if (pinned) page.value = 1
+    ElMessage.success(pinned ? '已置顶' : '已取消置顶')
+  } catch {
+    ElMessage.error(pinned ? '置顶失败，请重试' : '取消置顶失败，请重试')
+  } finally {
+    pinSaving.value = null
+  }
+}
 
 const showSkeleton = computed(() => loading.value && !pageLoaded.value)
 
@@ -1416,9 +1440,11 @@ watch(() => route.name, (name, previousName) => {
           :focused-task-id="focusedTaskId"
           :can-run="canRun"
           :can-write="canWrite"
+          :pin-busy="pinSaving !== null || loading"
           @update:open="setExpanded(openGroups, group.key, $event)"
           @update:execution-open="(id, open) => setExpanded(openExecutions, id, open)"
           @run="handleRun"
+          @pin="toggleDramaPin(group)"
           @edit="openEditDrawer"
           @command="handleRowCommand"
           @copy="copyStoredShareLink"

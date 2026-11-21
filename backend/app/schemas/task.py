@@ -48,6 +48,10 @@ class TaskStatusIn(BaseModel):
     enabled: bool
 
 
+class DramaPinIn(BaseModel):
+    pinned: bool
+
+
 class TaskShareLinkOut(BaseModel):
     share_url: str
     share_id: str = ""

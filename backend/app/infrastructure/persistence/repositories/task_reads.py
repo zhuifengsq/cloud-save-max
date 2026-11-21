@@ -85,6 +85,7 @@ def candidates(
     stmt = (
         select(
             Task.id,
+            Task.task_uid,
             Task.taskname,
             Task.tmdb_id,
             Task.tmdb_media_type,

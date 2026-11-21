@@ -17,6 +17,7 @@ export type DramaTaskGroupData = {
   title: string
   tmdbId: number | null
   mediaType: string | null
+  pinned: boolean
   items: DramaTaskGroupItem[]
   drives: DriveType[]
   failed: number
@@ -28,6 +29,7 @@ export type DramaTaskGroupData = {
 
 <script setup lang="ts">
 import { ArrowRight } from '@element-plus/icons-vue'
+import { useId } from 'vue'
 
 import DriveTypeIcon from './DriveTypeIcon.vue'
 import GeneratedShareStatus from './GeneratedShareStatus.vue'
@@ -39,18 +41,22 @@ defineProps<{
   focusedTaskId?: number | null
   canRun: boolean
   canWrite: boolean
+  pinBusy: boolean
 }>()
 
 const emit = defineEmits<{
   'update:open': [open: boolean]
   'update:execution-open': [taskId: number, open: boolean]
   run: [task: TaskSummary]
+  pin: []
   edit: [task: TaskSummary]
   command: [command: string, task: TaskSummary]
   copy: [task: TaskSummary]
   history: [taskId: number]
   execution: [taskId: number, executionId: number]
 }>()
+
+const panelId = useId()
 
 function isOpen(event: Event) {
   return (event.currentTarget as HTMLDetailsElement).open
@@ -71,21 +77,43 @@ const executionLabels: Record<string, string> = {
 </script>
 
 <template>
-  <details
+  <div
     class="drama-group"
-    :class="{ 'drama-group--failed': group.failed > 0 }"
-    :open="open"
-    @toggle="emit('update:open', isOpen($event))"
+    :class="{ 'drama-group--failed': group.failed > 0, 'drama-group--open': open }"
   >
-    <summary class="drama-group__summary">
+    <div class="drama-group__summary" @click="emit('update:open', !open)">
       <span class="drama-group__chevron" aria-hidden="true"><ArrowRight /></span>
-      <span class="drama-group__heading">
-        <strong>{{ group.title }}</strong>
+      <div class="drama-group__heading">
+        <div class="drama-group__title">
+          <h3>
+            <button
+              class="drama-group__toggle"
+              type="button"
+              :aria-expanded="open"
+              :aria-controls="panelId"
+            >
+              <strong>{{ group.title }}</strong>
+            </button>
+          </h3>
+          <button
+            v-if="canWrite"
+            class="drama-group__pin"
+            type="button"
+            :aria-label="`置顶 ${group.title}`"
+            :aria-pressed="group.pinned"
+            :aria-disabled="pinBusy"
+            :title="group.pinned ? '取消置顶' : '置顶'"
+            @click.stop="emit('pin')"
+          >
+            <span aria-hidden="true">📌</span>
+          </button>
+          <span v-else-if="group.pinned" class="drama-group__pin-marker" role="img" aria-label="已置顶">📌</span>
+        </div>
         <span class="drama-group__meta">
           <span>{{ group.items.length }} 个任务</span>
           <span>{{ group.tmdbId ? `TMDB ${mediaLabel(group.mediaType)} #${group.tmdbId}` : '未关联 TMDB' }}</span>
         </span>
-      </span>
+      </div>
       <span class="drama-group__status">
         <span v-if="group.drives.length" class="drama-group__drives">
           <DriveTypeIcon v-for="drive in group.drives" :key="drive" :type="drive" :size="20" />
@@ -99,11 +127,11 @@ const executionLabels: Record<string, string> = {
         </el-tag>
         <el-tag v-if="group.failed" type="danger" size="small" effect="light">{{ group.failed }} 个失败</el-tag>
       </span>
-    </summary>
+    </div>
 
-    <div v-if="open" class="drama-group__body">
+    <div v-show="open" :id="panelId" class="drama-group__body">
       <article
-        v-for="{ task, drive, account, share, leadIn, leadInTime, linkFailure } in group.items"
+        v-for="{ task, drive, account, share, leadIn, leadInTime, linkFailure } in open ? group.items : []"
         :key="task.id"
         :id="`drama-task-${task.id}`"
         class="drama-group-task"
@@ -211,7 +239,7 @@ const executionLabels: Record<string, string> = {
         </details>
       </article>
     </div>
-  </details>
+  </div>
 </template>
 
 <style scoped>
@@ -223,22 +251,19 @@ const executionLabels: Record<string, string> = {
   container-type: inline-size;
 }
 
-.drama-group[open] {
+.drama-group--open {
   border-color: var(--el-color-primary-light-7);
 }
 
-.drama-group--failed,
-.drama-group--failed[open] {
+.drama-group--failed {
   border-inline-start: 3px solid var(--el-color-danger);
 }
 
-.drama-group__summary,
 .drama-group-task__history > summary {
   list-style: none;
   cursor: pointer;
 }
 
-.drama-group__summary::-webkit-details-marker,
 .drama-group-task__history > summary::-webkit-details-marker {
   display: none;
 }
@@ -250,14 +275,74 @@ const executionLabels: Record<string, string> = {
   gap: 10px 14px;
   padding: 13px 16px;
   border-radius: inherit;
+  cursor: pointer;
+}
+
+.drama-group__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drama-group__title h3 {
+  min-width: 0;
+  margin: 0;
+}
+
+.drama-group__toggle {
+  display: block;
+  max-inline-size: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.drama-group__pin,
+.drama-group__pin-marker {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: 26px;
+  block-size: 26px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.drama-group__pin {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.drama-group__pin[aria-pressed='false'] span {
+  opacity: 0.65;
+  filter: grayscale(1);
+}
+
+.drama-group__pin:hover,
+.drama-group__pin:focus-visible,
+.drama-group__pin[aria-pressed='true'],
+.drama-group__pin-marker {
+  background: var(--el-color-primary-light-8);
+}
+
+.drama-group__pin[aria-disabled='true'] {
+  opacity: 0.65;
+  cursor: wait;
 }
 
 .drama-group__summary:hover,
-.drama-group[open] > .drama-group__summary {
+.drama-group--open > .drama-group__summary {
   background: var(--el-color-primary-light-9);
 }
 
-.drama-group[open] > .drama-group__summary {
+.drama-group--open > .drama-group__summary {
   border-end-start-radius: 0;
   border-end-end-radius: 0;
 }
@@ -267,8 +352,15 @@ summary:focus-visible {
   outline-offset: -3px;
 }
 
+.drama-group__toggle:focus-visible,
+.drama-group__pin:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+
 .drama-group__chevron {
   display: grid;
+  align-self: start;
   width: 28px;
   height: 28px;
   place-items: center;
@@ -284,7 +376,7 @@ summary:focus-visible {
   flex: none;
 }
 
-.drama-group[open] > summary .drama-group__chevron svg,
+.drama-group--open > .drama-group__summary .drama-group__chevron svg,
 .drama-group-task__history[open] > summary .drama-group-task__history-arrow {
   transform: rotate(90deg);
   color: var(--el-color-primary);
@@ -294,6 +386,17 @@ summary:focus-visible {
   .drama-group__chevron svg,
   .drama-group-task__history-arrow {
     transition: transform 160ms ease;
+  }
+}
+
+@media (pointer: coarse) {
+  .drama-group__chevron {
+    margin-block-start: 4px;
+  }
+
+  .drama-group__pin {
+    inline-size: 36px;
+    block-size: 36px;
   }
 }
 

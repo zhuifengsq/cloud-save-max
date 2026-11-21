@@ -24,6 +24,7 @@ from app.application.container import task_admission_service as _acc_task_admiss
 from app.schemas.task_magic_regex import MagicRegexOut, MagicRegexRuleOut
 from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn
 from app.schemas.task import (
+    DramaPinIn,
     StopCompletedDramaTasksOut,
     TaskCreateIn,
     TaskExecutionOut,
@@ -34,6 +35,7 @@ from app.schemas.task import (
 )
 from app.schemas.resource_search import TaskSuggestionListOut
 from app.application import audit
+from app.application.drama_pins import set_drama_pin
 from app.application.task_scheduler import get_or_create_task_scheduler_setting, load_task_scheduler_setting, update_task_scheduler_setting
 from app.application.resource_search import fetch_task_suggestions
 from app.application.tasks import create_task, delete_task, get_task, set_task_enabled, update_task
@@ -152,6 +154,18 @@ def patch_task_status(request: Request, task_id: int, payload: TaskStatusIn, cur
         audit.write_audit_log(db, actor_user_id=current.user.id, action='task.status', target_type='task', target_id=str(task_id), ip=request.client.host if request.client else None, user_agent=request.headers.get('user-agent'), success=True, detail=f'enabled={payload.enabled}')
     db.refresh(task)
     return task_out(task_detail_view(db, task))
+
+
+@router.patch('/{task_id:int}/drama-pin', response_model=DramaPinIn, dependencies=[Depends(require_permissions(TASK_WRITE))])
+def patch_drama_pin(task_id: int, payload: DramaPinIn, request: Request, current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    with transaction(db):
+        set_drama_pin(db, task_id, payload.pinned)
+        audit.write_audit_log(
+            db, actor_user_id=current.user.id, action='task.drama.pin', target_type='task',
+            target_id=str(task_id), ip=request.client.host if request.client else None,
+            user_agent=request.headers.get('user-agent'), success=True, detail=f'pinned={payload.pinned}',
+        )
+    return payload
 
 
 @router.delete('/{task_id:int}', dependencies=[Depends(require_permissions(TASK_WRITE))])

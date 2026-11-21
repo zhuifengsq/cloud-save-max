@@ -191,12 +191,14 @@
       "total": "<class 'int'>",
       "page": "<class 'int'>",
       "page_size": "<class 'int'>",
+      "pinned_task_ids": "list[int]",
       "facets": "<class 'app.schemas.task_reads.TaskFacetsOut'>"
     },
     "TaskOrderIndexItemOut": {
       "id": "<class 'int'>",
       "taskname": "<class 'str'>",
-      "drive_type": "<class 'str'>"
+      "drive_type": "<class 'str'>",
+      "pin_rank": "int | None"
     },
     "TaskExecutionPageOut": {
       "items": "list[app.schemas.task_reads.TaskExecutionSummaryOut]",
@@ -549,6 +551,7 @@
       "items",
       "page",
       "page_size",
+      "pinned_task_ids",
       "total"
     ],
     "TaskReadFilters": [
@@ -573,6 +576,7 @@
     "TaskOrderIndexItem": [
       "drive_type",
       "id",
+      "pin_rank",
       "taskname"
     ],
     "TaskExecutionPage": [

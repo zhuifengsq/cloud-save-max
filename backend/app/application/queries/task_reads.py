@@ -3,7 +3,8 @@
 import json
 from dataclasses import asdict
 from types import SimpleNamespace
-from app.application.container import task_reads_repo, execution_reads_repo
+from app.application.container import execution_reads_repo, system_settings_repo, task_reads_repo
+from app.application.drama_pins import drama_group_key
 from app.application.media_category import categorize, CATEGORY_ORDER
 from app.application.queries.task_views import task_view
 from app.application.tmdb_view import (
@@ -77,8 +78,20 @@ def summaries(db, ids, *, full=False, include_latest_success=False):
     return [result[task_id] for task_id in ids if task_id in result]
 
 
+def _drama_pin_ranks(db, rows, task_type):
+    if task_type != "drama" or not rows:
+        return {}
+    groups = {group: rank for rank, group in enumerate(system_settings_repo().list_drama_pins(db), start=1)}
+    return {
+        row["id"]: groups[group]
+        for row in rows
+        if (group := drama_group_key(row["task_uid"], row["tmdb_id"], row["tmdb_media_type"])) in groups
+    }
+
+
 def page_tasks(db, *, page=1, page_size=20, ids=None, **filters):
     rows = matching_tasks(db, **filters)
+    pin_ranks = _drama_pin_ranks(db, rows, filters.get("task_type"))
     # Navigation choices describe the whole task type, so selecting a choice
     # (or finding no matches) cannot remove the other filter buttons.
     has_filter = (
@@ -103,6 +116,8 @@ def page_tasks(db, *, page=1, page_size=20, ids=None, **filters):
             )
         selected = ids
     else:
+        if pin_ranks:
+            rows.sort(key=lambda row: pin_ranks.get(row["id"], float("inf")))
         selected = [
             row["id"] for row in rows[(page - 1) * page_size : page * page_size]
         ]
@@ -112,6 +127,7 @@ def page_tasks(db, *, page=1, page_size=20, ids=None, **filters):
         "total": len(rows),
         "page": page,
         "page_size": page_size,
+        "pinned_task_ids": [task_id for task_id in selected if task_id in pin_ranks],
         "facets": {
             "categories": [value for value in CATEGORY_ORDER if value in categories],
             "drives": sorted({row["drive_type"] for row in option_rows if row["drive_type"]}),
@@ -121,10 +137,15 @@ def page_tasks(db, *, page=1, page_size=20, ids=None, **filters):
 
 
 def order_index(db, **filters):
+    rows = matching_tasks(db, **filters)
+    pin_ranks = _drama_pin_ranks(db, rows, filters.get("task_type"))
     return {
         "items": [
-            {key: row[key] for key in ("id", "taskname", "drive_type")}
-            for row in matching_tasks(db, **filters)
+            {
+                "id": row["id"], "taskname": row["taskname"], "drive_type": row["drive_type"],
+                "pin_rank": pin_ranks.get(row["id"]),
+            }
+            for row in rows
         ]
     }
 

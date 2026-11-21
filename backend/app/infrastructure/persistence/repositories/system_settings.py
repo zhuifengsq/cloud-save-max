@@ -1,15 +1,37 @@
 """系统设置键值仓储（system_settings 表；S5 从路由查询下沉）。"""
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app.infrastructure.persistence.models.system_setting import SystemSetting
 
 INITIAL_ADMIN_KEY = "system.initial_admin"
+DRAMA_PIN_PREFIX = "drama.pin."
+
+
+def list_drama_pins(db: Session) -> list[str]:
+    return list(db.scalars(
+        select(SystemSetting.value)
+        .where(SystemSetting.key.startswith(DRAMA_PIN_PREFIX))
+        .order_by(SystemSetting.id.desc())
+    ))
+
+
+def set_drama_pin(db: Session, group: str, pinned: bool) -> None:
+    key = DRAMA_PIN_PREFIX + sha256(group.encode()).hexdigest()[:48]
+    if pinned:
+        db.execute(
+            insert(SystemSetting)
+            .values(key=key, value=group, description="追剧任务置顶")
+            .on_conflict_do_nothing(index_elements=[SystemSetting.key])
+        )
+    else:
+        db.execute(delete(SystemSetting).where(SystemSetting.key == key))
 
 
 def claim_initial_admin(db: Session) -> bool:

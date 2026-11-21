@@ -228,10 +228,10 @@ export type TaskSummary = Omit<TaskItem, 'executions' | 'addition' | 'extra'> & 
 export type TaskOverview = Omit<TaskSummary, 'addition' | 'extra'> & {addition: TaskSummaryAddition; extra: TaskSummaryExtra}
 export type TaskDetail = Omit<TaskSummary, 'addition' | 'extra'> & {addition: Record<string, any>; extra: TaskExtraConfig}
 export type TaskFacets = { categories: string[]; drives: string[]; failed_count: number }
-export type TaskPage = { items: TaskSummary[]; total: number; page: number; page_size: number; facets: TaskFacets }
+export type TaskPage = { items: TaskSummary[]; total: number; page: number; page_size: number; pinned_task_ids?: number[]; facets: TaskFacets }
 export type TaskReadFilters = { q?: string; task_type?: string; enabled?: boolean; drive_type?: string; media_category?: string; failed_only?: boolean }
 export type TaskPageQuery = TaskReadFilters & { page: number; page_size: number; name_order?: 'ascending' | 'descending' | '' }
-export type TaskOrderIndexItem = { id: number; taskname: string; drive_type: string }
+export type TaskOrderIndexItem = { id: number; taskname: string; drive_type: string; pin_rank?: number | null }
 export type TaskExecutionPage = { items: TaskExecutionSummary[]; total: number; page: number; page_size: number }
 export type TaskExecutionDetail = TaskExecutionSummary & {
   tree_summary: string; run_log: string; log_next_offset: number; log_complete: boolean

@@ -11,6 +11,10 @@ test('task name ordering is global, natural Chinese, drive priority and stable i
   assert.deepEqual(orderedTaskIds(rows,'ascending',1,2), [5,6])
   assert.deepEqual(orderedTaskIds(rows,'ascending',2,2), [7,9])
   assert.deepEqual(orderedTaskIds(rows,'descending',1,3), [9,5,6])
+
+  const withPins = rows.map(row => ({ ...row, pin_rank: {9: 1, 7: 2}[row.id] }))
+  assert.deepEqual(orderedTaskIds(withPins, 'ascending', 1, 2), [9, 7])
+  assert.deepEqual(orderedTaskIds(withPins, 'descending', 1, 4), [9, 7, 5, 6])
 })
 
 function makeCache() {
@@ -62,7 +66,7 @@ function makeViewPageReader(currentPage = 1) {
  const tasks = {value: []}
  const state = {
    page: {value: currentPage}, pageSize: {value: 1}, tasks, taskTotal: {value: 0},
-   facets: {value: {}}, loading: {value: false}, pageLoaded: {value: false}, pageError: {value: ''},
+   facets: {value: {}}, pinnedTaskIds: {value: new Set()}, loading: {value: false}, pageLoaded: {value: false}, pageError: {value: ''},
    taskGroups: {get value() { return Array.from(new Set(tasks.value.map(row => row.tmdb_id ?? row.id))) }},
  }
  const reader = extract('const TASK_FETCH_PAGE_SIZE', '\nwatch(() => [filters.keyword')
@@ -82,11 +86,12 @@ test('late task page cannot overwrite newer filters; deleting last row selects v
  const freshItems = [{id: 1, tmdb_id: 11}, {id: 2, tmdb_id: 11}, {id: 3}, {id: 4}]
  const old = loadPage()
  const fresh = loadPage()
- pending[1]({items: freshItems, total: 4, facets: {failed_count: 2}})
+ pending[1]({items: freshItems, total: 4, pinned_task_ids: [1, 2], facets: {failed_count: 2}})
  await fresh
  pending[0]({items: [{id: 1}], total: 1, facets: {failed_count: 1}})
  await old
  assert.deepEqual(state.tasks.value, freshItems)
+ assert.deepEqual([...state.pinnedTaskIds.value], [1, 2])
  assert.equal(state.facets.value.failed_count, 2)
  assert.equal(state.page.value, 3)
  const removed = loadPage()

@@ -21,6 +21,11 @@ export async function fetchTasks() {
   return data
 }
 
+export async function updateDramaPin(taskId: number, pinned: boolean) {
+  await http.patch(`/tasks/${taskId}/drama-pin`, { pinned }, { headers: { 'X-Silent-Toast': '1' } })
+  markTasksChanged()
+}
+
 export async function createTask(payload: {
   task_uid?: string | null
   task_type: string

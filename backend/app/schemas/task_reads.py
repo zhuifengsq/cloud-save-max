@@ -37,6 +37,7 @@ class TaskPageOut(BaseModel):
     total: int
     page: int
     page_size: int
+    pinned_task_ids: list[int] = Field(default_factory=list)
     facets: TaskFacetsOut
 
 
@@ -44,6 +45,7 @@ class TaskOrderIndexItemOut(BaseModel):
     id: int
     taskname: str
     drive_type: str
+    pin_rank: int | None = None
 
 
 class TaskOrderIndexOut(BaseModel):

@@ -46,6 +46,72 @@ def test_execution_detail_utf8_and_task_scope(db):
     end=execution_detail(db,1,1,log_offset=9999)
     assert end['run_log']=='' and end['log_complete']
 
+
+def test_drama_pins_are_shared_and_applied_before_filter_pagination(db):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from app.api.deps import get_current_user
+    from app.api.routes import tasks, tasks_read
+    from app.application.container import get_db
+    from app.core.errors import ApiError
+    from app.core.exception_handlers import api_error_handler
+    from app.core.permissions import TASK_READ, TASK_WRITE
+    from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
+
+    for task_id, url in [(1, 'https://pan.baidu.com/s/a'), (2, 'https://pan.quark.cn/s/b')]:
+        task = db.get(Task, task_id)
+        task.tmdb_id = 101
+        task.tmdb_media_type = 'tv'
+        task.shareurl = url
+    db.get(Task, 4).task_type = 'generic'
+    db.add(TMDBMediaCache(tmdb_id=101, media_type='tv', payload_json='{"name":"共享置顶测试"}'))
+    db.commit()
+
+    app = FastAPI()
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(tasks_read.router, prefix='/tasks')
+    app.include_router(tasks.router, prefix='/tasks')
+
+    def session():
+        with Session(db.bind) as request_db:
+            yield request_db
+
+    def current(request: Request):
+        editor = request.headers.get('x-role') == 'editor'
+        return SimpleNamespace(
+            user=SimpleNamespace(id=1 if editor else 2),
+            permissions={TASK_READ, TASK_WRITE} if editor else {TASK_READ},
+        )
+
+    app.dependency_overrides[get_db] = session
+    app.dependency_overrides[get_current_user] = current
+    with TestClient(app) as client:
+        def set_pin(task_id, pinned, *, editor=True):
+            headers = {'x-role': 'editor'} if editor else {}
+            return client.patch(f'/tasks/{task_id}/drama-pin', json={'pinned': pinned}, headers=headers)
+
+        assert set_pin(1, True, editor=False).status_code == 403
+        assert set_pin(4, True).status_code == 404
+        assert set_pin(1, True).status_code == 200
+        page = client.get('/tasks/page?task_type=drama&page_size=1').json()
+        assert [item['id'] for item in page['items']] == [2]
+        assert page['pinned_task_ids'] == [2]
+
+        assert set_pin(3, True).status_code == 200
+        assert set_pin(2, True).status_code == 200  # Retrying the same group keeps its position.
+        page = client.get('/tasks/page?task_type=drama').json()
+        assert [item['id'] for item in page['items']] == [3, 2, 1]
+        assert page['pinned_task_ids'] == [3, 2, 1]
+        filtered = client.get('/tasks/order-index?task_type=drama&drive_type=baidu').json()['items']
+        assert [(item['id'], item['pin_rank']) for item in filtered] == [(1, 2)]
+
+        assert set_pin(2, False).status_code == 200
+        page = client.get('/tasks/page?task_type=drama').json()
+        assert page['pinned_task_ids'] == [3]
+
 def test_execution_summary_omits_large_fields(db):
     from app.application.queries.task_executions import execution_page
     result=execution_page(db,1,page=1,page_size=1)
