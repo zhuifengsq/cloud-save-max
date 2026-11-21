@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ElDialog, ElDrawer } from 'element-plus'
 import type { NotifyChannel } from '@/components/extensions/NotificationChannelCard.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 
@@ -34,6 +35,12 @@ const state = reactive({
   patch: {} as Record<string, any>,
 })
 const isMobile = useIsMobile()
+const desktopDialogProps = {
+  class: 'notification-channel-dialog',
+  width: 'min(560px, calc(100% - 24px))',
+  alignCenter: true,
+  appendToBody: true,
+}
 
 function cloneConfig<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? {}))
@@ -53,7 +60,7 @@ watch(
   { immediate: true },
 )
 
-function closeDrawer() {
+function closeForm() {
   emit('update:modelValue', false)
 }
 
@@ -68,11 +75,12 @@ function submit() {
 </script>
 
 <template>
-  <el-drawer
+  <component
+    :is="isMobile ? ElDrawer : ElDialog"
+    v-bind="isMobile ? { size: '100%' } : desktopDialogProps"
     :model-value="modelValue"
     :title="channel ? `配置渠道 · ${channel.title}` : '配置渠道'"
-    :size="isMobile ? '100%' : '560px'"
-    @close="closeDrawer"
+    @close="closeForm"
   >
     <el-form v-if="channel" label-position="top" class="drawer-form">
       <div class="drawer-form__section">
@@ -112,14 +120,28 @@ function submit() {
 
     <template #footer>
       <div class="drawer-form__footer">
-        <el-button @click="closeDrawer">取消</el-button>
+        <el-button @click="closeForm">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="submit">保存</el-button>
       </div>
     </template>
-  </el-drawer>
+  </component>
 </template>
 
 <style scoped>
+:global(.notification-channel-dialog.el-dialog) {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+}
+
+:global(.notification-channel-dialog .el-dialog__body) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
 .drawer-form {
   display: flex;
   flex-direction: column;
