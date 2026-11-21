@@ -46,6 +46,47 @@ def _run(executor: DramaTaskExecutor, *, share_items, children, dest_dirs, exist
 
 
 class FolderDiffModeTests(unittest.TestCase):
+    def test_selected_folder_matches_full_name_only(self) -> None:
+        executor = _executor({"folder_mode": "folder_diff", "whitelist_folder_names": ["4K"]})
+        share_items = [
+            {"fid": "d-4k", "fid_token": "t-4k", "file_name": "4K", "dir": True},
+            {"fid": "d-backup", "file_name": "4K-备用", "dir": True},
+        ]
+        children = {"d-4k": [{"fid": "f-new", "file_name": "01.mp4", "dir": False}]}
+        _run(executor, share_items=share_items, children=children,
+             dest_dirs={"4K-备用": "dest-backup"}, existing_names=set())
+
+        executor._save_with_saved_fids.assert_called_once()
+        kwargs = executor._save_with_saved_fids.call_args.kwargs
+        self.assertEqual([item.fid for item in kwargs["plan"]], ["f-new"])
+        self.assertEqual(kwargs["dest_root_fid"], "dest:/tv/测试剧/4K")
+        self.assertEqual(
+            [call.kwargs["pdir_fid"] for call in executor._fetch_share_items.call_args_list],
+            ["d-4k"],
+        )
+
+    def test_selected_folders_and_keyword_rules_both_allow_incremental_sync(self) -> None:
+        executor = _executor({
+            "folder_mode": "folder_diff",
+            "whitelist_folder_names": ["4K", "原盘"],
+            "whitelist_folders": "1080p|HDR",
+            "whitelist_mode": "all",
+            "folder_exclude": "原盘",
+        })
+        share_items = [
+            {"fid": "d-4k", "fid_token": "t-4k", "file_name": "4K", "dir": True},
+            {"fid": "d-hdr", "file_name": "1080P HDR", "dir": True},
+            {"fid": "d-sdr", "file_name": "1080P SDR", "dir": True},
+            {"fid": "d-disc", "file_name": "原盘", "dir": True},
+        ]
+        _run(executor, share_items=share_items, children={},
+             dest_dirs={"1080P SDR": "dest-sdr"}, existing_names=set())
+
+        self.assertEqual(
+            [call.kwargs["pdir_fid"] for call in executor._fetch_share_items.call_args_list],
+            ["d-4k", "d-hdr"],
+        )
+
     def test_whitelist_folder_only_transfers_new_files(self) -> None:
         executor = _executor({"folder_mode": "folder_diff", "whitelist_folders": "4k"})
         share_items = [{"fid": "d-4k", "fid_token": "t-4k", "file_name": "4k", "dir": True}]

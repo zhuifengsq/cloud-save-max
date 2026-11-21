@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useId } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { fetchTMDBCredits, fetchTMDBDetail, searchTMDB } from '@/api/media'
@@ -222,6 +223,27 @@ const sharePicker = reactive({
   items: [] as SharePreviewItem[],
   sharerName: '' as string,
   isPreferredSharer: false,
+})
+
+const whitelistPickerId = useId()
+const whitelistPicker = reactive({
+  visible: false,
+  loading: false,
+  error: false,
+  requestId: 0,
+  folders: [] as string[],
+})
+
+const selectedWhitelistFolders = computed({
+  get(): string[] {
+    const names: unknown = state.addition.whitelist_folder_names
+    return Array.isArray(names)
+      ? [...new Set(names.filter((name): name is string => typeof name === 'string' && name !== ''))]
+      : []
+  },
+  set(names: string[]) {
+    state.addition.whitelist_folder_names = names
+  },
 })
 
 const shareAuto = reactive({
@@ -1637,6 +1659,42 @@ function useCurrentDrivePath() {
   drivePicker.visible = false
 }
 
+function closeWhitelistPicker() {
+  whitelistPicker.visible = false
+  whitelistPicker.requestId++
+}
+
+async function loadWhitelistFolders() {
+  const shareurl = state.shareurl.trim()
+  if (!shareurl) return
+  const requestId = ++whitelistPicker.requestId
+  whitelistPicker.visible = true
+  whitelistPicker.loading = true
+  whitelistPicker.error = false
+  whitelistPicker.folders = []
+  try {
+    const data = await previewShare({
+      shareurl,
+      account_name: state.account_choice || null,
+      max_items: 2000,
+      folders_only: true,
+      silent: true,
+    })
+    if (requestId !== whitelistPicker.requestId) return
+    const folders = (data.items || []).filter((item) => item.is_dir && item.name)
+    whitelistPicker.folders = [...new Set(folders.map((item) => item.name))]
+  } catch {
+    if (requestId === whitelistPicker.requestId) whitelistPicker.error = true
+  } finally {
+    if (requestId === whitelistPicker.requestId) whitelistPicker.loading = false
+  }
+}
+
+watch(
+  () => [props.modelValue, props.task, state.shareurl.trim(), state.account_choice, state.addition.folder_mode] as const,
+  closeWhitelistPicker,
+)
+
 async function openSharePicker(overrideUrl?: string) {
   const url = overrideUrl || state.shareurl.trim()
   if (!url) {
@@ -1911,6 +1969,7 @@ function applyTemplate(id: number | null) {
   if (config.folder_priority_mode !== undefined) state.addition.folder_priority_mode = config.folder_priority_mode
   if (config.folder_mode !== undefined) state.addition.folder_mode = config.folder_mode
   if (config.whitelist_folders !== undefined) state.addition.whitelist_folders = config.whitelist_folders
+  if (Array.isArray(config.whitelist_folder_names)) state.addition.whitelist_folder_names = [...config.whitelist_folder_names]
   if (config.whitelist_mode !== undefined) state.addition.whitelist_mode = config.whitelist_mode
   if (config.file_filter !== undefined) state.addition.file_filter = config.file_filter
   if (config.min_size !== undefined) state.addition.min_size = config.min_size
@@ -1974,6 +2033,7 @@ async function submitSaveTemplate() {
   if (state.addition.folder_mode === 'folder_diff') {
     config.folder_mode = 'folder_diff'
     if (state.addition.whitelist_folders) config.whitelist_folders = state.addition.whitelist_folders
+    if (selectedWhitelistFolders.value.length) config.whitelist_folder_names = selectedWhitelistFolders.value
     if (state.addition.whitelist_mode) config.whitelist_mode = state.addition.whitelist_mode
   }
   // 关键词过滤：保存预设名称或手动输入的关键词
@@ -2183,13 +2243,49 @@ async function submitSaveTemplate() {
           </div>
         </el-form-item>
         <el-form-item v-if="state.addition.folder_mode === 'folder_diff'" label="白名单文件夹">
-          <el-input v-model="state.addition.whitelist_folders" placeholder="可选，用 | 分隔，如：1080p|4k">
-            <template #append>
-              <el-button @click="state.addition.whitelist_mode = state.addition.whitelist_mode === 'all' ? 'any' : 'all'">{{ state.addition.whitelist_mode === 'all' ? '包含所有' : '包含任意' }}</el-button>
-            </template>
-          </el-input>
-          <div class="drawer-form__hint">
-            匹配的文件夹持续增量；不匹配的文件夹只在目标目录缺少同名文件夹时整包存一次。留空则所有文件夹都按增量处理
+          <div class="whitelist-folders">
+            <div class="whitelist-folders__selection">
+              <el-button
+                :disabled="!state.shareurl.trim()"
+                :aria-controls="whitelistPickerId"
+                :aria-expanded="whitelistPicker.visible"
+                @click="whitelistPicker.visible ? closeWhitelistPicker() : loadWhitelistFolders()"
+              >
+                {{ whitelistPicker.visible ? '收起文件夹列表' : '从分享中选择' }}
+              </el-button>
+              <el-tag v-for="name in selectedWhitelistFolders" :key="name" disable-transitions>
+                {{ name }}
+                <button
+                  type="button"
+                  class="whitelist-folders__remove"
+                  :aria-label="`移除 ${name}`"
+                  @click="selectedWhitelistFolders = selectedWhitelistFolders.filter((selected) => selected !== name)"
+                >×</button>
+              </el-tag>
+            </div>
+            <fieldset v-show="whitelistPicker.visible" :id="whitelistPickerId" class="whitelist-folders__picker">
+              <legend>当前转存目录的一级子文件夹</legend>
+              <span v-if="whitelistPicker.loading" role="status">正在读取文件夹…</span>
+              <template v-else-if="whitelistPicker.error">
+                <span role="alert">读取分享目录失败，请检查链接和网盘账号。</span>
+                <el-button text type="primary" @click="loadWhitelistFolders">重试</el-button>
+              </template>
+              <span v-else-if="!whitelistPicker.folders.length" role="status">当前目录没有子文件夹</span>
+              <div v-else class="whitelist-folders__options">
+                <label v-for="name in whitelistPicker.folders" :key="name" class="whitelist-folders__option">
+                  <input v-model="selectedWhitelistFolders" type="checkbox" :value="name">
+                  <span>{{ name }}</span>
+                </label>
+              </div>
+            </fieldset>
+            <el-input v-model="state.addition.whitelist_folders" aria-label="白名单关键词" placeholder="也可用关键词匹配，如 1080p|4k">
+              <template #append>
+                <el-button @click="state.addition.whitelist_mode = state.addition.whitelist_mode === 'all' ? 'any' : 'all'">{{ state.addition.whitelist_mode === 'all' ? '包含所有' : '包含任意' }}</el-button>
+              </template>
+            </el-input>
+            <div class="drawer-form__hint">
+              勾选的目录按完整名称匹配。勾选或关键词任一命中即持续增量，两者都留空则所有文件夹都按增量处理。
+            </div>
           </div>
         </el-form-item>
       </div>
@@ -2685,6 +2781,75 @@ async function submitSaveTemplate() {
   color: var(--el-text-color-secondary);
   font-size: 12px;
 }
+
+.whitelist-folders {
+  width: 100%;
+  min-width: 0;
+}
+
+.whitelist-folders__selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.whitelist-folders__selection :deep(.el-tag) {
+  max-width: 100%;
+  min-height: 24px;
+  height: auto;
+}
+
+.whitelist-folders__selection :deep(.el-tag__content) {
+  overflow-wrap: anywhere;
+}
+
+.whitelist-folders__remove {
+  margin-inline-start: 4px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.whitelist-folders__picker {
+  min-inline-size: 0;
+  margin: 0 0 8px;
+  padding: 0 12px 6px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+}
+
+.whitelist-folders__picker legend {
+  padding-inline: 4px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.whitelist-folders__options {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.whitelist-folders__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.whitelist-folders__option input {
+  flex: none;
+  margin: 0;
+  accent-color: var(--el-color-primary);
+}
+
 :deep(.el-form-item__label) {
   font-weight: 500;
   color: var(--el-text-color-primary);

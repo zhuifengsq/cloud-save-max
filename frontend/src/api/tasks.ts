@@ -121,6 +121,7 @@ export async function previewShare(payload: {
   account_name?: string | null
   pdir_fid?: string | null
   max_items?: number
+  folders_only?: boolean
   taskname?: string
   pattern?: string | null
   replace?: string | null

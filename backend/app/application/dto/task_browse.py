@@ -11,6 +11,7 @@ class SharePreviewIn(BaseModel):
     account_name: str | None = Field(default=None, max_length=128)
     pdir_fid: str | None = None
     max_items: int = Field(default=200, ge=1, le=2000)
+    folders_only: bool = False
     taskname: str | None = Field(default=None, max_length=255)
     pattern: str | None = Field(default=None, max_length=255)
     replace: str | None = Field(default=None, max_length=255)

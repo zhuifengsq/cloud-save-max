@@ -41,6 +41,12 @@ def test_file_directory_and_missing_optional_author(preview):
     assert result.share_author_name is None
 
 
+def test_folders_only_preview_does_not_count_files_toward_limit(preview):
+    run, _, _ = preview
+    result = run(folders_only=True, max_items=1)
+    assert [(item.name, item.is_dir) for item in result.items] == [('Folder', True)]
+
+
 def test_rename_and_filters_keep_existing_semantics(preview):
     run, _, _ = preview
     result = run(pattern='episode', replace='renamed', folder_filter='keep', min_size='1KB')

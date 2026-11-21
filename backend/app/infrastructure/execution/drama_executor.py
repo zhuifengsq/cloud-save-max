@@ -587,12 +587,19 @@ class DramaTaskExecutor:
     ) -> None:
         addition = self.task_data.get("addition") or {}
         whitelist = [w.strip().lower() for w in str(addition.get("whitelist_folders") or "").split("|") if w.strip()]
-        whitelist_is_any = str(addition.get("whitelist_mode") or "any").strip().lower() != "all"
+        selected_names = addition.get("whitelist_folder_names")
+        selected_folders = (
+            {name for name in selected_names if isinstance(name, str) and name}
+            if isinstance(selected_names, list)
+            else set()
+        )
+        whitelist_match = all if str(addition.get("whitelist_mode") or "any").strip().lower() == "all" else any
         exclude_keywords = [w.strip().lower() for w in str(addition.get("folder_exclude") or "").split("|") if w.strip()]
         exclude_is_all = str(addition.get("folder_exclude_mode") or "any").strip().lower() == "all"
 
         self._line("模式: 文件夹对比（白名单增量 + 其它文件夹整包一次）")
-        self._line(f"白名单: {'|'.join(whitelist) if whitelist else '(未设置，所有文件夹按增量处理)'}")
+        whitelist_labels = [*whitelist, *sorted(selected_folders)]
+        self._line(f"白名单: {' | '.join(whitelist_labels) if whitelist_labels else '(未设置，所有文件夹按增量处理)'}")
 
         # 1) 分享根目录下的文件：按普通模式（同名跳过，不改名）
         self._add_saved_names(_get_name(raw) for raw in dest_file_list if not _is_dir(raw))
@@ -650,7 +657,8 @@ class DramaTaskExecutor:
                 if (all(kw in lowered for kw in exclude_keywords) if exclude_is_all else any(kw in lowered for kw in exclude_keywords)):
                     self._line(f"跳过排除文件夹: {name}")
                     continue
-            if not whitelist or (any(kw in lowered for kw in whitelist) if whitelist_is_any else all(kw in lowered for kw in whitelist)):
+            matches_keywords = bool(whitelist) and whitelist_match(kw in lowered for kw in whitelist)
+            if (not whitelist and not selected_folders) or name in selected_folders or matches_keywords:
                 self._sync_share_dir_incremental(
                     pwd_id=pwd_id,
                     stoken=stoken,
