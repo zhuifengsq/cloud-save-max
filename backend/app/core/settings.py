@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     drama_runtime_retry_backoff_seconds: float = 1.0
     drama_runtime_retry_max_backoff_seconds: float = 8.0
     drama_runtime_retry_jitter_ratio: float = 0.2
+    drama_sync_max_depth: int = Field(default=6, ge=1, le=20)
+    drama_fallback_missing_limit: int = Field(default=3, ge=1)
 
     jwt_secret_key: str | None = None
     jwt_algorithm: str = "HS256"

@@ -1,5 +1,21 @@
 import type { TaskLeadInSummary } from '@/types/dramaLeadIn'
 
+export interface DramaTransferRecovery {
+  version: string
+  reason: string
+  attempts: number
+  requires_confirmation: boolean
+  can_retry: boolean
+  pending_names: string[]
+  output_fids: string[]
+  fallback_dirs: string[]
+  paused_fallback_dirs: string[]
+  excluded_fallback_dirs: string[]
+  discardable_fallback_dirs: string[]
+  confirmed_count: number
+  confirmed_files: Array<{ fid: string; name: string; target_name: string }>
+}
+
 export type TaskExtraConfig = Record<string, any> & {
   auto_update_shareurl?: boolean | null
   auto_update_115_shareurl?: boolean | null

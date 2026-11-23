@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import logging
 import re
-import os
+import json
+import time
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Iterable, TypeVar
 
 from treelib import Tree
-from app.infrastructure.execution.drama_plan import (DramaPlanItem, build_transfer_plan, _parse_size, _to_size, _normalize_name, _is_dir, _get_name, _get_fid, _get_fid_token, _get_updated_at)
+from app.infrastructure.execution.drama_plan import (DramaPlanItem, build_transfer_plan, transfer_target_key, _parse_size, _to_size, _normalize_name, _is_dir, _get_name, _get_fid, _get_fid_token, _get_updated_at)
 from app.infrastructure.execution.drama_progress import calculate_saved_latest
 
 from app.application.drama_schedule import (
@@ -19,8 +21,17 @@ from app.application.drama_schedule import (
     requires_skip,
     resolve_run_schedule,
 )
-from app.domain.drive_types import DriveFile, TransferRequest
+from app.domain.drive_types import DriveFile, TransferRequest, TransferResult
 from app.infrastructure.drive.gateway import gateway_for_adapter
+from app.infrastructure.drive.transfer import QuarkTransferStrategy
+from app.infrastructure.persistence.repositories.drama_transfers import (
+    CHECKPOINT_RENAME_CHANGED,
+    CHECKPOINT_SCOPE_CHANGED,
+    CONFIGURATION_CHANGED,
+    DramaTransferStore,
+    TransferBatch,
+    configuration_blocks_recovery,
+)
 from app.core.errors import bad_request
 from app.core.settings import settings
 from app.infrastructure.execution.execution_log import ExecutionLog
@@ -30,6 +41,10 @@ from app.infrastructure.execution.retry_utils import RetryResult, retry_call, su
 
 
 logger = logging.getLogger(__name__)
+
+FOLDER_SCOPE_RULES = {
+    "whitelist_folders", "whitelist_folder_names", "whitelist_mode", "folder_exclude", "folder_exclude_mode",
+}
 
 
 class SkipTask(Exception):
@@ -86,6 +101,17 @@ class DramaTaskExecutor:
         self.saved_latest: dict[str, Any] | None = None
         # 保存后用于统计集号的名字集合（目标已存在 ∪ 本次新增）
         self._saved_name_pool: list[str] = []
+        self.incomplete_directories: list[str] = []
+        self.deferred_directories: list[str] = []
+        self._fallback_dirs: set[str] = set()
+        self._fallback_missing: dict[str, int] = {}
+        self._fallback_scope: str | None = None
+        self._fallback_excluded: set[str] = set()
+        self._confirmed_batches: list[TransferBatch] = []
+        self._transfer_scope = ""
+        strategy = getattr(adapter, "TRANSFER_STRATEGY", None)
+        self._quark_strategy = strategy if isinstance(strategy, QuarkTransferStrategy) else None
+        self._transfer_store: DramaTransferStore | None = task_data.get("drama_transfer_store")
         # 拿不到文件清单时，用文件夹名里的 "N集" 作为兜底
         self._folder_episode_hints: list[int] = []
 
@@ -143,20 +169,45 @@ class DramaTaskExecutor:
 
     def _try_get_dir_fid(self, dir_path: str) -> str | None:
         fids = self._retry(action="get_fids", fn=lambda: self.adapter.get_fids([dir_path]) or [])
+        requested_path = re.sub(r"/+", "/", dir_path).strip("/")
+        matches: set[str] = set()
+        pathless: set[str] = set()
+        has_mismatch = False
         for item in fids:
-            if (item.get("file_path") or item.get("path")) == dir_path and item.get("fid"):
-                return str(item["fid"])
-        if fids and fids[0].get("fid"):
-            return str(fids[0]["fid"])
-        return None
+            fid = item.get("fid")
+            if not fid:
+                continue
+            returned_path = item.get("file_path") or item.get("path")
+            if returned_path and re.sub(r"/+", "/", str(returned_path)).strip("/") != requested_path:
+                has_mismatch = True
+                continue
+            if item.get("dir") is False or item.get("is_dir") is False:
+                raise RuntimeError(f"目标目录路径指向文件: {dir_path}")
+            (matches if returned_path else pathless).add(str(fid))
+        if has_mismatch and not matches:
+            raise RuntimeError(f"目标目录路径无法核实: {dir_path}")
+        candidates = matches | pathless
+        if len(candidates) > 1:
+            raise RuntimeError(f"目标目录路径对应多个 ID: {dir_path}")
+        return next(iter(candidates), None)
 
     def _ensure_dest_dir_fid(self, savepath: str) -> str:
         existing = self._try_get_dir_fid(savepath)
         if existing:
             return existing
-        response = self._mkdir(savepath)
-        if not response:
-            raise RuntimeError("创建目录失败")
+        return self._create_dest_dir_fid(savepath)
+
+    def _create_dest_dir_fid(self, savepath: str) -> str:
+        try:
+            response = self._mkdir(savepath)
+        except RuntimeError:
+            # The directory may have been created by a concurrent request.
+            if created := self._try_get_dir_fid(savepath):
+                return created
+            raise
+        data = response.get("data")
+        if isinstance(data, dict) and data.get("fid"):
+            return str(data["fid"])
         created = self._try_get_dir_fid(savepath)
         if created:
             return created
@@ -175,6 +226,36 @@ class DramaTaskExecutor:
             names.add(_normalize_name(name, ignore_extension))
         return names
 
+    def _list_dest_for_diff(self, dest_fid: str, *, require_complete: bool = False) -> tuple[list[dict[str, Any]], bool]:
+        if getattr(self.adapter, "SUPPORTS_COMPLETE_LISTING", None) is True:
+            listing = self.adapter.ls_dir_complete(dest_fid)
+            if _validate_code_status("ls_dir", listing).ok:
+                return (listing.get("data") or {}).get("list") or [], True
+        if require_complete:
+            raise SkipTask("无法完整读取目标目录，转存结果待确认")
+        listing = self._ls_dir(dest_fid)
+        return (listing.get("data") or {}).get("list") or [], False
+
+    @staticmethod
+    def _dest_children(items: list[dict[str, Any]], ignore_extension: bool) -> tuple[set[str], dict[str, str], set[str]]:
+        names: set[str] = set()
+        directories: dict[str, str] = {}
+        ambiguous: set[str] = set()
+        for item in items:
+            name = _get_name(item)
+            if not name:
+                continue
+            if _is_dir(item):
+                fid = _get_fid(item)
+                if not fid or name in directories or name in ambiguous:
+                    directories.pop(name, None)
+                    ambiguous.add(name)
+                else:
+                    directories[name] = fid
+            else:
+                names.add(_normalize_name(name, ignore_extension))
+        return names, directories, ambiguous
+
     def _add_saved_names(self, names: Iterable[str]) -> None:
         """把"目标目录里已存在的文件名"加入统计池（不产生额外请求）。"""
         for name in names:
@@ -183,6 +264,10 @@ class DramaTaskExecutor:
                 self._saved_name_pool.append(text)
 
     def _fetch_share_items(self, *, pwd_id: str, stoken: str, pdir_fid: str) -> list[dict[str, Any]]:
+        detail = self._fetch_share_detail(pwd_id=pwd_id, stoken=stoken, pdir_fid=pdir_fid)
+        return detail["data"]["list"] or []
+
+    def _fetch_share_detail(self, *, pwd_id: str, stoken: str, pdir_fid: str) -> dict[str, Any]:
         def _validate(detail: dict[str, Any]) -> RetryResult:
             if not isinstance(detail, dict):
                 return RetryResult(value=detail, ok=False, error_message=f"get_detail invalid response: {summarize_payload(detail)}")
@@ -197,62 +282,229 @@ class DramaTaskExecutor:
                 return RetryResult(value=detail, ok=False, error_message=f"get_detail missing list: {summarize_payload(detail)}")
             return RetryResult(value=detail, ok=True)
 
-        detail = self._retry(action="get_detail", fn=lambda: self.adapter.get_detail(pwd_id, stoken, pdir_fid or ""), validate=_validate)
-        return (((detail or {}).get("data") or {}).get("list")) or []
+        return self._retry(action="get_detail", fn=lambda: self.adapter.get_detail(pwd_id, stoken, pdir_fid or ""), validate=_validate)
 
-    def _list_dest_dir_map(self, dest_fid: str) -> dict[str, str]:
-        listing = self._ls_dir(dest_fid)
-        raw_items = (((listing or {}).get("data") or {}).get("list")) or []
-        result: dict[str, str] = {}
-        for raw in raw_items:
-            if not _is_dir(raw):
-                continue
-            name = _get_name(raw)
-            fid = _get_fid(raw)
-            if name and fid:
-                result[name] = fid
-        return result
+    @staticmethod
+    def _share_listing_complete(detail: dict[str, Any], items: list[dict[str, Any]]) -> bool:
+        metadata = detail.get("metadata")
+        total = metadata.get("_total") if isinstance(metadata, dict) else None
+        if str(total) != str(len(items)):
+            return False
+        fids = {_get_fid(item) for item in items if isinstance(item, dict) and _get_name(item)}
+        return "" not in fids and len(fids) == len(items)
 
-    def _save_items(self, *, pwd_id: str, stoken: str, to_pdir_fid: str, items: list[dict[str, Any]]) -> None:
-        plan: list[DramaPlanItem] = []
-        for raw in items:
-            fid = str(_get_fid(raw)).strip()
-            token = _get_fid_token(raw)
-            name = _get_name(raw)
-            if not fid:
-                continue
-            plan.append(
-                DramaPlanItem(
-                    fid=fid,
-                    fid_token=str(token) if token is not None else None,
-                    origin_name=str(name),
-                    target_name=str(name),
-                )
-            )
-        if not plan:
-            return
-        self._save_with_saved_fids(pwd_id=pwd_id, stoken=stoken, dest_root_fid=to_pdir_fid, plan=plan)
+    def _transfer_read(self, action, fn):
+        started = time.monotonic()
+        try:
+            if self._quark_strategy is not None and action == "query_task":
+                # The adapter owns the poll budget. Preserve its error envelope.
+                return fn()
+            return self._retry(action=action, fn=fn, validate=lambda result: _validate_code_status(action, result))
+        finally:
+            elapsed = time.monotonic() - started
+            if self._quark_strategy is not None and elapsed >= 1:
+                self._line(f"{action} 耗时: {elapsed:.2f}s")
 
-    def _save_with_saved_fids(self, *, pwd_id: str, stoken: str, dest_root_fid: str, plan: list[DramaPlanItem]) -> list[str]:
-        self._set_stage('save_file')
-        def read_retry(action, fn):
-            return self._retry(action=action, fn=fn,
-                               validate=lambda result: _validate_code_status(action, result))
-
-        gateway = gateway_for_adapter(self.adapter, read_retry=read_retry)
+    def _save_with_saved_fids(self, *, pwd_id: str, stoken: str, dest_root_fid: str, plan: list[DramaPlanItem],
+                              is_dir: bool = False, defer_rename: bool = False) -> list[str]:
+        gateway = gateway_for_adapter(self.adapter, read_retry=self._transfer_read)
+        rename_signature = self._rename_signature() if defer_rename else ""
         saved = []
         for offset in range(0, len(plan), 100):
+            self._set_stage('save_file')
             batch = plan[offset:offset + 100]
             request = TransferRequest(str(pwd_id), str(stoken), str(dest_root_fid),
                 tuple(DriveFile(item.fid, item.origin_name, token=item.fid_token or None) for item in batch))
-            result = gateway.transfer_files(request)
-            if result.state == "pending":
-                raise SkipTask(result.message or "转存结果待确认")
-            if result.state != "completed" or not result.confirmed:
-                raise RuntimeError(result.message or "转存失败")
-            saved.extend(item.id for item in result.files)
-        self.transfer_count += len(saved)
+            if self._transfer_store is None or self._quark_strategy is None:
+                fids = self._confirmed_fids(gateway.transfer_files(request))
+            else:
+                checkpoint = TransferBatch(dest_root_fid, [
+                    (item.fid, item.origin_name, item.target_name) for item in batch
+                ], is_dir=is_dir, defer_rename=defer_rename, rename_signature=rename_signature)
+                self._transfer_store.begin_batch(self._transfer_scope, checkpoint)
+                def remember_job(job: str) -> None:
+                    checkpoint.task_id = job
+                    self._transfer_store.update_batch(self._transfer_scope, checkpoint)
+
+                result = self._quark_strategy.transfer(
+                    self.adapter, request, self._transfer_read, on_task=remember_job,
+                    on_output=lambda ids: self._record_transfer_output(checkpoint, ids),
+                    on_submitted=self._log_transfer_submission,
+                )
+                fids = self._finish_tracked_batch(checkpoint, result)
+            saved.extend(fids)
+            self.transfer_count += len(fids)
         return saved
+
+    def _log_transfer_submission(self, elapsed: float, outcome: str) -> None:
+        if elapsed >= 1 or outcome != "已响应":
+            self._line(f"save_file 耗时: {elapsed:.2f}s（{outcome}）")
+
+    def _record_transfer_output(self, checkpoint: TransferBatch, ids: list[str]) -> None:
+        store = self._transfer_store
+        assert store is not None
+        checkpoint.output_fids = ids
+        store.update_batch(self._transfer_scope, checkpoint)
+
+    @staticmethod
+    def _confirmed_fids(result: TransferResult) -> list[str]:
+        if result.state == "pending":
+            raise SkipTask(result.message or "转存结果待确认")
+        if result.state != "completed" or not result.confirmed:
+            raise RuntimeError(result.message or "转存失败")
+        return [item.id for item in result.files]
+
+    def _finish_tracked_batch(self, checkpoint: TransferBatch, result: TransferResult) -> list[str]:
+        store = self._transfer_store
+        assert store is not None
+        if result.state == "failed":
+            store.update_batch(self._transfer_scope, None)
+        elif result.state in ("pending", "query_error"):
+            missing_id = not (checkpoint.task_id or checkpoint.output_fids)
+            reason = ("转存结果待确认，未取得夸克任务 ID" if missing_id
+                      else result.message or "转存结果待确认")
+            message = store.record_problem(self._transfer_scope, reason, manual=missing_id)
+            if result.state == "query_error":
+                raise RuntimeError(message)
+            raise SkipTask(message)
+        saved_fids = self._confirmed_fids(result)
+        if checkpoint.defer_rename:
+            checkpoint.saved_fids = saved_fids
+            store.confirm_normal_batch(self._transfer_scope, checkpoint)
+            self._confirmed_batches.append(checkpoint)
+        else:
+            store.update_batch(self._transfer_scope, None)
+        self._line(f"已确认转存批次: {len(saved_fids)} 项")
+        return saved_fids
+
+    def _finish_normal_renames(self, tree: Tree, *, verify_first: bool = False) -> None:
+        store = self._transfer_store
+        assert store is not None
+        if not self._confirmed_batches:
+            raise SkipTask(store.record_problem(
+                self._transfer_scope, "重命名断点没有已确认的转存批次", manual=True
+            ))
+        plan = [
+            DramaPlanItem(fid, None, origin, target)
+            for batch in self._confirmed_batches
+            for fid, origin, target in batch.files
+        ]
+        fids = [fid for batch in self._confirmed_batches for fid in (batch.saved_fids or [])]
+        self._set_stage("rename")
+        self._section("重命名")
+        if not verify_first:
+            store.start_renames(self._transfer_scope)
+        verified = self._rename_by_fids(saved_fids=fids, plan=plan,
+                                        dest_root_fid=self._confirmed_batches[0].destination, verify_first=verify_first)
+        if verified is None:
+            raise SkipTask(store.record_problem(self._transfer_scope, "转存已确认，重命名结果待确认"))
+        if not verified:
+            raise RuntimeError(store.record_problem(self._transfer_scope, "转存已确认，部分文件重命名失败"))
+        store.verify_renames(self._transfer_scope)
+        self._add_normal_results(tree, plan, fids)
+
+    def _rename_signature(self) -> str:
+        rules = self.task_data.get("magic_regex")
+        rename = MagicRename(magic_regex=rules if isinstance(rules, dict) else None)
+        pattern, replace = rename.magic_regex_conv(str(self.task_data.get("pattern") or ""),
+                                                   str(self.task_data.get("replace") or ""))
+        effective_replace = replace.replace("{TASKNAME}", str(self.task_data.get("taskname") or ""))
+        return sha256(json.dumps([pattern, effective_replace]).encode()).hexdigest()
+
+    def _resume_transfer(self, tree: Tree) -> bool:
+        store = self._transfer_store
+        if store is None:
+            return False
+        identity = [
+            self.task_data.get("task_uid"),
+            str(getattr(self.adapter, "DRIVE_TYPE", "") or ""),
+            str(getattr(self.adapter, "account_name", "") or ""),
+            self.task_data.get("shareurl"),
+            self.task_data.get("savepath"),
+        ]
+        addition = self.task_data.get("addition")
+        naming = [
+            self.task_data.get("pattern"),
+            self.task_data.get("replace"),
+            self.task_data.get("ignore_extension"),
+        ]
+        scope = [*identity, addition, *naming]
+        self._transfer_scope = sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+        self._fallback_scope = None
+        if isinstance(addition, dict) and str(addition.get("folder_mode") or "").strip().lower() == "folder_diff":
+            unchanged_rules = {key: value for key, value in addition.items() if key not in FOLDER_SCOPE_RULES}
+            self._fallback_scope = sha256(json.dumps([*identity, unchanged_rules, *naming], sort_keys=True).encode()).hexdigest()
+        row = store.load()
+        if row is None:
+            return False
+        self._set_stage("save_file")
+        configuration_blocked = configuration_blocks_recovery(row.recovery)
+        if row.recovery.get("blocked") and not configuration_blocked:
+            raise SkipTask(f"需人工确认：{row.recovery.get('reason') or '转存结果待确认'}")
+        mismatch = None
+        if row.scope != self._transfer_scope:
+            if self._fallback_scope and store.adopt_fallback_scope(
+                row.scope, self._transfer_scope, self._fallback_scope
+            ):
+                configuration_blocked = False
+                self._line("目录选择规则已变更，按当前范围继续处理旧目录断点")
+            else:
+                mismatch = CHECKPOINT_SCOPE_CHANGED
+        else:
+            signatures = {batch.get("rename_signature") for batch in [*row.confirmed, row.batch or {}]} - {None, ""}
+            if signatures and signatures != {self._rename_signature()}:
+                mismatch = CHECKPOINT_RENAME_CHANGED
+        if mismatch:
+            if configuration_blocked and row.recovery.get("reason") == mismatch:
+                raise SkipTask(f"需人工确认：{mismatch}")
+            raise SkipTask(store.record_problem(row.scope, mismatch, manual=True, kind=CONFIGURATION_CHANGED))
+        if configuration_blocked:
+            store.clear_configuration_problem(row.scope)
+            self._line("转存配置已恢复匹配，继续处理旧断点")
+        if self._fallback_scope and row.fallback_dirs and row.fallback_scope is None:
+            store.remember_fallback_scope(self._transfer_scope, self._fallback_scope)
+        self._fallback_dirs.update(row.fallback_dirs)
+        self._fallback_missing.update(row.fallback_missing)
+        self._fallback_excluded.update(row.fallback_excluded)
+        self._confirmed_batches.extend(TransferBatch(**batch) for batch in row.confirmed)
+        self.transfer_count += sum(len(batch.saved_fids or []) for batch in self._confirmed_batches)
+        if row.renames_started:
+            self._finish_normal_renames(tree, verify_first=True)
+            self._record_saved_latest()
+            return True
+        if row.batch is None:
+            return False
+        if self._quark_strategy is None:
+            raise SkipTask(store.record_problem(row.scope, "原夸克转存仍待确认，当前账号无法续查", manual=True))
+        checkpoint = TransferBatch(**row.batch)
+        if not (checkpoint.task_id or checkpoint.output_fids):
+            raise SkipTask(store.record_problem(row.scope, "转存结果待确认，未取得夸克任务 ID", manual=True))
+        request = TransferRequest("", "", checkpoint.destination, tuple(
+            DriveFile(fid, origin) for fid, origin, _target in checkpoint.files
+        ))
+        if checkpoint.output_fids:
+            self._line("按已保存的文件 ID 继续确认夸克转存批次")
+            result = self._quark_strategy.confirm_files(
+                self.adapter, request, self._transfer_read, checkpoint.task_id,
+                checkpoint.destination, checkpoint.output_fids,
+            )
+        else:
+            self._line(f"继续确认夸克转存批次: {checkpoint.task_id}")
+            result = self._quark_strategy.confirm_task(
+                self.adapter, request, self._transfer_read, checkpoint.task_id, checkpoint.destination,
+                on_output=lambda ids: self._record_transfer_output(checkpoint, ids),
+            )
+        saved = self._finish_tracked_batch(checkpoint, result)
+        self.transfer_count += len(saved)
+        if checkpoint.defer_rename:
+            return False
+        for index, (fid, (_, origin, target)) in enumerate(zip(saved, checkpoint.files, strict=True)):
+            tree.create_node(target, f"resumed-{index}", parent="root", data={
+                "fid": fid, "file_name": origin, "file_name_re": target, "is_dir": checkpoint.is_dir,
+            })
+            if not checkpoint.is_dir:
+                self._add_saved_names([target])
+        return False
 
     def _iter_files(self, items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -318,93 +570,64 @@ class DramaTaskExecutor:
             self._line(f"FAIL: 重命名失败 {origin} → {target} err={str(exc).strip() or type(exc).__name__}")
             return False
 
-    def _rename_by_fids(self, *, saved_fids: list[str], plan: list[DramaPlanItem], dest_root_fid: str) -> None:
-        dest_root_fid = str(dest_root_fid or "").strip()
-        attempted: list[tuple[str, str, str]] = []
-        failed: set[str] = set()
+    def _rename_by_fids(self, *, saved_fids: list[str], plan: list[DramaPlanItem], dest_root_fid: str,
+                        verify_first: bool = False) -> bool | None:
+        attempted = [
+            (str(fid), item.origin_name, item.target_name)
+            for fid, item in zip(saved_fids, plan)
+            if fid and item.origin_name and item.target_name and item.origin_name != item.target_name
+        ]
+        if not attempted:
+            return True
 
-        limit = min(len(saved_fids), len(plan))
-        for i in range(limit):
-            fid = str(saved_fids[i] or "").strip()
-            if not fid:
-                continue
-            origin = str(plan[i].origin_name or "")
-            target = str(plan[i].target_name or "")
-            if not origin or not target or origin == target:
-                continue
-            attempted.append((fid, origin, target))
-            self._line(f"重命名：{origin} → {target}")
-            if not self._rename_one(fid=fid, origin=origin, target=target):
-                failed.add(fid)
+        if not verify_first:
+            for fid, origin, target in attempted:
+                self._line(f"重命名：{origin} → {target}")
+                self._rename_one(fid=fid, origin=origin, target=target)
 
-        if not attempted or not dest_root_fid:
-            return
+        fid_name = self._read_rename_names(dest_root_fid)
+        if fid_name is None:
+            return None
+        retry = [
+            (fid, origin, target) for fid, origin, target in attempted
+            if fid in fid_name and fid_name[fid] != target
+            and (not verify_first or fid_name[fid] == origin)
+        ]
+        if retry:
+            self._line(f"重命名校验: {len(retry)} 项名称不符")
+            for fid, origin, target in retry:
+                self._rename_one(fid=fid, origin=origin, target=target)
+            fid_name = self._read_rename_names(dest_root_fid)
+            if fid_name is None:
+                return None
 
-        fid_name: dict[str, str] = {}
+        unknown = sum(fid not in fid_name for fid, _, _ in attempted)
+        ok = sum(fid_name.get(fid) == target for fid, _, target in attempted)
+        failed = len(attempted) - ok - unknown
+        self._line(f"重命名摘要: total={len(attempted)} ok={ok} failed={failed} unknown={unknown}")
+        if failed:
+            return False
+        return None if unknown else True
+
+    def _read_rename_names(self, dest_fid: str) -> dict[str, str] | None:
         try:
-            listing = self._ls_dir(dest_root_fid)
-            items = (((listing or {}).get("data") or {}).get("list")) or []
-            for raw in items:
-                if _is_dir(raw):
-                    continue
-                fid = str(_get_fid(raw) or "").strip()
-                if not fid:
-                    continue
-                fid_name[fid] = str(_get_name(raw) or "")
+            listing = self._ls_dir(dest_fid)
         except Exception as exc:
-            self._line(f"INFO: 重命名校验失败，无法读取目标目录 err={str(exc).strip() or type(exc).__name__}")
-            fid_name = {}
-
-        need_retry: list[tuple[str, str, str]] = []
-        for fid, origin, target in attempted:
-            current = fid_name.get(fid)
-            if current == target:
-                continue
-            need_retry.append((fid, origin, target))
-
-        retry_success = 0
-        retry_failed = 0
-        if need_retry:
-            self._line(f"二次校验：待重试 {len(need_retry)}/{len(attempted)}")
-            for fid, origin, target in need_retry:
-                self._line(f"重试重命名：{origin} → {target}")
-                if self._rename_one(fid=fid, origin=origin, target=target):
-                    retry_success += 1
-                else:
-                    retry_failed += 1
-
-        final_ok = 0
-        final_failed = 0
-        try:
-            listing = self._ls_dir(dest_root_fid)
-            items = (((listing or {}).get("data") or {}).get("list")) or []
-            fid_name = {}
-            for raw in items:
-                if _is_dir(raw):
-                    continue
-                fid = str(_get_fid(raw) or "").strip()
-                if not fid:
-                    continue
-                fid_name[fid] = str(_get_name(raw) or "")
-            for fid, _origin, target in attempted:
-                if fid_name.get(fid) == target:
-                    final_ok += 1
-                else:
-                    final_failed += 1
-        except Exception:
-            final_ok = len(attempted) - len(failed)
-            final_failed = len(failed)
-
-        self._line(
-            f"重命名摘要: total={len(attempted)} ok={final_ok} failed={final_failed} retry_ok={retry_success} retry_failed={retry_failed}"
-        )
-
-
+            self._line(f"重命名校验未知: 无法读取目标目录 err={str(exc).strip() or type(exc).__name__}")
+            return None
+        items = (listing.get("data") or {}).get("list") or []
+        return {_get_fid(raw): _get_name(raw) for raw in items if not _is_dir(raw) and _get_fid(raw)}
 
     def execute(self) -> Tree:
         extra = self.task_data.get("extra") or {}
         self._saved_name_pool.clear()
         self._folder_episode_hints.clear()
+        self.incomplete_directories.clear()
+        self.deferred_directories.clear()
+        self._fallback_missing.clear()
+        self._fallback_excluded.clear()
+        self._confirmed_batches.clear()
+        self.transfer_count = 0
         now = datetime.now()
         self._set_stage("validate_schedule")
         self._section("验证调度条件")
@@ -437,6 +660,13 @@ class DramaTaskExecutor:
         elif not decision.allowed:
             # 用户点「执行」= 现在就跑：运行星期只约束定时轮询，不拦手动执行。
             self._line(f"手动执行: 忽略运行日期限制（{decision.message}）")
+
+        tree = Tree()
+        tree.create_node(str(self.task_data.get("taskname") or ""), "root")
+        self._fallback_dirs.clear()
+        if self._resume_transfer(tree):
+            self._set_stage("end")
+            return tree
 
         self._set_stage("share_parse")
         self._section("解析分享链接")
@@ -480,32 +710,30 @@ class DramaTaskExecutor:
         except Exception:
             pass
         ignore_extension = bool(self.task_data.get("ignore_extension"))
-        dest_listing = self._ls_dir(dest_root_fid)
-        dest_file_list = (((dest_listing or {}).get("data") or {}).get("list")) or []
-        dest_dir_map = {}
-        dest_names = set()
-        for raw in dest_file_list:
-            name = _get_name(raw)
-            if not name:
-                continue
-            if _is_dir(raw):
-                fid = _get_fid(raw)
-                if fid:
-                    dest_dir_map[name] = fid
-                continue
-            dest_names.add(_normalize_name(name, ignore_extension))
+        addition = self.task_data.get("addition") or {}
+        folder_mode = str(addition.get("folder_mode") or "normal").strip().lower()
+        tracked_quark = self._quark_strategy is not None and self._transfer_store is not None
+        if folder_mode == "folder_diff":
+            dest_file_list, dest_complete = self._list_dest_for_diff(dest_root_fid, require_complete=tracked_quark)
+            dest_names, dest_dir_map, ambiguous_dirs = self._dest_children(dest_file_list, ignore_extension)
+        elif tracked_quark:
+            dest_file_list, _ = self._list_dest_for_diff(dest_root_fid, require_complete=True)
+        else:
+            dest_listing = self._ls_dir(dest_root_fid)
+            dest_file_list = (dest_listing.get("data") or {}).get("list") or []
 
         self._set_stage("fetch_share_items")
         self._section("读取分享列表")
-        share_items = self._fetch_share_items(pwd_id=str(pwd_id), stoken=str(stoken), pdir_fid=pdir_fid)
+        share_complete = False
+        if folder_mode == "folder_diff" and self._fallback_dirs:
+            detail = self._fetch_share_detail(pwd_id=str(pwd_id), stoken=str(stoken), pdir_fid=pdir_fid)
+            share_items = detail["data"]["list"] or []
+            share_complete = self._share_listing_complete(detail, share_items)
+        else:
+            share_items = self._fetch_share_items(pwd_id=str(pwd_id), stoken=str(stoken), pdir_fid=pdir_fid)
         self._line(f"分享列表项数: {len(share_items)}")
 
-        tree = Tree()
-        tree.create_node(str(self.task_data.get("taskname") or ""), "root")
-
         root_files = [raw for raw in share_items if not _is_dir(raw)]
-        addition = self.task_data.get("addition") or {}
-        folder_mode = str(addition.get("folder_mode") or "normal").strip().lower()
 
         if folder_mode == "folder_diff":
             self._execute_folder_diff(
@@ -516,6 +744,10 @@ class DramaTaskExecutor:
                 dest_root_fid=str(dest_root_fid),
                 dest_file_list=dest_file_list,
                 dest_dir_map=dest_dir_map,
+                dest_names=dest_names,
+                dest_complete=dest_complete,
+                ambiguous_dirs=ambiguous_dirs,
+                share_complete=share_complete,
                 savepath=savepath,
                 ignore_extension=ignore_extension,
                 tree=tree,
@@ -542,9 +774,42 @@ class DramaTaskExecutor:
     def _execute_normal(self, *, root_files: list[dict], dest_file_list: list[dict], pwd_id: str, stoken: str, dest_root_fid: str, tree: Tree) -> None:
         self._set_stage("plan_transfer")
         self._section("生成转存计划")
-        plan = self._plan_transfer(share_files=self._iter_files(root_files), dest_file_list=dest_file_list)
+        if any(batch.destination != dest_root_fid for batch in self._confirmed_batches):
+            assert self._transfer_store is not None
+            raise SkipTask(self._transfer_store.record_problem(
+                self._transfer_scope, "保存目录已变更，原转存批次仍待确认", manual=True
+            ))
+        confirmed_fids = {fid for batch in self._confirmed_batches for fid in (batch.saved_fids or [])}
+        confirmed_sources = {fid for batch in self._confirmed_batches for fid, _, _ in batch.files}
+        ignore_extension = bool(self.task_data.get("ignore_extension"))
+        confirmed_targets = {
+            transfer_target_key(target, ignore_extension)
+            for batch in self._confirmed_batches for _, _, target in batch.files
+        }
+        # Plan against the directory as seen before this run's batches. Their
+        # sources still take part in conflict resolution, but are never re-sent.
+        if not confirmed_fids.issubset({_get_fid(raw) for raw in dest_file_list}):
+            assert self._transfer_store is not None
+            raise SkipTask(self._transfer_store.record_problem(
+                self._transfer_scope, "已确认转存的文件不在目标目录，转存结果待确认"
+            ))
+        previous_dest = [raw for raw in dest_file_list if _get_fid(raw) not in confirmed_fids]
+        plan = self._plan_transfer(share_files=self._iter_files(root_files), dest_file_list=previous_dest)
+        plan = [
+            item for item in plan
+            if item.fid not in confirmed_sources and transfer_target_key(item.target_name, ignore_extension) not in confirmed_targets
+        ]
         self._line(f"待转存文件数: {len(plan)}")
-        self._add_saved_names(_get_name(raw) for raw in dest_file_list if not _is_dir(raw))
+        self._add_saved_names(_get_name(raw) for raw in previous_dest if not _is_dir(raw))
+        if self._quark_strategy is not None and self._transfer_store is not None:
+            if plan:
+                self._section("执行转存")
+                self._save_with_saved_fids(pwd_id=pwd_id, stoken=stoken, dest_root_fid=dest_root_fid,
+                                           plan=plan, defer_rename=True)
+            if self._confirmed_batches:
+                self._finish_normal_renames(tree)
+            self._record_saved_latest()
+            return
         if not plan:
             self._record_saved_latest()
             return
@@ -554,6 +819,10 @@ class DramaTaskExecutor:
         self._set_stage("rename")
         self._section("重命名")
         self._rename_by_fids(saved_fids=saved_fids, plan=plan, dest_root_fid=dest_root_fid)
+        self._add_normal_results(tree, plan, saved_fids)
+        self._record_saved_latest()
+
+    def _add_normal_results(self, tree: Tree, plan: list[DramaPlanItem], saved_fids: list[str]) -> None:
         limit = min(len(plan), len(saved_fids))
         for i in range(limit):
             item = plan[i]
@@ -566,7 +835,6 @@ class DramaTaskExecutor:
             }
             tree.create_node(f"{i + 1}. {item.origin_name} -> {item.target_name}", f"item-{i + 1}", parent="root", data=data)
         self._add_saved_names(item.target_name for item in plan[:limit])
-        self._record_saved_latest()
 
     # ------------------------------------------------------------------
     # 文件夹对比模式：白名单文件夹按层级增量，其它文件夹整包转存一次
@@ -584,7 +852,13 @@ class DramaTaskExecutor:
         savepath: str,
         ignore_extension: bool,
         tree: Tree,
+        dest_names: set[str] | None = None,
+        dest_complete: bool = False,
+        ambiguous_dirs: set[str] | None = None,
+        share_complete: bool = False,
     ) -> None:
+        ambiguous_dirs = ambiguous_dirs or set()
+        share_names = {_get_name(item) for item in share_items if _is_dir(item) and _get_fid(item)}
         addition = self.task_data.get("addition") or {}
         whitelist = [w.strip().lower() for w in str(addition.get("whitelist_folders") or "").split("|") if w.strip()]
         selected_names = addition.get("whitelist_folder_names")
@@ -595,7 +869,14 @@ class DramaTaskExecutor:
         )
         whitelist_match = all if str(addition.get("whitelist_mode") or "any").strip().lower() == "all" else any
         exclude_keywords = [w.strip().lower() for w in str(addition.get("folder_exclude") or "").split("|") if w.strip()]
-        exclude_is_all = str(addition.get("folder_exclude_mode") or "any").strip().lower() == "all"
+        matches_exclude = all if str(addition.get("folder_exclude_mode") or "any").strip().lower() == "all" else any
+
+        def is_excluded(name: str) -> bool:
+            lowered_name = name.lower()
+            return bool(exclude_keywords) and matches_exclude(kw in lowered_name for kw in exclude_keywords)
+
+        excluded = {name for name in self._fallback_dirs if is_excluded(name)}
+        paused_dirs = self._check_fallback_directories(share_names, share_complete, excluded)
 
         self._line("模式: 文件夹对比（白名单增量 + 其它文件夹整包一次）")
         whitelist_labels = [*whitelist, *sorted(selected_folders)]
@@ -604,13 +885,7 @@ class DramaTaskExecutor:
         # 1) 分享根目录下的文件：按普通模式（同名跳过，不改名）
         self._add_saved_names(_get_name(raw) for raw in dest_file_list if not _is_dir(raw))
         if root_files:
-            existing_names: set[str] = set()
-            for raw in dest_file_list:
-                if _is_dir(raw):
-                    continue
-                name = _get_name(raw)
-                if name:
-                    existing_names.add(_normalize_name(name, ignore_extension))
+            existing_names = dest_names if dest_names is not None else self._dest_children(dest_file_list, ignore_extension)[0]
             plan: list[DramaPlanItem] = []
             for raw in self._filter_transfer_files(self._iter_files(root_files)):
                 name = _get_name(raw)
@@ -652,25 +927,32 @@ class DramaTaskExecutor:
             fid = _get_fid(raw)
             if not name or not fid:
                 continue
+            if name in paused_dirs:
+                continue
             lowered = name.lower()
-            if exclude_keywords:
-                if (all(kw in lowered for kw in exclude_keywords) if exclude_is_all else any(kw in lowered for kw in exclude_keywords)):
-                    self._line(f"跳过排除文件夹: {name}")
-                    continue
+            if is_excluded(name):
+                self._line(f"跳过排除文件夹: {name}")
+                continue
+            if name in ambiguous_dirs:
+                self._mark_ambiguous_directory(name)
+                continue
             matches_keywords = bool(whitelist) and whitelist_match(kw in lowered for kw in whitelist)
-            if (not whitelist and not selected_folders) or name in selected_folders or matches_keywords:
+            incremental = (not whitelist and not selected_folders) or name in selected_folders or matches_keywords
+            if incremental and name not in self._fallback_dirs:
                 self._sync_share_dir_incremental(
                     pwd_id=pwd_id,
                     stoken=stoken,
                     share_fid=str(fid),
                     share_name=name,
-                    dest_base_fid=dest_root_fid,
                     dest_base_path=savepath,
+                    known_dest_fid=dest_dir_map.get(name),
+                    known_missing=dest_complete and name not in dest_dir_map,
                     ignore_extension=ignore_extension,
                     tree=tree,
                     rel_label=name,
                     depth=0,
                     copy_all=False,
+                    verify_destination=self._quark_strategy is not None and self._transfer_store is not None,
                 )
             else:
                 self._save_share_dir_once(
@@ -684,8 +966,46 @@ class DramaTaskExecutor:
                     savepath=savepath,
                     ignore_extension=ignore_extension,
                     tree=tree,
+                    dest_complete=dest_complete,
                 )
+        for directory in sorted(self._fallback_dirs - paused_dirs):
+            if not any(path == directory or path.startswith(directory + "/") for path in self.incomplete_directories):
+                if directory in share_names:
+                    self._line(f"待续跑的分享目录本轮未处理: {directory}")
+                else:
+                    self._line(f"未找到待继续转存的分享目录: {directory}")
+                self.incomplete_directories.append(directory)
         self._record_saved_latest()
+
+    def _check_fallback_directories(self, share_names: set[str], share_complete: bool, excluded: set[str]) -> set[str]:
+        counts = self._fallback_missing.copy()
+        limit = settings.drama_fallback_missing_limit
+        paused = excluded.copy()
+        for name in sorted(self._fallback_dirs):
+            if name in excluded:
+                counts.pop(name, None)
+                self._line(f"待续跑目录按当前规则排除: {name}")
+                continue
+            attempts = counts.get(name, 0)
+            if name in share_names:
+                counts.pop(name, None)
+                attempts = 0
+            elif attempts < limit and share_complete:
+                attempts += 1
+                counts[name] = attempts
+            if attempts >= limit:
+                paused.add(name)
+                self._line(f"分享目录连续 {attempts} 次缺失，等待处理: {name}")
+        if (counts != self._fallback_missing or excluded != self._fallback_excluded) and self._transfer_store is not None:
+            self._transfer_store.set_fallback_missing(self._transfer_scope, counts, excluded=excluded)
+            self._fallback_missing = counts
+            self._fallback_excluded = excluded
+        self.deferred_directories.extend(sorted(paused))
+        return paused
+
+    def _mark_ambiguous_directory(self, rel_label: str) -> None:
+        self._line(f"无法唯一确认目标目录（重名或缺少 ID）: {rel_label}")
+        self.incomplete_directories.append(rel_label)
 
     def _sync_share_dir_incremental(
         self,
@@ -694,28 +1014,56 @@ class DramaTaskExecutor:
         stoken: str,
         share_fid: str,
         share_name: str,
-        dest_base_fid: str,
         dest_base_path: str,
         ignore_extension: bool,
         tree: Tree,
         rel_label: str,
         depth: int,
         copy_all: bool,
+        known_dest_fid: str | None = None,
+        known_missing: bool = False,
+        verify_destination: bool = False,
+        resume_copy: bool = False,
     ) -> list[str]:
-        if depth > 3:
+        if depth >= settings.drama_sync_max_depth:
             self._line(f"层级过深，跳过: {rel_label}")
+            self.incomplete_directories.append(rel_label)
             return []
         dest_path = f"{dest_base_path.rstrip('/')}/{share_name}" if share_name else dest_base_path
         try:
-            dest_fid = self._ensure_dest_dir_fid(dest_path)
+            if known_dest_fid:
+                dest_fid = known_dest_fid
+            elif known_missing:
+                dest_fid = self._create_dest_dir_fid(dest_path)
+            else:
+                dest_fid = self._ensure_dest_dir_fid(dest_path)
         except Exception as exc:
             self._line(f"创建目标目录失败 {dest_path}: {exc}")
+            self.incomplete_directories.append(rel_label)
             return []
 
-        children = self._fetch_share_items(pwd_id=pwd_id, stoken=stoken, pdir_fid=share_fid)
+        if self._transfer_store is not None and (copy_all or resume_copy):
+            detail = self._fetch_share_detail(pwd_id=pwd_id, stoken=stoken, pdir_fid=share_fid)
+            children = detail["data"]["list"] or []
+            metadata = detail.get("metadata")
+            has_total = isinstance(metadata, dict) and "_total" in metadata
+            drive_type = getattr(self.adapter, "DRIVE_TYPE", "")
+            if (has_total or drive_type in ("quark", "uc")) and not self._share_listing_complete(detail, children):
+                self._line(f"分享目录列表不完整，保留续跑记录: {rel_label}")
+                self.incomplete_directories.append(rel_label)
+                return []
+        else:
+            children = self._fetch_share_items(pwd_id=pwd_id, stoken=stoken, pdir_fid=share_fid)
         files = [item for item in children if not _is_dir(item)]
         dirs = [item for item in children if _is_dir(item)]
-        existing_names = self._list_dest_names(dest_fid, ignore_extension) if not copy_all else set()
+        if copy_all:
+            dest_items, complete = [], False
+        elif verify_destination:
+            dest_items, complete = self._list_dest_for_diff(dest_fid, require_complete=True)
+        else:
+            dest_items, complete = self._list_dest_for_diff(dest_fid)
+        existing_names, dest_dirs, ambiguous_dirs = self._dest_children(dest_items, ignore_extension)
+        existing_exact = {_get_name(raw) for raw in dest_items if not _is_dir(raw)} if resume_copy else set()
         self._add_saved_names(existing_names)
 
         plan: list[DramaPlanItem] = []
@@ -725,7 +1073,9 @@ class DramaTaskExecutor:
             token = _get_fid_token(item)
             if not name or not fid:
                 continue
-            if not copy_all and _normalize_name(name, ignore_extension) in existing_names:
+            if resume_copy and name in existing_exact:
+                continue
+            if not copy_all and not resume_copy and _normalize_name(name, ignore_extension) in existing_names:
                 continue
             plan.append(
                 DramaPlanItem(
@@ -756,19 +1106,26 @@ class DramaTaskExecutor:
             sub_fid = _get_fid(item)
             if not sub_name or not sub_fid:
                 continue
+            sub_label = f"{rel_label}/{sub_name}"
+            if sub_name in ambiguous_dirs:
+                self._mark_ambiguous_directory(sub_label)
+                continue
             transferred.extend(
                 self._sync_share_dir_incremental(
                     pwd_id=pwd_id,
                     stoken=stoken,
                     share_fid=str(sub_fid),
                     share_name=sub_name,
-                    dest_base_fid=dest_fid,
                     dest_base_path=dest_path,
+                    known_dest_fid=dest_dirs.get(sub_name),
+                    known_missing=complete and sub_name not in dest_dirs,
                     ignore_extension=ignore_extension,
                     tree=tree,
-                    rel_label=f"{rel_label}/{sub_name}",
+                    rel_label=sub_label,
                     depth=depth + 1,
                     copy_all=copy_all,
+                    verify_destination=verify_destination,
+                    resume_copy=resume_copy,
                 )
             )
         return transferred
@@ -786,17 +1143,20 @@ class DramaTaskExecutor:
         savepath: str,
         ignore_extension: bool,
         tree: Tree,
+        dest_complete: bool = False,
     ) -> list[str]:
-        if share_name in dest_dir_map:
+        resuming = share_name in self._fallback_dirs
+        if share_name in dest_dir_map and not resuming:
             self._line(f"跳过已存在的文件夹: {share_name}")
             try:
-                self._add_saved_names(self._list_dest_names(dest_dir_map[share_name], ignore_extension))
+                if dest_dir_map[share_name]:
+                    self._add_saved_names(self._list_dest_names(dest_dir_map[share_name], ignore_extension))
             except Exception as exc:
                 self._line(f"统计已存在目录失败: {exc}")
             return []
         # 按目录 ID 直转无法检查其中的文件，存在文件规则时走逐文件路径。
         min_bytes, blocked, required, _ = self._file_filter_rules()
-        if share_token and not (min_bytes > 0 or blocked or required):
+        if not resuming and share_token and not (min_bytes > 0 or blocked or required):
             try:
                 plan = [
                     DramaPlanItem(
@@ -806,7 +1166,9 @@ class DramaTaskExecutor:
                         target_name=share_name,
                     )
                 ]
-                saved = self._save_with_saved_fids(pwd_id=pwd_id, stoken=stoken, dest_root_fid=dest_root_fid, plan=plan)
+                saved = self._save_with_saved_fids(
+                    pwd_id=pwd_id, stoken=stoken, dest_root_fid=dest_root_fid, plan=plan, is_dir=True
+                )
                 if saved:
                     self._line(f"整包转存文件夹: {share_name}")
                     dest_dir_map[share_name] = str(saved[0] or "")
@@ -835,27 +1197,32 @@ class DramaTaskExecutor:
                 raise
         # 退化：新建同名目录 + 递归转存全部文件
         self._line(f"逐文件整包转存文件夹: {share_name}")
-        return self._sync_share_dir_incremental(
+        if self._transfer_store is not None and not resuming:
+            self._transfer_store.set_fallback_dir(
+                self._transfer_scope, share_name, active=True, fallback_scope=self._fallback_scope
+            )
+            self._fallback_dirs.add(share_name)
+        previous_issues = len(self.incomplete_directories)
+        saved = self._sync_share_dir_incremental(
             pwd_id=pwd_id,
             stoken=stoken,
             share_fid=share_fid,
             share_name=share_name,
-            dest_base_fid=dest_root_fid,
             dest_base_path=savepath,
+            known_dest_fid=dest_dir_map.get(share_name),
+            known_missing=dest_complete and share_name not in dest_dir_map,
             ignore_extension=ignore_extension,
             tree=tree,
             rel_label=share_name,
             depth=0,
-            copy_all=True,
+            copy_all=not resuming,
+            verify_destination=resuming and getattr(self.adapter, "SUPPORTS_COMPLETE_LISTING", None) is True,
+            resume_copy=resuming,
         )
-
-    def _clear_saved_latest(self) -> None:
-        self.saved_latest = {
-            "episode": 0,
-            "season": None,
-            "name": "",
-            "at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        }
+        if self._transfer_store is not None and len(self.incomplete_directories) == previous_issues:
+            self._transfer_store.set_fallback_dir(self._transfer_scope, share_name, active=False)
+            self._fallback_dirs.discard(share_name)
+        return saved
 
     def _record_saved_latest(self, file_names: list[str] | None = None) -> None:
         result = calculate_saved_latest(

@@ -20,6 +20,7 @@ import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 import { resolveDramaEpisodeProgress } from '@/utils/dramaEpisodeProgress'
 import { categoryFromTmdb } from '@/utils/mediaCategory'
+import DramaTransferRecovery from '@/components/tasks/DramaTransferRecovery.vue'
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w185'
 
@@ -2090,6 +2091,7 @@ async function submitSaveTemplate() {
     <template #header>
       <div class="drawer-custom-title">{{ isEditing ? '编辑追剧任务' : '新增追剧任务' }}</div>
     </template>
+    <DramaTransferRecovery :task-id="task?.id" :visible="modelValue" />
     <el-form
       label-position="top"
       class="drawer-form"

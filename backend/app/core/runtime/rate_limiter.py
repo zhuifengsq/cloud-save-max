@@ -40,7 +40,7 @@ class KeyedRateLimiter:
     def maxsize(self) -> int:
         return self._maxsize
 
-    def wait(self, key: str, min_interval: float, max_interval: float | None = None) -> float:
+    def wait(self, key: str, min_interval: float, max_interval: float | None = None, *, max_wait: float | None = None) -> float:
         """阻塞到该 key 的下一个可用时间点，返回实际等待秒数。"""
         min_interval = max(0.0, float(min_interval))
         if max_interval is None or float(max_interval) <= min_interval:
@@ -53,6 +53,8 @@ class KeyedRateLimiter:
             slot = self._next_at.get(key, 0.0)
             if slot < now:
                 slot = now
+            if max_wait is not None and slot - now >= max_wait:
+                raise TimeoutError("Rate limit wait exceeds request budget")
             self._next_at[key] = slot + interval
             self._next_at.move_to_end(key)
             self._evict_locked(now)

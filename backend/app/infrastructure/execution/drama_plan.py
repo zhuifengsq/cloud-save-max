@@ -91,6 +91,10 @@ class DramaPlanItem:
     origin_name: str
     target_name: str
 
+def transfer_target_key(name: str, ignore_extension: bool) -> str:
+    return os.path.splitext(name)[0] if ignore_extension else name
+
+
 def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, share_files: list[dict[str, Any]], dest_file_list: list[dict[str, Any]]) -> list[DramaPlanItem]:
     taskname = str(task_data.get("taskname") or "")
     pattern = str(task_data.get("pattern") or "")
@@ -109,7 +113,7 @@ def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, sh
         except Exception:
             return None
 
-    dest_filename_list = []
+    dest_filenames: set[str] = set()
     dest_episode_set: set[tuple[int, int]] = set()
     from app.application.episode_number import extract_episode
     mr._resolved_pattern = pattern
@@ -119,7 +123,7 @@ def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, sh
             continue
         name = _get_name(raw)
         if name:
-            dest_filename_list.append(name)
+            dest_filenames.add(name)
             try:
                 s, e = extract_episode(name, mr=mr)
                 if s is not None and e is not None:
@@ -137,7 +141,7 @@ def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, sh
             continue
         if not _is_dir(raw):
             # 基于原始文件名去重：文件名已存在则跳过
-            if origin_name in dest_filename_list:
+            if origin_name in dest_filenames:
                 continue
             # 基于集数去重：重命名后文件名变了但集数相同
             if dest_episode_set:
@@ -168,7 +172,7 @@ def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, sh
         target = str(f.get("file_name_re") or "")
         if not target:
             continue
-        key = os.path.splitext(target)[0] if ignore_extension else target
+        key = transfer_target_key(target, ignore_extension)
         sz = _to_size(f.get("size"))
         ts = _to_ts(f.get("updated_at"))
         score = (float(sz) if sz is not None else float("-inf"), ts if ts is not None else float("-inf"))

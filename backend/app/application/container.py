@@ -453,6 +453,12 @@ def task_reads_repo() -> repos.TaskReadsRepository:
     return task_reads
 
 
+def drama_transfer_recovery_repo():
+    from app.infrastructure.persistence.repositories import drama_transfers
+
+    return drama_transfers
+
+
 def execution_reads_repo() -> repos.TaskExecutionsRepository:
     from app.infrastructure.persistence.repositories import task_executions
 

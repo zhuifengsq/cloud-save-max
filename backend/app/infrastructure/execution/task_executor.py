@@ -286,15 +286,27 @@ class TaskExecutor:
             log.section("转存任务")
             tree = self._execute_with_adapter(adapter, task_data)
         self._record_drama_progress(task, task_data, drama_executor, log, persist_execution, prepared_data)
+        incomplete = getattr(drama_executor, "incomplete_directories", None) if drama_executor is not None else None
+        deferred = getattr(drama_executor, "deferred_directories", None) if drama_executor is not None else None
+        status = "failed" if incomplete else "success"
+        message = "执行完成"
+        if incomplete and drama_executor is not None:
+            message = f"执行不完整，{len(incomplete)} 个目录未处理完"
+            log.line(f"{message}，已确认转存 {drama_executor.transfer_count} 项")
+        elif deferred and drama_executor is not None:
+            status = "skipped"
+            message = f"{len(deferred)} 个目录待人工处理，其余目录已检查"
+            log.line(f"{message}，已确认转存 {drama_executor.transfer_count} 项")
         log.set_stage("end")
         log.section("程序结束")
         finished_at_local = datetime.now()
         duration_s = (finished_at_local - log.started_at).total_seconds()
-        log.line(f"状态: success")
+        log.line(f"状态: {status}")
         log.line(f"运行时长: {duration_s:.2f}s")
         allow_once = bool((task_data.get("extra") or {}).get("allow_once"))
         if (
-            (persist_execution or prepared_data is not None)
+            status == "success"
+            and (persist_execution or prepared_data is not None)
             and task_id > 0
             and str(task_data.get("task_type") or "") == "drama"
             and allow_once
@@ -308,8 +320,8 @@ class TaskExecutor:
         new_files = _new_files_from_tree(tree)
         display_tree, tree_truncated = bounded_text(full_tree, settings.execution_tree_max_bytes)
         return ExecutionPayload(
-            status='success',
-            message='执行完成',
+            status=status,
+            message=message,
             tree_summary=display_tree,
             stage=log.stage,
             run_log=log.render(),

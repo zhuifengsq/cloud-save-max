@@ -12,6 +12,7 @@ import type {
   TaskSchedulerSetting,
   TaskShareLink,
   SavedProgressCorrection,
+  DramaTransferRecovery,
 } from '@/types/tasks'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 import { markTasksChanged } from '@/utils/taskChangeBus'
@@ -80,6 +81,20 @@ export async function runTask(taskId: number) {
   const { data } = await http.post<TaskExecutionItem>(`/tasks/${taskId}/run`)
   markTasksChanged()
   return data
+}
+
+export async function fetchDramaTransferRecovery(taskId: number, signal?: AbortSignal) {
+  const { data } = await http.get<DramaTransferRecovery | null>(`/tasks/${taskId}/transfer-recovery`, {
+    signal,
+    headers: { 'X-Silent-Toast': '1' },
+  })
+  return data
+}
+
+export async function resolveDramaTransferRecovery(
+  taskId: number, version: string, action: 'retry' | 'abandon' | 'abandon_directory', directory?: string,
+) {
+  await http.post(`/tasks/${taskId}/transfer-recovery`, { version, action, confirm: action !== 'retry', directory })
 }
 
 export async function correctTaskSavedProgress(taskId: number): Promise<SavedProgressCorrection> {

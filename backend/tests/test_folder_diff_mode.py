@@ -28,6 +28,9 @@ def _run(executor: DramaTaskExecutor, *, share_items, children, dest_dirs, exist
     tree.create_node("root", "root")
     executor._ensure_dest_dir_fid = Mock(side_effect=lambda path: f"dest:{path}")
     executor._list_dest_names = Mock(return_value=set(existing_names))
+    executor._list_dest_for_diff = Mock(return_value=([
+        {"file_name": name} for name in existing_names
+    ], False))
     executor._fetch_share_items = Mock(side_effect=lambda **kwargs: children.get(kwargs["pdir_fid"], []))
     executor._save_with_saved_fids = Mock(return_value=["saved-fid"])
     executor._execute_folder_diff(

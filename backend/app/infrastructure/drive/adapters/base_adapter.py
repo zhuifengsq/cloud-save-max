@@ -133,19 +133,24 @@ class BaseCloudDriveAdapter(ABC):
         """
         return f"token:{self._rate_limit_key()}:{self._instance_id}"
 
-    def _rate_limit_wait(self) -> None:
-        get_rate_limiter().wait(
-            self._rate_limit_key(),
-            self._rate_limit_min_interval,
-            self._rate_limit_max_interval,
-        )
+    def _rate_limit_wait(self, *, max_wait: float | None = None) -> None:
+        limiter = get_rate_limiter()
+        args = (self._rate_limit_key(), self._rate_limit_min_interval, self._rate_limit_max_interval)
+        if max_wait is None:
+            limiter.wait(*args)
+        else:
+            limiter.wait(*args, max_wait=max_wait)
 
-    def _throttle_request(self) -> None:
+    def _throttle_request(self, *, deadline: float | None = None) -> None:
         # 灰度开关：use_keyed_rate_limiter=False 时回退到旧的「每实例一把锁 + 随机 sleep」。
         if bool(getattr(settings, "use_keyed_rate_limiter", False)):
-            self._rate_limit_wait()
+            self._rate_limit_wait(max_wait=None if deadline is None else deadline - time.monotonic())
             return
-        with self._rate_limit_lock:
+        if deadline is None:
+            self._rate_limit_lock.acquire()
+        elif not self._rate_limit_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise TimeoutError("Rate limit wait exceeds request budget")
+        try:
             now = time.monotonic()
             if self._last_request_at > 0:
                 interval = random.uniform(
@@ -153,9 +158,14 @@ class BaseCloudDriveAdapter(ABC):
                 )
                 elapsed = now - self._last_request_at
                 if elapsed < interval:
-                    time.sleep(interval - elapsed)
+                    delay = interval - elapsed
+                    if deadline is not None and now + delay >= deadline:
+                        raise TimeoutError("Rate limit wait exceeds request budget")
+                    time.sleep(delay)
                     now = time.monotonic()
             self._last_request_at = now
+        finally:
+            self._rate_limit_lock.release()
 
     @classmethod
     def get_config_meta(cls) -> dict[str, Any]:

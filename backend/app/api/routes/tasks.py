@@ -16,12 +16,14 @@ from sqlalchemy.orm import Session
 from app.application.use_cases.run_task import RunPolicy
 from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_RUN, TASK_WRITE
-from app.application.container import commit, get_db, system_settings_repo, tasks_repo, transaction
+from app.application.container import commit, drama_transfer_recovery_repo, get_db, system_settings_repo, tasks_repo, transaction
 from app.application.container import create_task_share_use_case
 from app.application.dto.task_share import CreateTaskShareCommand
 from app.application.container import task_scheduler as _acc_task_scheduler_manager; task_scheduler_manager = _acc_task_scheduler_manager()
 from app.application.container import task_admission_service as _acc_task_admission; task_admission = _acc_task_admission()
 from app.schemas.task_magic_regex import MagicRegexOut, MagicRegexRuleOut
+from app.schemas.drama_transfer_recovery import DramaTransferRecoveryAction, DramaTransferRecoveryOut
+from app.core.errors import ApiError, bad_request
 from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn
 from app.schemas.task import (
     DramaPinIn,
@@ -184,6 +186,41 @@ def post_run_task(request: Request, task_id: int, current: CurrentUser = Depends
             user_agent=request.headers.get('user-agent'))
         execution = run_task_use_case(db).execute(command, RunPolicy.for_trigger('http'))
         return execution_out(execution_view(execution))
+
+
+@router.get('/{task_id:int}/transfer-recovery', response_model=DramaTransferRecoveryOut | None,
+            dependencies=[Depends(require_permissions(TASK_READ))])
+def get_transfer_recovery(task_id: int, db: Session = Depends(get_db)):
+    task = get_task(db, task_id)
+    if task.task_type != "drama":
+        return None
+    return drama_transfer_recovery_repo().describe_checkpoint(db, task_id)
+
+
+@router.post('/{task_id:int}/transfer-recovery', dependencies=[Depends(require_permissions(TASK_WRITE))])
+def post_transfer_recovery(task_id: int, payload: DramaTransferRecoveryAction, request: Request,
+                           current: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    abandon = payload.action == "abandon"
+    abandon_directory = payload.action == "abandon_directory"
+    if abandon_directory != (payload.directory is not None):
+        raise bad_request("TASK_TRANSFER_DIRECTORY_INVALID", "请指定要单独放弃的转存目录")
+    if (abandon or abandon_directory) and not payload.confirm:
+        raise bad_request("TASK_TRANSFER_CONFIRM_REQUIRED", "请确认放弃旧转存断点")
+    with task_admission.reserve(task_id), transaction(db):
+        task = get_task(db, task_id)
+        if task.task_type != "drama":
+            raise bad_request("TASK_TYPE_INVALID", "该任务没有追剧转存断点")
+        if not drama_transfer_recovery_repo().resolve_checkpoint(
+            db, task_id, payload.version, abandon=abandon, directory=payload.directory
+        ):
+            raise ApiError("TASK_TRANSFER_RECOVERY_CONFLICT", "断点已变化或无法执行该操作，请刷新后重试", 409)
+        audit.write_audit_log(
+            db, actor_user_id=current.user.id, action=f"task.drama.transfer_recovery.{payload.action}",
+            target_type="task", target_id=str(task_id), ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"), success=True,
+            detail=f"version={payload.version}" + (f" directory={payload.directory}" if abandon_directory else ""),
+        )
+    return {"ok": True}
 
 
 @router.post('/{task_id:int}/share', response_model=TaskShareLinkOut, dependencies=[Depends(require_permissions(TASK_WRITE))])

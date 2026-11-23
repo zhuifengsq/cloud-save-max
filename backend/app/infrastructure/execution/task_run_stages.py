@@ -2,7 +2,7 @@
 import json
 from dataclasses import asdict
 from typing import Any
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from app.domain.task_run import ExecutionLogPort, RecoveryCallback, RunPolicyPort, TaskExecutionState
 from sqlalchemy import select, update
 from app.core.errors import ApiError
@@ -13,6 +13,7 @@ from app.application.magic_regex import get_enabled_magic_regex_map
 from app.application.generated_share_check import prepare_generated_share_check, probe_generated_share_check
 from app.application.task_executions import prune_task_executions
 from app.infrastructure.persistence.models.task_execution import TaskExecution
+from app.infrastructure.persistence.repositories.drama_transfers import DramaTransferStore
 from app.infrastructure.drive.account_manager import load_accounts_payload, DatabaseAccountManager
 from app.infrastructure.execution.task_executor import TaskExecutor
 from app.infrastructure.drive.lifecycle import scoped_adapters
@@ -34,6 +35,8 @@ class SqlTaskRunStore:
             raise bad_request('TASK_DISABLED', '任务已禁用')
         self.baseline = {key:getattr(task,key) for key in ('extra_json','shareurl','enabled','account_name','savepath')}
         data = TaskExecutor._task_to_dict(task)
+        if row is not None and task.task_type == 'drama':
+            data['drama_transfer_store'] = DramaTransferStore(sessionmaker(bind=self.db.get_bind()), task.id)
         data['magic_regex'] = get_enabled_magic_regex_map(self.db)
         data.update(tmdb_configured=False, tmdb_update_weekdays=[], tmdb_episode_weekdays=[])
         # TMDB owns its separate cache-write unit and can close its read snapshot before HTTP.
@@ -90,6 +93,9 @@ class SqlTaskRunStore:
 
     def save(self, plan: TaskRunPlan, result: TaskRunResult) -> None:
         self.save_task(plan.task)
+        transfer_store = plan.prepared.get('task_data', {}).get('drama_transfer_store')
+        if transfer_store is not None and result.status == 'success':
+            transfer_store.acknowledge_renames(self.db)
         values = asdict(result)
         values.pop('id')
         values['adapter_snapshot'] = json.dumps(result.adapter_snapshot, ensure_ascii=False)

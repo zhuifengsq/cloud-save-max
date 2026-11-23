@@ -6,6 +6,7 @@
 import sys
 import os
 import logging
+import time
 from typing import Dict, List, Tuple, Optional, Any
 
 # 添加父目录到路径，以便导入 quark_auto_save
@@ -18,12 +19,13 @@ from app.infrastructure.drive.adapters.lead_in_support import DramaLeadInMixin
 logger = logging.getLogger(__name__)
 
 
-from app.infrastructure.drive.transfer import TokenTransferStrategy
+from app.infrastructure.drive.transfer import QuarkTransferStrategy
 
 
 class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
     SUPPORTS_RESULT_LOOKUP = True
-    TRANSFER_STRATEGY = TokenTransferStrategy()
+    TRANSFER_STRATEGY = QuarkTransferStrategy()
+    QUERY_TASK_TIMEOUT_SECONDS = 120
 
     SUPPORTS_SHARE = True
     """夸克网盘适配器"""
@@ -99,7 +101,18 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         import requests
         import random
         from datetime import datetime
-        self._throttle_request()
+        deadline = kwargs.pop("deadline", None)
+        raise_transport = kwargs.pop("raise_transport", False)
+        if deadline is None:
+            self._throttle_request()
+        else:
+            from urllib3.util import Timeout
+
+            self._throttle_request(deadline=deadline)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Quark query deadline expired")
+            kwargs["timeout"] = Timeout(total=remaining, connect=5, read=30)
         
         headers = {
             "cookie": self.cookie,
@@ -145,6 +158,8 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             response = requests.request(method, url, headers=headers, **kwargs)
             return response
         except Exception as e:
+            if raise_transport:
+                raise
             logger.warning('Quark request failed error_type=%s', type(e).__name__)
             fake_response = requests.Response()
             fake_response.status_code = 500
@@ -346,17 +361,26 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         }
         response = self._send_request(
             "POST", url, json=payload, params=querystring
-        ).json()
-        return response
+        )
+        if isinstance(getattr(response, "status_code", None), int) and response.status_code >= 500:
+            return {"write_uncertain": True}
+        payload = response.json()
+        if not isinstance(payload, dict) or any(
+            not str(payload.get(key, 0)).lstrip("-").isdigit() for key in ("code", "status")
+        ):
+            return {"write_uncertain": True}
+        return payload
 
     def query_task(self, task_id: str) -> Dict:
         """查询任务状态"""
-        import time
         import random
         from datetime import datetime
+        from requests.exceptions import RequestException
 
+        deadline = time.monotonic() + self.QUERY_TASK_TIMEOUT_SECONDS
+        pending = {"code": 0, "status": 200, "data": {"status": 1}}
         retry_index = 0
-        while True:
+        while time.monotonic() < deadline:
             url = f"{self.BASE_URL}/1/clouddrive/task"
             querystring = {
                 "pr": "ucpro",
@@ -367,18 +391,30 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 "__dt": int(random.uniform(1, 5) * 60 * 1000),
                 "__t": datetime.now().timestamp(),
             }
-            response = self._send_request("GET", url, params=querystring).json()
-            if response["status"] != 200:
-                logger.warning('Quark task status query failed')
+            try:
+                http_response = self._send_request("GET", url, params=querystring, deadline=deadline, raise_transport=True)
+            except (TimeoutError, RequestException):
+                return {**pending, "message": "夸克任务查询超时或网络不可用，转存结果待确认"}
+            try:
+                response = http_response.json()
+            except ValueError:
+                return {"code": 1, "message": "夸克任务查询返回无效响应"}
+            if not isinstance(response, dict):
+                return {"code": 1, "message": "夸克任务查询返回无效响应"}
+            http_status = getattr(http_response, "status_code", 200)
+            if isinstance(http_status, int) and http_status >= 400:
+                return {**response, "status": http_status}
+            if str(response.get("status", 200)) != "200" or str(response.get("code", 0)) != "0":
                 return response
-            if response["data"]["status"] == 2:
-                break
-            else:
-                if retry_index == 0:
-                    pass
-                retry_index += 1
-                time.sleep(0.500)
-        return response
+            data = response.get("data")
+            if isinstance(data, dict) and str(data.get("status")) in ("2", "3", "failed", "error"):
+                return response
+            retry_index += 1
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.5 + 0.1 * retry_index, 3, remaining))
+        logger.warning("Quark task status remains unconfirmed")
+        return {**pending, "message": "夸克查询达到轮询时限，转存结果待确认"}
 
     def mkdir(self, dir_path: str) -> Dict:
         """创建目录"""

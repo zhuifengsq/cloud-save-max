@@ -2,6 +2,7 @@ from app.infrastructure.persistence.models.associations import role_permissions,
 from app.infrastructure.persistence.models.audit_log import AuditLog
 from app.infrastructure.persistence.models.audit_log_scheduler_setting import AuditLogSchedulerSetting
 from app.infrastructure.persistence.models.drive_account import DriveAccount
+from app.infrastructure.persistence.models.drama_transfer_checkpoint import DramaTransferCheckpoint
 from app.infrastructure.persistence.models.drive_account_probe_scheduler_setting import DriveAccountProbeSchedulerSetting
 from app.infrastructure.persistence.models.invalid_share_link import InvalidShareLink
 from app.infrastructure.persistence.models.magic_regex_rule import MagicRegexRule
@@ -28,6 +29,7 @@ __all__ = [
     "AuditLog",
     "AuditLogSchedulerSetting",
     "DriveAccount",
+    "DramaTransferCheckpoint",
     "DriveAccountProbeSchedulerSetting",
     "InvalidShareLink",
     "MagicRegexRule",
