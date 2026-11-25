@@ -76,3 +76,11 @@ router.beforeEach(async (to) => {
 
   return true
 })
+
+router.afterEach((to) => {
+  if (typeof document === 'undefined') return
+  const title = typeof to.meta?.title === 'string' && to.meta.title.trim()
+    ? `${to.meta.title.trim()} | 追剧一体化平台`
+    : '追剧一体化平台'
+  document.title = title
+})

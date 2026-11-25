@@ -53,11 +53,62 @@ function retry() {
   }
 }
 
+let supportsDisplayTransition: boolean | undefined
+
+function canTransitionDisplay() {
+  if (supportsDisplayTransition !== undefined) return supportsDisplayTransition
+  if (typeof window === 'undefined' || !window.CSS?.supports?.('transition-behavior', 'allow-discrete') || !document.body) {
+    return false
+  }
+  const probe = document.createElement('div')
+  probe.style.cssText = 'transition: display 1s allow-discrete !important; display: block;'
+  document.body.appendChild(probe)
+  getComputedStyle(probe).display
+  probe.style.display = 'none'
+  supportsDisplayTransition = getComputedStyle(probe).display === 'block'
+  probe.remove()
+  return supportsDisplayTransition
+}
+
+function supportsTopLayerExit() {
+  return typeof window !== 'undefined' && Boolean(window.CSS?.supports?.('overlay', 'auto')) && canTransitionDisplay()
+}
+
+async function closeDiscardDialog(choice?: string) {
+  const dialog = discardDialog.value
+  if (!dialog || !dialog.open) return
+  if (!supportsTopLayerExit()) {
+    dialog.setAttribute('data-closing', '')
+    const animations = dialog.getAnimations({ subtree: true })
+    if (animations.length > 0) {
+      await Promise.race([
+        Promise.allSettled(animations.map((a) => a.finished)),
+        new Promise((r) => setTimeout(r, 400)),
+      ])
+    }
+    if (!dialog.hasAttribute('data-closing')) return
+    dialog.removeAttribute('data-closing')
+  }
+  dialog.close(choice)
+}
+
 function confirmDiscard(directory?: string) {
   if (!activeId.value || !snapshot.value || !discardDialog.value) return
+  discardDialog.value.removeAttribute('data-closing')
   selected.value = { taskId: activeId.value, version: snapshot.value.version, directory }
   discardDialog.value.returnValue = ''
   discardDialog.value.showModal()
+}
+
+function onDiscardCancel(event: Event) {
+  event.preventDefault()
+  void closeDiscardDialog('cancel')
+}
+
+function onDiscardSubmit(event: SubmitEvent) {
+  event.preventDefault()
+  const submitter = event.submitter as HTMLButtonElement | null
+  void closeDiscardDialog(submitter?.value || 'cancel')
 }
 
 function onDiscardClosed(event: Event) {
@@ -111,13 +162,13 @@ function onDiscardClosed(event: Event) {
     </div>
     <!-- Let the browser close this modal without also closing the parent editor. -->
     <dialog ref="discardDialog" class="transfer-recovery__dialog" :aria-labelledby="dialogId"
-      @keydown.esc.stop @close="onDiscardClosed">
+      @keydown.esc.stop @cancel="onDiscardCancel" @close="onDiscardClosed">
       <h3 :id="dialogId">{{ selected?.directory ? '放弃目录续跑' : '放弃旧转存断点' }}</h3>
       <p v-if="selected?.directory">放弃「{{ selected.directory }}」的续跑记录。目标同名目录以后可能被整包跳过，缺失的集数可能无法自动补齐。若希望目录重新出现后自动补集，请保留续跑记录。</p>
       <p v-else>请先核对网盘目标目录。已经转存的文件会保留，下次重新规划可能重复转存这些文件。</p>
-      <form method="dialog" class="transfer-recovery__actions">
-        <button class="el-button el-button--danger" value="abandon">确认放弃</button>
-        <button class="el-button" value="cancel" autofocus>取消</button>
+      <form method="dialog" class="transfer-recovery__actions" @submit="onDiscardSubmit">
+        <button class="el-button el-button--danger" type="submit" value="abandon">确认放弃</button>
+        <button class="el-button" type="submit" value="cancel" autofocus>取消</button>
       </form>
     </dialog>
   </section>
@@ -155,11 +206,65 @@ function onDiscardClosed(event: Event) {
   background: var(--el-bg-color);
   color: var(--el-text-color-primary);
   overscroll-behavior: contain;
+  opacity: 0;
+  transition-property: opacity, transform, display, overlay;
+  transition-duration: 0.22s;
+  transition-timing-function: ease-out;
+  transition-behavior: allow-discrete;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .transfer-recovery__dialog:modal {
+    transform: scale(0.96);
+  }
+}
+
+.transfer-recovery__dialog[open]:where(:not([data-closing])) {
+  opacity: 1;
+}
+
+@starting-style {
+  .transfer-recovery__dialog[open]:where(:not([data-closing])) {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .transfer-recovery__dialog[open]:where(:not([data-closing])) {
+    transform: scale(1);
+  }
+
+  @starting-style {
+    .transfer-recovery__dialog[open]:where(:not([data-closing])) {
+      transform: scale(0.96);
+    }
+  }
 }
 
 .transfer-recovery__dialog::backdrop {
-  background: rgb(0 0 0 / 45%);
+  background: rgb(0 0 0 / 0);
   overflow: hidden;
   overscroll-behavior: contain;
+  transition-property: background-color, display, overlay;
+  transition-duration: 0.22s;
+  transition-timing-function: ease-out;
+  transition-behavior: allow-discrete;
+}
+
+.transfer-recovery__dialog[open]:where(:not([data-closing]))::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+@starting-style {
+  .transfer-recovery__dialog[open]:where(:not([data-closing]))::backdrop {
+    background: rgb(0 0 0 / 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transfer-recovery__dialog:modal,
+  .transfer-recovery__dialog::backdrop {
+    transition-duration: 0.08s;
+  }
 }
 </style>

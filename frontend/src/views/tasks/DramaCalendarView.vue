@@ -3,9 +3,11 @@ import { ElMessage } from 'element-plus'
 import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
 import CalendarDramaRefresh from '@/components/tasks/CalendarDramaRefresh.vue'
 import CalendarSavedProgress from '@/components/tasks/CalendarSavedProgress.vue'
+import { useIsMobile } from '@/composables/useIsMobile'
 import { correctTaskSavedProgress } from '@/api/tasks'
 import { TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
+import { runViewTransition } from '@/utils/viewTransition'
 
 import {
   TMDB_DETAIL_REFRESH_MS,
@@ -69,6 +71,9 @@ function handlePosterError(url: string) {
 function posterSource(url: string) {
   return posterFailures[url] === 'small' ? url.replace('/w500/', '/w185/') : url
 }
+function posterThumbSource(url: string) {
+  return url.replace('/w500/', '/w185/')
+}
 
 const loading = ref(false)
 const tasks = ref<TaskOverview[]>([])
@@ -80,9 +85,17 @@ const episodeNumbersById = reactive<Record<number, Record<string, number[]> | un
 const inferredWeekdaysById = reactive<Record<number, WeekdayKey[] | undefined>>({})
 const inferredCycleDaysById = reactive<Record<number, number | null | undefined>>({})
 const viewMode = ref<'week' | 'month'>('week')
+const viewModeModel = computed<'week' | 'month'>({
+  get: () => viewMode.value,
+  set: (next) => {
+    if (next === viewMode.value) return
+    runViewTransition(() => {
+      viewMode.value = next
+    })
+  },
+})
 const monthCursor = ref(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
-const viewport = reactive({ width: window.innerWidth })
-const isMobile = computed(() => viewport.width <= 768)
+const isMobile = useIsMobile(768)
 const selectedDateKey = ref<string>('')
 const refreshingDetails = reactive<Record<number, boolean>>({})
 const detailRefreshErrors = reactive<Record<number, string>>({})
@@ -1111,10 +1124,6 @@ function setDefaultSelectedDate() {
   selectedDateKey.value = keys[0] || formatYYYYMMDD(cur)
 }
 
-function onResize() {
-  viewport.width = window.innerWidth
-}
-
 function handleSelectCell(cell: { key: string; inMonth: boolean }) {
   if (!cell.inMonth) return
   selectedDateKey.value = cell.key
@@ -1288,7 +1297,6 @@ onMounted(() => {
   refreshData()
   startAutoCheck()
   document.addEventListener('visibilitychange', handleVisibilityChange)
-  window.addEventListener('resize', onResize)
 })
 
 onActivated(() => {
@@ -1325,7 +1333,6 @@ onBeforeUnmount(() => {
   unsubscribeTasksChanged?.()
   unsubscribeTasksChanged = null
   document.removeEventListener('visibilitychange', handleVisibilityChange)
-  window.removeEventListener('resize', onResize)
 })
 
 watch(
@@ -1349,11 +1356,11 @@ watch(
   <div class="page">
     <div class="header">
       <div class="title-wrap">
-        <div class="title">追剧日历</div>
+        <h1 class="title">追剧日历</h1>
         <div class="subtitle">按更新星期查看本周与本月排期，预计日期会标注。</div>
       </div>
       <div class="actions">
-        <el-radio-group v-model="viewMode" size="small" class="mode">
+        <el-radio-group v-model="viewModeModel" size="small" class="mode">
           <el-radio-button label="week">周视图</el-radio-button>
           <el-radio-button label="month">月视图</el-radio-button>
         </el-radio-group>
@@ -1418,10 +1425,10 @@ watch(
         </div>
         <div class="month-nav">
           <el-button text bg @click="goToday">回今天</el-button>
-          <el-button circle text bg @click="prevMonth">
+          <el-button circle text bg aria-label="上个月" @click="prevMonth">
             <el-icon><ArrowLeft /></el-icon>
           </el-button>
-          <el-button circle text bg @click="nextMonth">
+          <el-button circle text bg aria-label="下个月" @click="nextMonth">
             <el-icon><ArrowRight /></el-icon>
           </el-button>
         </div>
@@ -1453,7 +1460,15 @@ watch(
               :title="it.confirmed ? it.title : `${it.title}（预计更新）`"
             >
               <div class="calendar-artwork">
-                <img v-if="it.posterUrl" class="month-poster" :src="it.posterUrl" alt="poster" />
+                <img
+                  v-if="it.posterUrl && posterFailures[it.posterUrl] !== 'unavailable'"
+                  class="month-poster"
+                  :src="posterThumbSource(it.posterUrl)"
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  @error="posterFailures[it.posterUrl] = 'unavailable'"
+                />
                 <div v-else class="month-poster-fallback">TMDB</div>
                 <CalendarDramaRefresh
                   v-if="it.tmdbId" compact :title="it.title" :loading="Boolean(refreshingDetails[it.tmdbId])"
@@ -1484,7 +1499,15 @@ watch(
         <div v-else class="month-detail__list">
           <div v-for="it in selectedItems" :key="`sel-${selectedDateKey}-${it.taskId}`" class="month-detail__item">
             <div class="calendar-artwork">
-              <img v-if="it.posterUrl" class="month-detail__poster" :src="it.posterUrl" alt="poster" />
+              <img
+                v-if="it.posterUrl && posterFailures[it.posterUrl] !== 'unavailable'"
+                class="month-detail__poster"
+                :src="posterThumbSource(it.posterUrl)"
+                alt=""
+                loading="lazy"
+                decoding="async"
+                @error="posterFailures[it.posterUrl] = 'unavailable'"
+              />
               <div v-else class="month-detail__poster-fallback">TMDB</div>
               <CalendarDramaRefresh
                 v-if="it.tmdbId" :title="it.title" :loading="Boolean(refreshingDetails[it.tmdbId])"
@@ -1514,7 +1537,15 @@ watch(
       <div class="month-dialog">
         <div v-for="it in monthDialogItems" :key="`dlg-${monthMoreDialog.title}-${it.taskId}`" class="month-dialog-item">
           <div class="calendar-artwork">
-            <img v-if="it.posterUrl" class="month-dialog-poster" :src="it.posterUrl" alt="poster" />
+            <img
+              v-if="it.posterUrl && posterFailures[it.posterUrl] !== 'unavailable'"
+              class="month-dialog-poster"
+              :src="posterThumbSource(it.posterUrl)"
+              alt=""
+              loading="lazy"
+              decoding="async"
+              @error="posterFailures[it.posterUrl] = 'unavailable'"
+            />
             <div v-else class="month-dialog-poster-fallback">TMDB</div>
             <CalendarDramaRefresh
               v-if="it.tmdbId" compact :title="it.title" :loading="Boolean(refreshingDetails[it.tmdbId])"
@@ -1559,6 +1590,7 @@ watch(
 }
 
 .title {
+  margin: 0;
   font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -1588,6 +1620,11 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+.weekday:nth-child(n + 3) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 360px;
 }
 
 .weekday-title {
@@ -1885,7 +1922,7 @@ watch(
 }
 
 .month-detail__progress :deep(.el-progress-bar__outer) {
-  background: rgba(15, 23, 42, 0.12);
+  background: var(--el-fill-color);
 }
 
 .month-detail__progress :deep(.el-progress-bar__inner) {

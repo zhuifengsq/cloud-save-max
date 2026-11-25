@@ -174,7 +174,7 @@ async function exportExcel() {
   <div class="shell-page link-extractor">
     <div class="section-header">
       <div class="section-header__title">
-        <h2>链接整理</h2>
+        <h1>链接整理</h1>
         <div class="section-header__desc">提取影视链接、整理网盘内容，生成更新文案。</div>
       </div>
     </div>

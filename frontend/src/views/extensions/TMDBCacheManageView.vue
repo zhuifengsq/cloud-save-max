@@ -17,6 +17,7 @@ import {
 import { TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { isImeComposing } from '@/utils/ime'
 import type { TMDBCacheItem, TMDBCacheListItem, TMDBCacheSchedulerSetting, TMDBCacheStatus } from '@/types/tmdbCache'
 import { validateCrontab5, validateTimezone, describeCrontab, getNextExecutions } from '@/utils/cron'
 
@@ -541,14 +542,14 @@ onMounted(refreshAll)
               placeholder="标题关键词"
               clearable
               :style="{ width: isMobile ? '100%' : '240px' }"
-              @keyup.enter="onSearch"
+              @keydown.enter="!isImeComposing($event) && onSearch()"
             />
             <el-input
               v-model="query.status"
               placeholder="status（精确匹配）"
               clearable
               :style="{ width: isMobile ? '100%' : '220px' }"
-              @keyup.enter="onSearch"
+              @keydown.enter="!isImeComposing($event) && onSearch()"
             />
             <el-checkbox v-model="query.expiredOnly">仅过期</el-checkbox>
             <el-button :loading="list.loading" @click="onSearch">查询</el-button>

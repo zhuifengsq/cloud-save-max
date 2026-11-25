@@ -17,6 +17,7 @@ import { PLUGIN_READ, PLUGIN_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import type { ApiSearchSource, ApiSearchSourceInput, PythonSearchPlugin, TaskSuggestionItem } from '@/types/resourceSearch'
 import { formatDateTime } from '@/utils/capacity'
+import { isImeComposing } from '@/utils/ime'
 
 const auth = useAuthStore()
 const canRead = computed(() => auth.permissions.includes(PLUGIN_READ) && auth.roles.includes('admin'))
@@ -436,7 +437,7 @@ class MySearchPlugin(BaseSearchPlugin):
     </el-dialog>
 
     <el-dialog v-model="test.visible" :title="`测试搜索：${test.title}`" width="min(760px, 96vw)" append-to-body>
-      <div class="test-bar"><el-input v-model="test.keyword" placeholder="输入影视名称" @keyup.enter="runTest" /><el-button type="primary" :loading="test.loading" @click="runTest">搜索</el-button></div>
+      <div class="test-bar"><el-input v-model="test.keyword" placeholder="输入影视名称" @keydown.enter="!isImeComposing($event) && runTest()" /><el-button type="primary" :loading="test.loading" @click="runTest">搜索</el-button></div>
       <p v-if="test.message" class="test-message">{{ test.message }}</p>
       <el-empty v-if="!test.loading && !test.results.length" description="暂无搜索结果" />
       <div v-else class="test-results">

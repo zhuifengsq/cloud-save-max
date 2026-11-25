@@ -1,7 +1,18 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      try {
+        var stored = localStorage.getItem('theme')
+        var valid = stored === 'light' || stored === 'dark' ? stored : null
+        var meta = document.querySelector('meta[name="color-scheme"]')
+        if (meta) meta.setAttribute('content', valid || 'light dark')
+        var resolved = valid || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        document.documentElement.dataset.theme = resolved
+      } catch (e) {}
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>追剧一体化平台</title>

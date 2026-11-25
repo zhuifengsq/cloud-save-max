@@ -15,6 +15,7 @@ import {
   setUserStatus,
 } from '@/api/users'
 import { useAuthStore } from '@/stores/auth'
+import { isImeComposing } from '@/utils/ime'
 import type { RoleItem, UserItem } from '@/types/user'
 
 const auth = useAuthStore()
@@ -122,8 +123,8 @@ onMounted(async () => {
 <template>
   <div class="page-stack">
     <div class="section-header">
-            <div class="section-header__title">
-        <h2>用户管理</h2>
+      <div class="section-header__title">
+        <h1>用户管理</h1>
         <div class="section-header__desc">管理登录账号、角色与权限分配。</div>
       </div>
     </div>
@@ -136,7 +137,7 @@ onMounted(async () => {
               class="user-search__input"
               placeholder="搜索用户名/邮箱"
               clearable
-              @keyup.enter="loadUsers"
+              @keydown.enter="!isImeComposing($event) && loadUsers()"
               @clear="loadUsers"
             />
             <el-button type="primary" class="user-search__button" @click="loadUsers">搜索</el-button>
@@ -219,13 +220,13 @@ onMounted(async () => {
     <el-dialog v-model="createDialogVisible" title="创建用户" width="420px">
       <el-form label-position="top">
         <el-form-item label="用户名">
-          <el-input v-model="createForm.username" />
+          <el-input v-model="createForm.username" name="username" autocomplete="username" spellcheck="false" autocapitalize="off" />
         </el-form-item>
         <el-form-item label="邮箱">
-          <el-input v-model="createForm.email" />
+          <el-input v-model="createForm.email" name="email" type="email" autocomplete="email" spellcheck="false" />
         </el-form-item>
         <el-form-item label="密码">
-          <el-input v-model="createForm.password" type="password" show-password />
+          <el-input v-model="createForm.password" name="password" type="password" autocomplete="new-password" show-password />
         </el-form-item>
       </el-form>
       <template #footer>

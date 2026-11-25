@@ -18,6 +18,8 @@ import type { TaskOverview, TaskDetail } from '@/types/tasks'
 import type { DriveBrowseItem, MagicRegexRule, SharePreviewItem } from '@/types/tasks'
 import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
+import { isImeComposing } from '@/utils/ime'
+import { useIsMobile } from '@/composables/useIsMobile'
 import { resolveDramaEpisodeProgress } from '@/utils/dramaEpisodeProgress'
 import { categoryFromTmdb } from '@/utils/mediaCategory'
 import DramaTransferRecovery from '@/components/tasks/DramaTransferRecovery.vue'
@@ -266,21 +268,8 @@ const saveAuto = reactive({
   folderNameCache: {} as Record<string, string>,
 })
 
-const viewport = reactive({ width: window.innerWidth })
-const isMobile = computed(() => viewport.width <= 768)
+const isMobile = useIsMobile(768)
 const shareDialogWidth = computed(() => (isMobile.value ? '96vw' : '1100px'))
-
-function onResize() {
-  viewport.width = window.innerWidth
-}
-
-onMounted(() => {
-  window.addEventListener('resize', onResize, { passive: true })
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', onResize)
-})
 
 function formatTs(value: any) {
   if (value === undefined || value === null || value === '') return ''
@@ -2488,8 +2477,8 @@ async function submitSaveTemplate() {
             <el-option label="电视剧" value="tv" />
             <el-option label="电影" value="movie" />
           </el-select>
-          <el-input v-model="tmdbLink.q" placeholder="关键词（默认使用任务名）" style="flex: 1; min-width: 220px" @keyup.enter="runTmdbLinkSearch" />
-          <el-input v-model="tmdbLink.year" placeholder="年份(可选)" style="width: 120px" @keyup.enter="runTmdbLinkSearch" />
+          <el-input v-model="tmdbLink.q" placeholder="关键词（默认使用任务名）" style="flex: 1; min-width: 220px" @keydown.enter="!isImeComposing($event) && runTmdbLinkSearch()" />
+          <el-input v-model="tmdbLink.year" placeholder="年份(可选)" style="width: 120px" @keydown.enter="!isImeComposing($event) && runTmdbLinkSearch()" />
           <el-button type="primary" :disabled="!tmdbLink.q.trim()" @click="runTmdbLinkSearch">搜索</el-button>
         </div>
 
@@ -2514,6 +2503,7 @@ async function submitSaveTemplate() {
                 v-if="posterUrlFromTMDB(row.poster_path)"
                 :src="posterUrlFromTMDB(row.poster_path)"
                 fit="cover"
+                lazy
                 style="width: 48px; height: 72px; border-radius: 6px"
               />
             </template>
@@ -3160,12 +3150,12 @@ async function submitSaveTemplate() {
 }
 
 .task-suggestions__flag--ok {
-  color: #0f9d6b;
+  color: var(--el-color-success);
   background: rgba(16, 185, 129, 0.14);
 }
 
 .task-suggestions__flag--bad {
-  color: #d14343;
+  color: var(--el-color-danger);
   background: rgba(239, 68, 68, 0.14);
 }
 
@@ -3180,13 +3170,20 @@ async function submitSaveTemplate() {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  opacity: 0;
+  opacity: 1;
   transition: opacity 150ms ease, background 150ms ease, border-color 150ms ease;
 }
 
-.task-suggestions__item:hover .task-suggestions__copy,
-.task-suggestions__item--selected .task-suggestions__copy {
-  opacity: 1;
+@media (hover: hover) and (pointer: fine) {
+  .task-suggestions__copy {
+    opacity: 0;
+  }
+
+  .task-suggestions__item:hover .task-suggestions__copy,
+  .task-suggestions__item:focus-within .task-suggestions__copy,
+  .task-suggestions__item--selected .task-suggestions__copy {
+    opacity: 1;
+  }
 }
 
 .task-suggestions__copy:hover {

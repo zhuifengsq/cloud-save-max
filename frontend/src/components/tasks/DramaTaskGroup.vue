@@ -105,9 +105,30 @@ const executionLabels: Record<string, string> = {
             :title="group.pinned ? '取消置顶' : '置顶'"
             @click.stop="emit('pin')"
           >
-            <span aria-hidden="true">📌</span>
+            <svg class="drama-group__pin-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path
+                v-if="group.pinned"
+                fill="currentColor"
+                d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a6 6 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707s.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a6 6 0 0 1 1.013.16l3.134-3.133a3 3 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146"
+              />
+              <path
+                v-else
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linejoin="round"
+                d="M9.8 1.4 14.6 6.2c-.6.6-1.4.6-2 .5L9.5 9.8c.2.9.1 2-.6 2.8L6.1 9.8 2.8 13.1l-.9.1.1-.9L5.3 9 2.5 6.2c.8-.7 1.9-.8 2.8-.6l3.1-3.1c-.1-.6-.1-1.4.5-2Z"
+              />
+            </svg>
           </button>
-          <span v-else-if="group.pinned" class="drama-group__pin-marker" role="img" aria-label="已置顶">📌</span>
+          <span v-else-if="group.pinned" class="drama-group__pin-marker" role="img" aria-label="已置顶">
+            <svg class="drama-group__pin-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a6 6 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707s.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a6 6 0 0 1 1.013.16l3.134-3.133a3 3 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146"
+              />
+            </svg>
+          </span>
         </div>
         <span class="drama-group__meta">
           <span>{{ group.items.length }} 个任务</span>
@@ -329,9 +350,13 @@ const executionLabels: Record<string, string> = {
   cursor: pointer;
 }
 
-.drama-group__pin[aria-pressed='false'] span {
+.drama-group__pin[aria-pressed='false'] .drama-group__pin-icon {
   opacity: 0.65;
-  filter: grayscale(1);
+}
+
+.drama-group__pin[aria-pressed='true'] .drama-group__pin-icon,
+.drama-group__pin-marker .drama-group__pin-icon {
+  color: var(--el-color-primary);
 }
 
 .drama-group__pin:hover,
@@ -555,6 +580,23 @@ summary:focus-visible {
 .drama-group-task__history {
   border-top: 1px solid var(--el-border-color-lighter);
   font-size: 13px;
+}
+
+@supports (interpolate-size: allow-keywords) {
+  @media (prefers-reduced-motion: no-preference) {
+    .drama-group-task__history::details-content {
+      block-size: 0;
+      opacity: 0;
+      overflow: hidden;
+      transition: block-size 0.22s ease, opacity 0.2s ease, content-visibility 0.22s ease;
+      transition-behavior: allow-discrete;
+    }
+
+    .drama-group-task__history[open]::details-content {
+      block-size: auto;
+      opacity: 1;
+    }
+  }
 }
 
 .drama-group-task__history > summary {

@@ -3,6 +3,7 @@ import axios, { type AxiosError } from 'axios'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 
+import CronPreviewDialog from '@/components/CronPreviewDialog.vue'
 import CapacityAccountCard from '@/components/dashboard/CapacityAccountCard.vue'
 import DriveAccountDrawer from '@/components/extensions/DriveAccountDrawer.vue'
 import {
@@ -23,7 +24,7 @@ import { DRIVE_ACCOUNT_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
 import type { ConfigFieldItem, DriveAccountItem, DriveTypeItem } from '@/types/extensions'
-import { validateCrontab5, validateTimezone, describeCrontab, getNextExecutions } from '@/utils/cron'
+import { validateCrontab5, validateTimezone } from '@/utils/cron'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.permissions.includes(DRIVE_ACCOUNT_WRITE))
@@ -358,7 +359,7 @@ onMounted(loadProbeScheduler)
     <div class="section-header">
       <div class="section-header__title">
         <div class="section-header__eyebrow">DRIVE ACCOUNTS</div>
-        <h2>账号管理</h2>
+        <h1>账号管理</h1>
         <div class="section-header__desc">集中管理网盘账号、容量状态与自动签到。</div>
       </div>
       <div class="toolbar__right">
@@ -537,28 +538,11 @@ onMounted(loadProbeScheduler)
     </el-dialog>
 
     <!-- Cron 预览弹窗 -->
-    <el-dialog v-model="cronPreviewVisible" title="执行计划预览" width="480px" :close-on-click-modal="true">
-      <div>
-        <div style="margin-bottom: 16px;">
-          <div style="font-weight: 600; margin-bottom: 8px;">执行规则</div>
-          <div style="color: var(--el-text-color-regular);">{{ describeCrontab(probeScheduler.data.crontab) || '无法解析' }}</div>
-        </div>
-        <div style="margin-bottom: 16px;">
-          <div style="font-weight: 600; margin-bottom: 8px;">cron 表达式</div>
-          <div style="font-family: monospace; color: var(--el-text-color-regular);">{{ probeScheduler.data.crontab }}</div>
-        </div>
-        <div>
-          <div style="font-weight: 600; margin-bottom: 8px;">接下来执行时间</div>
-          <div v-if="getNextExecutions(probeScheduler.data.crontab, 5).length > 0">
-            <div v-for="(time, idx) in getNextExecutions(probeScheduler.data.crontab, 5)" :key="idx" style="color: var(--el-text-color-regular); padding: 4px 0;">
-              {{ time.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short' }) }}
-            </div>
-            <div style="color: var(--el-text-color-placeholder); padding: 4px 0;">...</div>
-          </div>
-          <div v-else style="color: var(--el-text-color-placeholder);">无法计算</div>
-        </div>
-      </div>
-    </el-dialog>
+    <CronPreviewDialog
+      v-model="cronPreviewVisible"
+      :crontab="String(probeScheduler.data.crontab || '')"
+      :timezone="String(probeScheduler.data.timezone || '')"
+    />
   </div>
 </template>
 

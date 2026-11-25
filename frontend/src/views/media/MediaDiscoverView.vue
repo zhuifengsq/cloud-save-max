@@ -2,6 +2,8 @@
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Search } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
+import { isImeComposing } from '@/utils/ime'
+import { runViewTransition } from '@/utils/viewTransition'
 
 import { fetchDoubanCategories, fetchDoubanList, fetchTMDBDetail, searchTMDB } from '@/api/media'
 import ResponsivePagination from '@/components/ResponsivePagination.vue'
@@ -483,17 +485,21 @@ async function runSearch(page: number) {
 async function doSearch() {
   const q = String(searchState.q || '').trim()
   if (!q) {
-    viewMode.value = 'douban'
-    searchItems.value = []
-    searchPager.page = 1
-    searchPager.totalPages = 0
-    searchPager.totalResults = 0
-    searchState.checked = false
+    runViewTransition(() => {
+      viewMode.value = 'douban'
+      searchItems.value = []
+      searchPager.page = 1
+      searchPager.totalPages = 0
+      searchPager.totalResults = 0
+      searchState.checked = false
+    })
     return
   }
   searchPager.page = 1
   await runSearch(1)
-  viewMode.value = 'tmdb'
+  runViewTransition(() => {
+    viewMode.value = 'tmdb'
+  }, '#discover-results-heading')
 }
 
 async function onSearchPageChange(page: number) {
@@ -504,7 +510,9 @@ async function onSearchPageChange(page: number) {
 
 // 从 TMDB 搜索结果回到豆瓣浏览列表，保留搜索关键字方便再次搜索
 function backToDouban() {
-  viewMode.value = 'douban'
+  runViewTransition(() => {
+    viewMode.value = 'douban'
+  }, '#discover-filter-heading')
 }
 
 const isTmdbMode = computed(() => viewMode.value === 'tmdb')
@@ -602,15 +610,15 @@ watch(() => route.name, (name, previousName) => {
 <template>
   <div class="shell-page">
     <div class="section-header">
-            <div class="section-header__title">
-        <h2>影视发现</h2>
+      <div class="section-header__title">
+        <h1>影视发现</h1>
         <div class="section-header__desc">搜索 TMDB 资源，一键添加为追剧任务。</div>
       </div>
     </div>
 
     <el-card class="page__card search-card" shadow="never">
       <div class="search-card__controls">
-        <el-input v-model="searchState.q" class="search-card__input" placeholder="搜索 TMDB 资源（点击搜索后切换结果）" clearable @keydown.enter="!($event as KeyboardEvent).isComposing && doSearch()">
+        <el-input v-model="searchState.q" class="search-card__input" placeholder="搜索 TMDB 资源（点击搜索后切换结果）" clearable @keydown.enter="!isImeComposing($event) && doSearch()">
           <template #prefix>
             <el-icon class="search-card__icon"><Search /></el-icon>
           </template>
@@ -625,7 +633,7 @@ watch(() => route.name, (name, previousName) => {
         <template #header>
           <div class="toolbar">
             <el-button size="small" :icon="ArrowLeft" @click="backToDouban">返回影视发现</el-button>
-            <div class="toolbar__title">搜索结果</div>
+            <div id="discover-results-heading" tabindex="-1" class="toolbar__title">搜索结果</div>
             <div class="toolbar__content">
               <span class="search-result__meta">
                 <template v-if="String(searchState.q || '').trim()">「{{ String(searchState.q || '').trim() }}」· </template>
@@ -636,9 +644,19 @@ watch(() => route.name, (name, previousName) => {
           </div>
         </template>
         <div v-loading="searchState.loading" class="poster-grid">
-          <div v-for="row in searchItems" :key="String(row.id || row.title || row.name)" class="poster-card" @click="openDetailByBrief(row)">
+          <div
+            v-for="row in searchItems"
+            :key="String(row.id || row.title || row.name)"
+            class="poster-card"
+            role="button"
+            tabindex="0"
+            :aria-label="`查看 ${bestTitle(row) || '影视'} 详情`"
+            @click="openDetailByBrief(row)"
+            @keydown.enter.self="openDetailByBrief(row)"
+            @keydown.space.prevent.self="openDetailByBrief(row)"
+          >
             <div class="poster-card__cover">
-              <el-image v-if="posterUrlFromTMDB(row.poster_path)" :src="posterUrlFromTMDB(row.poster_path)" fit="cover" class="poster-card__img" />
+              <el-image v-if="posterUrlFromTMDB(row.poster_path)" :src="posterUrlFromTMDB(row.poster_path)" fit="cover" lazy class="poster-card__img" />
               <div v-else class="poster-card__placeholder">暂无海报</div>
               <div class="poster-card__rating">
                 {{ row.vote_average != null ? Number(row.vote_average).toFixed(1) : '-' }}
@@ -681,7 +699,7 @@ watch(() => route.name, (name, previousName) => {
       <el-card class="page__card page__card--compact" shadow="never">
         <template #header>
           <div class="toolbar">
-            <div class="toolbar__title">筛选</div>
+            <div id="discover-filter-heading" tabindex="-1" class="toolbar__title">筛选</div>
             <div class="toolbar__content">
               <el-select v-model="filters.main" size="small" :disabled="categoriesLoading" style="width: 220px" @change="onCategoryChange">
                 <el-option v-for="c in categories" :key="c.key" :label="c.label" :value="c.key" />
@@ -693,9 +711,19 @@ watch(() => route.name, (name, previousName) => {
           </div>
         </template>
         <div v-loading="listState.loading" class="poster-grid">
-          <div v-for="row in items" :key="row.id" class="poster-card" @click="openDetailFromDouban(row)">
+          <div
+            v-for="row in items"
+            :key="row.id"
+            class="poster-card"
+            role="button"
+            tabindex="0"
+            :aria-label="`查看 ${row.title} 详情`"
+            @click="openDetailFromDouban(row)"
+            @keydown.enter.self="openDetailFromDouban(row)"
+            @keydown.space.prevent.self="openDetailFromDouban(row)"
+          >
             <div class="poster-card__cover">
-              <el-image v-if="bestDoubanPoster(row)" :src="bestDoubanPoster(row)" fit="cover" class="poster-card__img" />
+              <el-image v-if="bestDoubanPoster(row)" :src="bestDoubanPoster(row)" fit="cover" lazy class="poster-card__img" />
               <div v-else class="poster-card__placeholder">暂无海报</div>
               <div class="poster-card__rating">
                 {{ row.rating?.value != null ? Number(row.rating.value).toFixed(1) : '-' }}
@@ -784,20 +812,20 @@ watch(() => route.name, (name, previousName) => {
       :close-on-click-modal="false"
       @close="closeExistingTaskDialog"
     >
-      <div style="font-size: 14px; line-height: 1.6">
-        <div>检测到该影视已存在 <span style="font-weight: 600">{{ existingTaskDialog.count }}</span> 个关联的追剧任务。</div>
-        <div style="margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter)">
-          <div style="font-weight: 600">{{ existingTaskDialog.target?.taskname || '' }}</div>
-          <div style="margin-top: 4px; font-size: 12px; color: var(--el-text-color-secondary)">
+      <div class="existing-task-body">
+        <div>检测到该影视已存在 <span class="existing-task-body__count">{{ existingTaskDialog.count }}</span> 个关联的追剧任务。</div>
+        <div class="existing-task-card">
+          <div class="existing-task-card__name">{{ existingTaskDialog.target?.taskname || '' }}</div>
+          <div class="existing-task-card__meta">
             最近更新：{{ existingTaskDialog.target?.updated_at || '-' }}
           </div>
         </div>
-        <div style="margin-top: 10px; color: var(--el-text-color-secondary); font-size: 13px">
+        <div class="existing-task-body__hint">
           你可以选择修改已有任务，或者继续添加一个新的追剧任务。
         </div>
       </div>
       <template #footer>
-        <div style="display: flex; justify-content: flex-end; gap: 10px">
+        <div class="dialog-footer-actions">
           <el-button @click="closeExistingTaskDialog">取消</el-button>
           <el-button @click="confirmCreateNewTask">添加新任务</el-button>
           <el-button type="primary" @click="confirmEditExistingTask">修改已有任务</el-button>
@@ -823,7 +851,7 @@ watch(() => route.name, (name, previousName) => {
         >
           <el-table-column label="海报" width="90">
             <template #default="{ row }">
-              <el-image v-if="posterUrlFromTMDB(row.poster_path)" :src="posterUrlFromTMDB(row.poster_path)" fit="cover" style="width: 60px; height: 84px; border-radius: 6px" />
+              <el-image v-if="posterUrlFromTMDB(row.poster_path)" :src="posterUrlFromTMDB(row.poster_path)" fit="cover" lazy class="tmdb-pick__poster" />
             </template>
           </el-table-column>
           <el-table-column label="标题" min-width="220">
@@ -871,9 +899,9 @@ watch(() => route.name, (name, previousName) => {
       :show-close="runLogDialog.status !== 'running'"
       @closed="stopRunLogStream"
     >
-      <div v-if="runLogDialog.status === 'running'" style="color: var(--el-color-primary); margin-bottom: 8px">执行中...</div>
-      <div v-if="runLogDialog.stage" style="color: var(--el-color-info); margin-bottom: 8px">阶段：{{ runLogDialog.stage }}</div>
-      <pre v-if="runLogDialog.content" style="white-space: pre-wrap; font-size: 12px; line-height: 1.5; background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 4px; padding: 12px; max-height: 480px; overflow: auto; color: var(--el-text-color-primary)">{{ runLogDialog.content }}</pre>
+      <div v-if="runLogDialog.status === 'running'" class="run-log-status">执行中...</div>
+      <div v-if="runLogDialog.stage" class="run-log-stage">阶段：{{ runLogDialog.stage }}</div>
+      <pre v-if="runLogDialog.content" class="log-pre">{{ runLogDialog.content }}</pre>
       <template #footer>
         <el-button @click="runLogDialog.visible = false">关闭</el-button>
       </template>
@@ -980,6 +1008,10 @@ watch(() => route.name, (name, previousName) => {
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
   height: 100%;
+}
+.poster-card:nth-child(n + 9) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 300px;
 }
 .poster-card:hover {
   transform: translateY(-2px);
@@ -1124,6 +1156,52 @@ watch(() => route.name, (name, previousName) => {
   margin-top: 14px;
   white-space: pre-wrap;
   line-height: 1.7;
+  text-wrap: pretty;
+}
+.existing-task-body {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.existing-task-body__count {
+  font-weight: 600;
+}
+.existing-task-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-lighter);
+}
+.existing-task-card__name {
+  font-weight: 600;
+}
+.existing-task-card__meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.existing-task-body__hint {
+  margin-top: 10px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.dialog-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.tmdb-pick__poster {
+  width: 60px;
+  height: 84px;
+  border-radius: 6px;
+}
+.run-log-status {
+  color: var(--el-color-primary);
+  margin-bottom: 8px;
+}
+.run-log-stage {
+  color: var(--el-color-info);
+  margin-bottom: 8px;
 }
 .detail__seasons {
   margin-top: 14px;

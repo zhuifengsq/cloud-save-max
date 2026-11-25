@@ -1,5 +1,15 @@
 <script setup lang="ts">
-import type * as EChartsNS from 'echarts'
+import type { ComposeOption, ECharts } from 'echarts/core'
+import type { LineSeriesOption } from 'echarts/charts'
+import type {
+  GridComponentOption,
+  LegendComponentOption,
+  TooltipComponentOption,
+} from 'echarts/components'
+
+type ChartOption = ComposeOption<
+  LineSeriesOption | GridComponentOption | LegendComponentOption | TooltipComponentOption
+>
 
 type AxisKey = 'left' | 'right'
 
@@ -24,19 +34,32 @@ const props = withDefaults(
 )
 
 const rootEl = ref<HTMLDivElement | null>(null)
-let echarts: typeof import('echarts') | null = null
-let chart: EChartsNS.ECharts | null = null
+let echartsCore: typeof import('echarts/core') | null = null
+let chart: ECharts | null = null
 let resizeObserver: ResizeObserver | null = null
 let themeListener: ((e: Event) => void) | null = null
 
 async function getEcharts() {
-  if (!echarts) {
-    echarts = await import('echarts')
+  if (!echartsCore) {
+    const [core, charts, components, renderers] = await Promise.all([
+      import('echarts/core'),
+      import('echarts/charts'),
+      import('echarts/components'),
+      import('echarts/renderers'),
+    ])
+    core.use([
+      charts.LineChart,
+      components.GridComponent,
+      components.TooltipComponent,
+      components.LegendComponent,
+      renderers.CanvasRenderer,
+    ])
+    echartsCore = core
   }
-  return echarts
+  return echartsCore
 }
 
-function buildOption(): EChartsNS.EChartsOption {
+function buildOption(): ChartOption {
   const cssVar = (name: string, fallback: string) => {
     if (typeof window === 'undefined') return fallback
     const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -52,11 +75,15 @@ function buildOption(): EChartsNS.EChartsOption {
   const leftSeries = props.series.filter((s) => s.axis === 'left')
   const rightSeries = props.series.filter((s) => s.axis === 'right')
 
-  const option: EChartsNS.EChartsOption = {
+  const option: ChartOption = {
     grid: { left: 44, right: 54, top: 38, bottom: 34, containLabel: false },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'line' },
+      axisPointer: {
+        type: 'line',
+        lineStyle: { color: border },
+        label: { backgroundColor: overlayBg, color: textPrimary, borderColor: borderLight },
+      },
       backgroundColor: overlayBg,
       borderColor: borderLight,
       textStyle: { color: textPrimary },
@@ -97,10 +124,6 @@ function buildOption(): EChartsNS.EChartsOption {
         splitLine: { show: false },
       },
     ],
-    axisPointer: {
-      lineStyle: { color: border },
-      label: { backgroundColor: overlayBg, color: textPrimary, borderColor: borderLight },
-    },
     series: [
       ...leftSeries.map((s) => ({
         name: s.name,

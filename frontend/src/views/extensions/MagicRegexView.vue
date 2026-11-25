@@ -18,6 +18,7 @@ import { fetchTaskTemplates, createTaskTemplate, updateTaskTemplate, deleteTaskT
 import type { TaskTemplate } from '@/api/taskTemplates'
 import { TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
+import { isImeComposing } from '@/utils/ime'
 import type {
   DramaLeadInMaterialInput,
   DramaLeadInMaterialMode,
@@ -1142,7 +1143,7 @@ onMounted(() => {
           >
             <div class="sharer-tag-list">
               <div style="display: flex; gap: 8px; margin-bottom: 12px">
-                <el-input v-model="sharerDialog.inputValue" placeholder="名称，多个用 | 分隔" size="small" @keyup.enter="addSharerFromInput" />
+                <el-input v-model="sharerDialog.inputValue" placeholder="名称，多个用 | 分隔" size="small" @keydown.enter="!isImeComposing($event) && addSharerFromInput()" />
                 <el-button type="primary" size="small" :disabled="!sharerDialog.inputValue?.trim()" @click="addSharerFromInput">添加</el-button>
               </div>
               <el-tag

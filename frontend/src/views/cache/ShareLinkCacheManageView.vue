@@ -14,6 +14,7 @@ import {
 import { useIsMobile } from '@/composables/useIsMobile'
 import { TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
+import { isImeComposing } from '@/utils/ime'
 import type { InvalidShareLinkListItem, SharePreviewBatchCacheListItem } from '@/types/shareLinkCache'
 
 const auth = useAuthStore()
@@ -187,7 +188,7 @@ onMounted(async () => {
                   clearable
                   placeholder="搜索 shareurl"
                   :style="{ width: isMobile ? '100%' : '360px' }"
-                  @keyup.enter="loadCache"
+                  @keydown.enter="!isImeComposing($event) && loadCache()"
                   @clear="loadCache"
                 />
                 <el-input
@@ -195,7 +196,7 @@ onMounted(async () => {
                   clearable
                   placeholder="drive_type（可选）"
                   :style="{ width: isMobile ? '100%' : '220px' }"
-                  @keyup.enter="loadCache"
+                  @keydown.enter="!isImeComposing($event) && loadCache()"
                   @clear="loadCache"
                 />
                 <el-segmented
@@ -265,7 +266,7 @@ onMounted(async () => {
                   clearable
                   placeholder="搜索 shareurl"
                   :style="{ width: isMobile ? '100%' : '360px' }"
-                  @keyup.enter="loadInvalid"
+                  @keydown.enter="!isImeComposing($event) && loadInvalid()"
                   @clear="loadInvalid"
                 />
                 <el-input
@@ -273,7 +274,7 @@ onMounted(async () => {
                   clearable
                   placeholder="drive_type（可选）"
                   :style="{ width: isMobile ? '100%' : '220px' }"
-                  @keyup.enter="loadInvalid"
+                  @keydown.enter="!isImeComposing($event) && loadInvalid()"
                   @clear="loadInvalid"
                 />
               </div>

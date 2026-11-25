@@ -4,6 +4,7 @@ import { ArrowRight, Menu, User } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import NavMenu from '@/layouts/NavMenu.vue'
+import { useTheme } from '@/composables/useTheme'
 import { resetDynamicRoutes } from '@/router'
 import { useAuthStore } from '@/stores/auth'
 import logoCat from '@/assets/logo-cat.png'
@@ -49,24 +50,7 @@ const secondaryNav = computed(() =>
 )
 
 const mobileNavVisible = ref(false)
-const theme = ref<'light' | 'dark'>(getInitialTheme())
-const isDark = computed({
-  get: () => theme.value === 'dark',
-  set: (val: boolean) => {
-    theme.value = val ? 'dark' : 'light'
-  },
-})
-
-function getInitialTheme(): 'light' | 'dark' {
-  if (typeof window === 'undefined') return 'light'
-  const stored = window.localStorage.getItem('theme')
-  return stored === 'dark' ? 'dark' : 'light'
-}
-
-function applyTheme(value: 'light' | 'dark') {
-  if (typeof document === 'undefined') return
-  document.documentElement.dataset.theme = value
-}
+const { isDark } = useTheme()
 
 function collectRouteNames(routes: any[]) {
   const names: string[] = []
@@ -90,24 +74,11 @@ async function handleLogout() {
   resetDynamicRoutes(routeNames)
   router.replace('/login')
 }
-
-watch(
-  theme,
-  (value) => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('theme', value)
-    }
-    applyTheme(value)
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('theme-change', { detail: value }))
-    }
-  },
-  { immediate: true },
-)
 </script>
 
 <template>
   <div class="app-shell">
+    <a href="#main-content" class="skip-link">跳到主要内容</a>
     <aside class="app-aside">
       <div class="glass-panel app-nav-card">
         <div class="app-logo">
@@ -120,7 +91,7 @@ watch(
           </div>
         </div>
 
-        <nav class="app-nav-sections">
+        <nav class="app-nav-sections" aria-label="主导航">
           <div class="app-nav-section">
             <div class="app-nav-section__title">影视工作区</div>
             <NavMenu :items="primaryNav" :active-path="route.path" />
@@ -161,7 +132,7 @@ watch(
           </div>
         </div>
       </template>
-      <nav class="app-nav-sections">
+      <nav class="app-nav-sections" aria-label="移动端导航">
         <div class="app-nav-section">
           <div class="app-nav-section__title">影视工作区</div>
           <NavMenu
@@ -183,7 +154,7 @@ watch(
       </nav>
     </el-drawer>
 
-    <main class="app-content">
+    <main id="main-content" tabindex="-1" class="app-content">
       <header class="glass-panel app-header">
         <div class="app-header__left">
           <el-button text aria-label="打开导航菜单" class="app-header__menu" @click="mobileNavVisible = true">

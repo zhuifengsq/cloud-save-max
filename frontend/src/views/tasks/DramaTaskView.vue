@@ -2,11 +2,13 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
 
+import CronPreviewDialog from '@/components/CronPreviewDialog.vue'
 import ResponsivePagination from '@/components/ResponsivePagination.vue'
 import DramaLeadInDialog from '@/components/tasks/DramaLeadInDialog.vue'
 import DramaTaskDrawer from '@/components/tasks/DramaTaskDrawer.vue'
 import DramaTaskGroup from '@/components/tasks/DramaTaskGroup.vue'
 import type { DramaTaskGroupData } from '@/components/tasks/DramaTaskGroup.vue'
+import { useIsMobile } from '@/composables/useIsMobile'
 import {
   createTask,
   createTaskShareLink,
@@ -30,7 +32,7 @@ import { loadTaskPage, loadTaskOrderIndex, dropSharedTasks } from '@/stores/task
 import { ensureTmdbDetail, tmdbDetailsById } from '@/stores/tmdbDetailCache'
 import { markTasksChanged, subscribeTasksChanged } from '@/utils/taskChangeBus'
 import type { TaskDetail, TaskExecutionSummary, TaskReadFilters, TaskFacets, TaskSummary as TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/tasks'
-import { validateCrontab5, validateTimezone, describeCrontab, getNextExecutions } from '@/utils/cron'
+import { validateCrontab5, validateTimezone } from '@/utils/cron'
 import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 import { readTaskRunError } from '@/utils/failureMessage'
@@ -144,8 +146,7 @@ function setRunAllPreRef(taskId: number) {
   }
 }
 
-const viewport = reactive({ width: window.innerWidth })
-const isMobile = computed(() => viewport.width <= 768)
+const isMobile = useIsMobile(768)
 
 const runAllStats = computed(() => {
   const items = runAllDialog.items
@@ -165,10 +166,6 @@ const runAllStats = computed(() => {
   }
   return stats
 })
-
-function onResize() {
-  viewport.width = window.innerWidth
-}
 
 const filters = reactive({
   keyword: '',
@@ -448,10 +445,31 @@ async function loadPage() {
   } catch { if (version === readVersion) pageError.value = '任务加载失败，请重试' }
   finally { if (version === readVersion) loading.value = false }
 }
-watch(() => [filters.keyword, filters.status, filters.drive, filters.category, showFailedOnly.value, taskSort.prop, taskSort.order], () => {
+watch(() => [filters.keyword, filters.status, filters.drive, filters.category, showFailedOnly.value, taskSort.prop, taskSort.order], (next, prev) => {
   if (page.value !== 1) page.value = 1
+  const keywordChanged = Boolean(prev) && next[0] !== prev[0]
+  const otherChanged = Boolean(prev) && next.slice(1).some((value, idx) => value !== prev[idx + 1])
+  if (keywordChanged && !otherChanged) {
+    scheduleKeywordLoad()
+    return
+  }
+  clearKeywordTimer()
   void loadPage()
 })
+let keywordTimer: number | null = null
+function clearKeywordTimer() {
+  if (keywordTimer !== null) {
+    window.clearTimeout(keywordTimer)
+    keywordTimer = null
+  }
+}
+function scheduleKeywordLoad() {
+  clearKeywordTimer()
+  keywordTimer = window.setTimeout(() => {
+    keywordTimer = null
+    void loadPage()
+  }, 280)
+}
 watch(pageSize, () => {
   const last = Math.max(1, Math.ceil(total.value / pageSize.value))
   if (page.value > last) page.value = last
@@ -1280,14 +1298,13 @@ async function loadExecutionChunk() {
 
 onMounted(() => {
   loadData()
-  window.addEventListener('resize', onResize, { passive: true })
 })
 
 onBeforeUnmount(() => {
+  clearKeywordTimer()
   stopTaskChanges()
   readVersion += 1; logVersion += 1; historyVersion += 1
   stopRunLogStream(); stopRunAllStream()
-  window.removeEventListener('resize', onResize)
 })
 
 watch(() => route.name, (name, previousName) => {
@@ -1315,7 +1332,7 @@ watch(() => route.name, (name, previousName) => {
     <div class="section-header">
       <div class="section-header__title">
         <div class="section-header__eyebrow">Automation</div>
-        <h2>追剧任务</h2>
+        <h1>追剧任务</h1>
         <div class="section-header__desc">自动转存、失效换链、文件夹对比，一条龙。</div>
       </div>
       <div class="toolbar__right">
@@ -1613,28 +1630,12 @@ watch(() => route.name, (name, previousName) => {
     </el-dialog>
 
     <!-- Cron 预览弹窗 -->
-    <el-dialog v-if="isTaskRoute" v-model="cronPreviewVisible" title="执行计划预览" width="480px" :close-on-click-modal="true">
-      <div v-if="scheduler">
-        <div style="margin-bottom: 16px;">
-          <div style="font-weight: 600; margin-bottom: 8px;">执行规则</div>
-          <div style="color: var(--el-text-color-regular);">{{ describeCrontab(scheduler.crontab) || '无法解析' }}</div>
-        </div>
-        <div style="margin-bottom: 16px;">
-          <div style="font-weight: 600; margin-bottom: 8px;">cron 表达式</div>
-          <div style="font-family: monospace; color: var(--el-text-color-regular);">{{ scheduler.crontab }}</div>
-        </div>
-        <div>
-          <div style="font-weight: 600; margin-bottom: 8px;">接下来执行时间</div>
-          <div v-if="getNextExecutions(scheduler.crontab, 5).length > 0">
-            <div v-for="(time, idx) in getNextExecutions(scheduler.crontab, 5)" :key="idx" style="color: var(--el-text-color-regular); padding: 4px 0;">
-              {{ time.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short' }) }}
-            </div>
-            <div style="color: var(--el-text-color-placeholder); padding: 4px 0;">...</div>
-          </div>
-          <div v-else style="color: var(--el-text-color-placeholder);">无法计算</div>
-        </div>
-      </div>
-    </el-dialog>
+    <CronPreviewDialog
+      v-if="isTaskRoute && scheduler"
+      v-model="cronPreviewVisible"
+      :crontab="scheduler.crontab"
+      :timezone="scheduler.timezone"
+    />
   </div>
 </template>
 
@@ -1717,6 +1718,11 @@ watch(() => route.name, (name, previousName) => {
 .task-groups {
   display: grid;
   gap: 10px;
+}
+
+.task-groups > :nth-child(n + 7) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 74px;
 }
 
 /* 骨架屏 */

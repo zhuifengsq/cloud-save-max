@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Calendar, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import CapacityAccountCard from '@/components/dashboard/CapacityAccountCard.vue'
@@ -521,7 +522,7 @@ onBeforeUnmount(() => {
     <div class="section-header">
       <div class="section-header__title">
         <div class="section-header__eyebrow">Dashboard</div>
-        <h2>追剧仪表盘</h2>
+        <h1>追剧仪表盘</h1>
         <div class="section-header__desc">
           <span>活跃订阅 {{ activeTaskCount }}</span>
           <span class="dot">·</span>
@@ -660,7 +661,9 @@ onBeforeUnmount(() => {
           <div v-for="item in recentUpdates" :key="`${item.task_id}-${item.started_at}`" class="update-row">
             <div class="update-row__main">
               <div class="update-row__title">
-                <span class="update-row__icon">📺</span>
+                <span class="update-row__icon" aria-hidden="true">
+                  <el-icon><VideoPlay /></el-icon>
+                </span>
                 <span class="update-row__name">{{ titleFromTask(item.task) }}</span>
               </div>
               <div class="update-row__desc">
@@ -692,7 +695,9 @@ onBeforeUnmount(() => {
         <div v-else class="upcoming-list">
           <div v-for="it in displayedUpcomingAiring" :key="`${it.task.id}-${it.air_date}`" class="upcoming-row">
             <div class="upcoming-row__left">
-              <span class="update-row__icon">🗓️</span>
+              <span class="update-row__icon update-row__icon--calendar" aria-hidden="true">
+                <el-icon><Calendar /></el-icon>
+              </span>
               <span class="upcoming-row__name">{{ titleFromTask(it.task) }}</span>
               <template v-if="it.predicted">
                 <span class="meta-dot">·</span>
@@ -741,23 +746,15 @@ onBeforeUnmount(() => {
               <h2>总体占比</h2>
               <div class="section-header__desc">基于所有支持容量统计的账号进行汇总，不支持容量的账号会在下方单独列出。</div>
             </div>
+            <div v-if="hasCapacityData && capacityOverview" class="capacity-overview-summary">
+              <span class="capacity-overview-summary__ratio">{{ formatPercent(capacityOverview.summary.usage_ratio) }}</span>
+              <span class="capacity-overview-summary__detail">{{ capacitySpaceText }}</span>
+            </div>
           </div>
 
           <template v-if="hasCapacityData && capacityOverview">
-            <div class="metric-strip" style="margin-top: 18px">
-              <div class="glass-panel metric-tile">
-                <div class="metric-tile__label">总已用 / 总容量</div>
-                <div class="metric-tile__value">{{ formatBytes(capacityOverview.summary.total_used_space) }}</div>
-                <div class="metric-tile__hint">/ {{ formatBytes(capacityOverview.summary.total_space) }}</div>
-              </div>
-              <div class="glass-panel metric-tile">
-                <div class="metric-tile__label">总体使用率</div>
-                <div class="metric-tile__value">{{ formatPercent(capacityOverview.summary.usage_ratio) }}</div>
-                <div class="metric-tile__hint">建议重点关注高于阈值的账号</div>
-              </div>
-            </div>
             <el-progress
-              style="margin-top: 18px"
+              class="capacity-overview-progress"
               :percentage="Math.round((capacityOverview.summary.usage_ratio || 0) * 100)"
               :stroke-width="12"
               :show-text="false"
@@ -874,6 +871,15 @@ onBeforeUnmount(() => {
   border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .update-row:hover,
+  .upcoming-row:hover {
+    border-color: var(--line-strong);
+    background: var(--el-fill-color-lighter);
+  }
 }
 
 .update-row__title {
@@ -884,9 +890,21 @@ onBeforeUnmount(() => {
 }
 
 .update-row__icon {
-  width: 18px;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
   display: inline-flex;
+  align-items: center;
   justify-content: center;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-size: 14px;
+}
+
+.update-row__icon--calendar {
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
 }
 
 .update-row__name {
@@ -954,6 +972,7 @@ onBeforeUnmount(() => {
   border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
 .upcoming-row__left {
@@ -986,6 +1005,37 @@ onBeforeUnmount(() => {
 
 .capacity-section {
   padding: 12px 16px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 320px;
+}
+
+.group-stack {
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 320px;
+}
+
+.capacity-overview-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.capacity-overview-summary__ratio {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.capacity-overview-summary__detail {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.capacity-overview-progress {
+  margin-top: 16px;
 }
 
 .capacity-title {

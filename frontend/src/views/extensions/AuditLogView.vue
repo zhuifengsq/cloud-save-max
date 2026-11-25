@@ -2,12 +2,14 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+import CronPreviewDialog from '@/components/CronPreviewDialog.vue'
 import { fetchAuditLogs, deleteAllAuditLogs, fetchAuditLogScheduler, updateAuditLogScheduler } from '@/api/audit'
 import type { AuditLogItem } from '@/types/audit'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useAuthStore } from '@/stores/auth'
 import { AUDIT_WRITE } from '@/constants/permissions'
-import { validateCrontab5, validateTimezone, describeCrontab, getNextExecutions } from '@/utils/cron'
+import { isImeComposing } from '@/utils/ime'
+import { validateCrontab5, validateTimezone, describeCrontab } from '@/utils/cron'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.permissions.includes(AUDIT_WRITE))
@@ -125,7 +127,7 @@ onMounted(() => {
   <div class="shell-page">
     <div class="section-header">
       <div class="section-header__title">
-        <h2>审计日志</h2>
+        <h1>审计日志</h1>
         <div class="section-header__desc">记录登录、任务操作与配置变更，便于追溯。</div>
       </div>
       <div class="toolbar__right">
@@ -143,7 +145,7 @@ onMounted(() => {
                 clearable
                 placeholder="搜索 action / 用户 / 目标 / detail"
                 :style="{ width: isMobile ? '100%' : '300px' }"
-                @keyup.enter="loadData"
+                @keydown.enter="!isImeComposing($event) && loadData()"
                 @clear="loadData"
               />
               <el-input
@@ -151,7 +153,7 @@ onMounted(() => {
                 clearable
                 placeholder="精确 action（可选）"
                 :style="{ width: isMobile ? '100%' : '240px' }"
-                @keyup.enter="loadData"
+                @keydown.enter="!isImeComposing($event) && loadData()"
                 @clear="loadData"
               />
               <el-segmented
@@ -236,20 +238,12 @@ onMounted(() => {
           </el-form>
         </section>
 
-        <el-dialog v-model="cronPreviewVisible" title="Cron 执行预览" width="400px">
-          <div style="margin-bottom: 12px; color: var(--el-text-color-secondary);">
-            表达式: <code>{{ scheduler.data.crontab }}</code>（{{ scheduler.data.timezone }}）
-          </div>
-          <div style="margin-bottom: 8px; font-weight: 500;">最近 5 次执行时间：</div>
-          <ol style="padding-left: 20px; margin: 0;">
-            <li v-for="(t, idx) in getNextExecutions(scheduler.data.crontab, 5)" :key="idx" style="line-height: 1.8;">
-              {{ t.toLocaleString() }}
-            </li>
-          </ol>
-          <template #footer>
-            <el-button @click="cronPreviewVisible = false">关闭</el-button>
-          </template>
-        </el-dialog>
+        <CronPreviewDialog
+          v-model="cronPreviewVisible"
+          title="Cron 执行预览"
+          :crontab="scheduler.data.crontab"
+          :timezone="scheduler.data.timezone"
+        />
       </el-tab-pane>
     </el-tabs>
   </div>
