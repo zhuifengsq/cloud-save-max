@@ -463,9 +463,21 @@ h3 {
 }
 
 .app-menu .el-menu-item.is-active {
+  position: relative;
   background: var(--el-color-primary-light-9);
   color: var(--brand);
   font-weight: 600;
+}
+
+.app-menu .el-menu-item.is-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--brand);
 }
 
 .app-menu .el-icon {
@@ -536,6 +548,102 @@ h3 {
   font-size: 13px;
   font-weight: 500;
   color: inherit;
+}
+
+.app-user-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--control-radius);
+  background: color-mix(in srgb, var(--surface-muted) 80%, transparent);
+  border: 1px solid var(--line-soft);
+}
+
+.app-user-avatar {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.app-user-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.app-user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-user-role {
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.app-logout-btn {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  color: var(--ink-muted);
+}
+
+.app-logout-btn:hover {
+  color: var(--el-color-danger);
+}
+
+.empty-state {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 36px 20px;
+}
+
+.empty-state__icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-muted);
+  color: var(--ink-muted);
+  font-size: 22px;
+  margin-bottom: 4px;
+}
+
+.empty-state__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.empty-state__desc {
+  max-width: 420px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+  text-wrap: pretty;
+}
+
+.empty-state__actions {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
 }
 
 .app-header__theme {

@@ -656,10 +656,18 @@ watch(() => route.name, (name, previousName) => {
             @keydown.space.prevent.self="openDetailByBrief(row)"
           >
             <div class="poster-card__cover">
-              <el-image v-if="posterUrlFromTMDB(row.poster_path)" :src="posterUrlFromTMDB(row.poster_path)" fit="cover" lazy class="poster-card__img" />
+              <el-image v-if="posterUrlFromTMDB(row.poster_path)" :src="posterUrlFromTMDB(row.poster_path)" fit="cover" lazy class="poster-card__img">
+                <template #placeholder>
+                  <div class="poster-card__skeleton" />
+                </template>
+              </el-image>
               <div v-else class="poster-card__placeholder">暂无海报</div>
-              <div class="poster-card__rating">
-                {{ row.vote_average != null ? Number(row.vote_average).toFixed(1) : '-' }}
+              <div
+                class="poster-card__rating"
+                :class="{ 'poster-card__rating--high': row.vote_average != null && Number(row.vote_average) >= 8 }"
+              >
+                <span aria-hidden="true">★</span>
+                <span>{{ row.vote_average != null ? Number(row.vote_average).toFixed(1) : '-' }}</span>
               </div>
             </div>
             <div class="poster-card__meta">
@@ -723,10 +731,18 @@ watch(() => route.name, (name, previousName) => {
             @keydown.space.prevent.self="openDetailFromDouban(row)"
           >
             <div class="poster-card__cover">
-              <el-image v-if="bestDoubanPoster(row)" :src="bestDoubanPoster(row)" fit="cover" lazy class="poster-card__img" />
+              <el-image v-if="bestDoubanPoster(row)" :src="bestDoubanPoster(row)" fit="cover" lazy class="poster-card__img">
+                <template #placeholder>
+                  <div class="poster-card__skeleton" />
+                </template>
+              </el-image>
               <div v-else class="poster-card__placeholder">暂无海报</div>
-              <div class="poster-card__rating">
-                {{ row.rating?.value != null ? Number(row.rating.value).toFixed(1) : '-' }}
+              <div
+                class="poster-card__rating"
+                :class="{ 'poster-card__rating--high': row.rating?.value != null && Number(row.rating.value) >= 8 }"
+              >
+                <span aria-hidden="true">★</span>
+                <span>{{ row.rating?.value != null ? Number(row.rating.value).toFixed(1) : '-' }}</span>
               </div>
             </div>
             <div class="poster-card__meta">
@@ -1029,6 +1045,26 @@ watch(() => route.name, (name, previousName) => {
   width: 100%;
   height: 100%;
 }
+.poster-card__skeleton {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--surface-muted) 25%,
+    color-mix(in srgb, var(--surface-muted) 45%, var(--card)) 50%,
+    var(--surface-muted) 75%
+  );
+  background-size: 200% 100%;
+  animation: poster-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes poster-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
 .poster-card__placeholder {
   width: 100%;
   height: 100%;
@@ -1042,11 +1078,21 @@ watch(() => route.name, (name, previousName) => {
   position: absolute;
   top: 8px;
   right: 8px;
-  background: rgba(15, 23, 42, 0.78);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(6px);
   color: #fff;
   font-size: 12px;
-  padding: 2px 6px;
-  border-radius: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.poster-card__rating--high {
+  background: rgba(217, 119, 6, 0.9);
+  color: #fffbeb;
 }
 .poster-card__meta {
   display: flex;
@@ -1075,8 +1121,17 @@ watch(() => route.name, (name, previousName) => {
 }
 .poster-card__actions {
   display: flex;
-  justify-content: flex-start;
+  justify-content: stretch;
   margin-top: auto;
+  padding-top: 4px;
+}
+.poster-card__actions :deep(.el-button) {
+  width: 100%;
+  background: var(--brand-soft);
+  border-radius: 9px;
+}
+.poster-card__actions :deep(.el-button:hover) {
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
 }
 .title__main {
   font-weight: 600;

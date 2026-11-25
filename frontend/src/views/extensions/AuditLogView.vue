@@ -8,6 +8,7 @@ import type { AuditLogItem } from '@/types/audit'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useAuthStore } from '@/stores/auth'
 import { AUDIT_WRITE } from '@/constants/permissions'
+import { formatDateTimeText } from '@/utils/datetime'
 import { isImeComposing } from '@/utils/ime'
 import { validateCrontab5, validateTimezone, describeCrontab } from '@/utils/cron'
 
@@ -143,7 +144,7 @@ onMounted(() => {
               <el-input
                 v-model="query.q"
                 clearable
-                placeholder="搜索 action / 用户 / 目标 / detail"
+                placeholder="搜索操作 / 用户 / 目标 / 详情"
                 :style="{ width: isMobile ? '100%' : '300px' }"
                 @keydown.enter="!isImeComposing($event) && loadData()"
                 @clear="loadData"
@@ -151,7 +152,7 @@ onMounted(() => {
               <el-input
                 v-model="query.action"
                 clearable
-                placeholder="精确 action（可选）"
+                placeholder="精确操作类型（可选）"
                 :style="{ width: isMobile ? '100%' : '240px' }"
                 @keydown.enter="!isImeComposing($event) && loadData()"
                 @clear="loadData"
@@ -175,16 +176,24 @@ onMounted(() => {
 
         <section class="glass-panel table-panel">
           <el-table :data="items" border v-loading="loading">
-            <el-table-column prop="created_at" label="时间" min-width="180" />
-            <el-table-column label="用户" min-width="140">
+            <el-table-column label="时间" min-width="180">
               <template #default="{ row }">
-                <span>{{ row.actor_username || (row.actor_user_id ? `#${row.actor_user_id}` : '-') }}</span>
+                <span class="audit-time">{{ formatDateTimeText(row.created_at) }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="action" label="Action" min-width="220" />
+            <el-table-column label="用户" min-width="140">
+              <template #default="{ row }">
+                <span>{{ row.actor_username || (row.actor_user_id ? `#${row.actor_user_id}` : '—') }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" min-width="220">
+              <template #default="{ row }">
+                <code class="audit-action-pill">{{ row.action }}</code>
+              </template>
+            </el-table-column>
             <el-table-column label="目标" min-width="200">
               <template #default="{ row }">
-                <span>{{ row.target_type || '-' }}</span>
+                <span>{{ row.target_type || '—' }}</span>
                 <span v-if="row.target_id" class="muted">:{{ row.target_id }}</span>
               </template>
             </el-table-column>
@@ -195,8 +204,12 @@ onMounted(() => {
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="ip" label="IP" width="140" />
-            <el-table-column prop="detail" label="Detail" min-width="320" show-overflow-tooltip />
+            <el-table-column label="IP" width="140">
+              <template #default="{ row }">
+                <span class="audit-ip">{{ row.ip || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="detail" label="详情" min-width="320" show-overflow-tooltip />
           </el-table>
 
           <div class="pagination-bar">
@@ -264,6 +277,23 @@ onMounted(() => {
 
 .muted {
   color: var(--el-text-color-secondary);
+}
+
+.audit-time,
+.audit-ip {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.audit-action-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  color: var(--ink);
 }
 
 .pagination-bar {

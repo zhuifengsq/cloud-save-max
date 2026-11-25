@@ -72,11 +72,41 @@ const statusLabel = computed(() => {
   if (!configured.value) return '未配置'
   return props.enabled ? '已启用' : '已停用'
 })
+
+const CHANNEL_BADGE_MAP: Record<string, { label: string; bg: string; fg: string }> = {
+  wecom: { label: '企', bg: 'rgba(16, 185, 129, 0.14)', fg: '#059669' },
+  qywx: { label: '企', bg: 'rgba(16, 185, 129, 0.14)', fg: '#059669' },
+  dingtalk: { label: '钉', bg: 'rgba(37, 99, 235, 0.14)', fg: '#2563eb' },
+  feishu: { label: '飞', bg: 'rgba(14, 165, 233, 0.14)', fg: '#0284c7' },
+  telegram: { label: 'TG', bg: 'rgba(56, 189, 248, 0.16)', fg: '#0284c7' },
+  bark: { label: 'BK', bg: 'rgba(249, 115, 22, 0.14)', fg: '#ea580c' },
+  email: { label: '邮', bg: 'rgba(139, 92, 246, 0.14)', fg: '#7c3aed' },
+  webhook: { label: 'WH', bg: 'rgba(99, 102, 241, 0.14)', fg: '#4f46e5' },
+  gotify: { label: 'GF', bg: 'rgba(20, 184, 166, 0.14)', fg: '#0d9488' },
+  ntfy: { label: 'NT', bg: 'rgba(6, 182, 212, 0.14)', fg: '#0891b2' },
+  serverchan: { label: 'SC', bg: 'rgba(245, 158, 11, 0.14)', fg: '#d97706' },
+  pushplus: { label: 'PP', bg: 'rgba(236, 72, 153, 0.14)', fg: '#db2777' },
+}
+
+const channelBadge = computed(() => {
+  const id = String(props.channel.id || '').toLowerCase()
+  const matched = Object.entries(CHANNEL_BADGE_MAP).find(([key]) => id.includes(key))
+  if (matched) return matched[1]
+  const initial = (props.channel.title || props.channel.id || '?').slice(0, 1).toUpperCase()
+  return { label: initial, bg: 'var(--brand-soft)', fg: 'var(--brand)' }
+})
 </script>
 
 <template>
   <article class="glass-panel channel-card" @click="emit('configure', channel)">
     <div class="channel-card__header">
+      <span
+        class="channel-card__avatar"
+        :style="{ background: channelBadge.bg, color: channelBadge.fg }"
+        aria-hidden="true"
+      >
+        {{ channelBadge.label }}
+      </span>
       <div class="channel-card__heading">
         <h3 :title="channel.title">{{ channel.title }}</h3>
         <div class="channel-card__meta">{{ channel.id }}</div>
@@ -149,6 +179,19 @@ const statusLabel = computed(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.channel-card__avatar {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .channel-card__heading {

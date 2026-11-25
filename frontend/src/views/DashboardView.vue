@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { Calendar, VideoPlay } from '@element-plus/icons-vue'
+import { Calendar, CircleCheck, CirclePlus, Collection, Film, Odometer, VideoPlay } from '@element-plus/icons-vue'
+import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
+import { DRIVE_TYPE_META, type DriveType } from '@/utils/driveType'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import CapacityAccountCard from '@/components/dashboard/CapacityAccountCard.vue'
@@ -544,7 +546,12 @@ onBeforeUnmount(() => {
 
     <section class="metric-strip dashboard-metrics" v-loading="dramaLoading">
       <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">活跃订阅</div>
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">活跃订阅</div>
+          <span class="metric-tile__icon metric-tile__icon--brand" aria-hidden="true">
+            <el-icon><Collection /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ activeTaskCount }}</div>
         <div class="metric-tile__hint">
           <span v-if="dramaOverview?.summary.unknown_schedule_count">未配置更新日 {{ dramaOverview.summary.unknown_schedule_count }}</span>
@@ -552,12 +559,29 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">本月新增</div>
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">本月新增</div>
+          <span class="metric-tile__icon metric-tile__icon--success" aria-hidden="true">
+            <el-icon><CirclePlus /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ monthSuccessCount }}</div>
         <div class="metric-tile__hint">本月成功执行次数</div>
       </div>
-      <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">网盘空间使用率</div>
+      <div
+        class="glass-panel metric-tile"
+        :class="{ 'metric-tile--warn': !!capacityOverview?.warning_accounts.length }"
+      >
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">网盘空间使用率</div>
+          <span
+            class="metric-tile__icon"
+            :class="capacityOverview?.warning_accounts.length ? 'metric-tile__icon--warn' : 'metric-tile__icon--cyan'"
+            aria-hidden="true"
+          >
+            <el-icon><Odometer /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ capacityOverview ? formatPercent(capacityOverview.summary.usage_ratio) : '--' }}</div>
         <div class="metric-tile__hint">
           <span v-if="capacityOverview">
@@ -566,8 +590,20 @@ onBeforeUnmount(() => {
           <span v-else>汇总已用 / 总容量</span>
         </div>
       </div>
-      <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">任务成功率</div>
+      <div
+        class="glass-panel metric-tile"
+        :class="{ 'metric-tile--warn': !!dramaOverview?.summary.execution_failed }"
+      >
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">任务成功率</div>
+          <span
+            class="metric-tile__icon"
+            :class="dramaOverview?.summary.execution_failed ? 'metric-tile__icon--warn' : 'metric-tile__icon--success'"
+            aria-hidden="true"
+          >
+            <el-icon><CircleCheck /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ successRateText }}</div>
         <div class="metric-tile__hint">
           <span v-if="dramaOverview">
@@ -577,7 +613,12 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">最新剧集比例</div>
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">最新剧集比例</div>
+          <span class="metric-tile__icon metric-tile__icon--violet" aria-hidden="true">
+            <el-icon><Film /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ updateProgressText }}</div>
         <div class="metric-tile__hint">
           <span v-if="updateProgressSummary.linked">
@@ -669,7 +710,10 @@ onBeforeUnmount(() => {
               <div class="update-row__desc">
                 <span>{{ timeAgoFromIso(item.started_at) }}</span>
                 <span class="meta-dot">·</span>
-                <span>{{ item.drive_type || item.task.account_name || '自动' }}网盘</span>
+                <span class="update-row__drive">
+                  <DriveTypeIcon v-if="item.drive_type" :type="item.drive_type" :size="15" />
+                  <span>{{ DRIVE_TYPE_META[item.drive_type as DriveType]?.label || item.drive_type || item.task.account_name || '自动网盘' }}</span>
+                </span>
                 <span class="meta-dot">·</span>
                 <el-tag size="small" type="success">成功</el-tag>
               </div>
@@ -827,6 +871,59 @@ onBeforeUnmount(() => {
 
 @media (max-width: 560px) {
   .dashboard-metrics { grid-template-columns: minmax(0, 1fr); }
+}
+
+.metric-tile__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.metric-tile__icon {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+
+.metric-tile__icon--brand {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.metric-tile__icon--success {
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
+}
+
+.metric-tile__icon--cyan {
+  background: rgba(14, 165, 233, 0.14);
+  color: #0284c7;
+}
+
+.metric-tile__icon--violet {
+  background: rgba(139, 92, 246, 0.14);
+  color: #7c3aed;
+}
+
+.metric-tile__icon--warn {
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+}
+
+.metric-tile--warn {
+  border-color: color-mix(in srgb, var(--el-color-warning) 35%, var(--line));
+}
+
+.update-row__drive {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .dot,

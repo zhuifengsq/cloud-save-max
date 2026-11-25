@@ -1378,13 +1378,19 @@ watch(
     />
 
     <div v-if="viewMode === 'week'" v-loading="loading" class="week">
-      <section v-for="sec in weekSections" :key="sec.key" class="weekday">
+      <section
+        v-for="sec in weekSections"
+        :key="sec.key"
+        class="weekday"
+        :class="{ 'weekday--today': sec.key === todayKey() }"
+      >
         <div class="weekday-title">
           <div class="weekday-title__left">
             <div class="weekday-title__main">{{ sec.label }}</div>
+            <span v-if="sec.key === todayKey()" class="weekday-today-badge">今日</span>
             <div class="weekday-title__sub">{{ sec.dateText }}</div>
           </div>
-          <div class="weekday-title__count">{{ sec.items.length }}</div>
+          <div class="weekday-title__count">{{ sec.items.length }} 部</div>
         </div>
 
         <div v-if="!sec.items.length" class="weekday-empty">无更新</div>
@@ -1622,6 +1628,17 @@ watch(
   gap: 18px;
 }
 
+.weekday {
+  padding: 6px 10px 10px;
+  border-radius: var(--panel-radius);
+  border: 1px solid transparent;
+}
+
+.weekday--today {
+  background: color-mix(in srgb, var(--brand-soft) 55%, transparent);
+  border-color: color-mix(in srgb, var(--brand) 28%, var(--line));
+}
+
 .weekday:nth-child(n + 3) {
   content-visibility: auto;
   contain-intrinsic-size: auto none auto 360px;
@@ -1637,8 +1654,9 @@ watch(
 
 .weekday-title__left {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .weekday-title__main {
@@ -1647,14 +1665,32 @@ watch(
   letter-spacing: 0.2px;
 }
 
+.weekday-today-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .weekday-title__sub {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 
 .weekday-title__count {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  font-size: 12px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  opacity: 0.7;
+  color: var(--ink-muted);
 }
 
 .weekday-empty {

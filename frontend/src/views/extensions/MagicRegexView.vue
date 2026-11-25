@@ -995,7 +995,7 @@ onMounted(() => {
   <div class="shell-page">
     <div class="section-header">
             <div class="section-header__title">
-        <h2>系统设置</h2>
+        <h1>系统设置</h1>
         <div class="section-header__desc">任务模板、魔法重命名、搜索源与缓存策略集中配置。</div>
       </div>
     </div>

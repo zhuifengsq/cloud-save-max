@@ -508,7 +508,7 @@ onMounted(refreshAll)
   <div class="shell-page">
     <div class="section-header">
             <div class="section-header__title">
-        <h2>TMDB 缓存管理</h2>
+        <h1>TMDB 缓存管理</h1>
         <div class="section-header__desc">管理 TMDB 详情缓存（含演员表）：定时刷新、TTL、清理与强制更新。</div>
       </div>
     </div>

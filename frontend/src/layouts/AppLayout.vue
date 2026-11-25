@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { ArrowRight, Menu, User } from '@element-plus/icons-vue'
+import { ArrowRight, Menu, SwitchButton, User } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import NavMenu from '@/layouts/NavMenu.vue'
@@ -51,6 +51,7 @@ const secondaryNav = computed(() =>
 
 const mobileNavVisible = ref(false)
 const { isDark } = useTheme()
+const userInitial = computed(() => String(auth.user?.username || 'A').slice(0, 1).toUpperCase())
 
 function collectRouteNames(routes: any[]) {
   const names: string[] = []
@@ -104,9 +105,24 @@ async function handleLogout() {
                 <span class="app-aside-actions__label">主题</span>
                 <el-switch v-model="isDark" inline-prompt active-text="暗" inactive-text="亮" />
               </div>
-              <div class="app-aside-actions__row">
-                <span class="app-aside-actions__label">账号</span>
-                <el-button type="primary" @click="handleLogout">退出登录</el-button>
+              <div class="app-user-footer">
+                <div class="app-user-avatar" aria-hidden="true">{{ userInitial }}</div>
+                <div class="app-user-meta">
+                  <div class="app-user-name" :title="auth.user?.username || '已登录'">
+                    {{ auth.user?.username || '已登录' }}
+                  </div>
+                  <div class="app-user-role">{{ auth.roles.join(' / ') || '成员' }}</div>
+                </div>
+                <el-tooltip content="退出登录" placement="top">
+                  <el-button
+                    text
+                    aria-label="退出登录"
+                    class="app-logout-btn"
+                    @click="handleLogout"
+                  >
+                    <el-icon><SwitchButton /></el-icon>
+                  </el-button>
+                </el-tooltip>
               </div>
             </div>
           </div>

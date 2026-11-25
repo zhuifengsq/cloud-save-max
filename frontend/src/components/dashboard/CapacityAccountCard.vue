@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { TagProps } from 'element-plus'
 
+import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
 import type { DriveAccountItem } from '@/types/extensions'
 import { formatBytes, formatDateTime, formatPercent } from '@/utils/capacity'
 
@@ -34,6 +35,7 @@ const runtimeTag = computed<TagProps['type']>(() => {
     <div class="account-card__header">
       <div class="account-card__heading">
         <div class="account-card__title-row">
+          <DriveTypeIcon :type="account.drive_type" :size="22" />
           <h3>{{ account.name }}</h3>
           <el-tag v-if="account.is_default && !$slots.controls" type="success" effect="plain" round>默认账号</el-tag>
         </div>

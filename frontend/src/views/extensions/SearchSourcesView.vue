@@ -454,7 +454,7 @@ class MySearchPlugin(BaseSearchPlugin):
 </template>
 
 <style scoped>
-.search-sources-page { width: 100%; max-width: 1380px; margin: 0 auto; display: grid; gap: 20px; }
+.search-sources-page { width: 100%; display: grid; gap: 20px; }
 .page-heading, .tab-heading, .test-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .page-heading { padding: 0; }
 .page-heading__eyebrow { display: none; margin-bottom: 6px; color: var(--el-color-primary); font-size: 11px; font-weight: 750; letter-spacing: .18em; }
@@ -528,8 +528,8 @@ class MySearchPlugin(BaseSearchPlugin):
 .editor-card { padding: 20px; border: 1px solid var(--el-border-color-lighter); border-radius: var(--panel-radius); background: var(--el-fill-color-extra-light); }
 .editor-card :deep(.el-form-item) { margin-bottom: 14px; }
 .editor-card :deep(.el-form-item__label) { font-weight: 700; }
-.editor-card :deep(.el-input__wrapper), .editor-card :deep(.el-select__wrapper) { min-height: 46px; border-radius: 13px; }
-.editor-card :deep(.el-textarea__inner) { border-radius: 13px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.editor-card :deep(.el-input__wrapper), .editor-card :deep(.el-select__wrapper) { min-height: 46px; border-radius: var(--control-radius); }
+.editor-card :deep(.el-textarea__inner) { border-radius: var(--control-radius); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .editor-top-grid { display: grid; grid-template-columns: 2.1fr 1fr 1fr; gap: 18px; }
 .editor-top-grid :deep(.el-select) { width: 100%; }
 .editor-label-hint { color: var(--el-text-color-placeholder); font-weight: 400; }

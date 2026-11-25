@@ -11,11 +11,19 @@ import {
   fetchSharePreviewBatchCacheList,
   purgeSharePreviewBatchCache,
 } from '@/api/shareLinkCache'
+import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
+import { formatDateTimeText } from '@/utils/datetime'
+import { DRIVE_TYPE_META, type DriveType } from '@/utils/driveType'
 import { isImeComposing } from '@/utils/ime'
 import type { InvalidShareLinkListItem, SharePreviewBatchCacheListItem } from '@/types/shareLinkCache'
+
+function formatDriveLabel(driveType?: string | null) {
+  if (!driveType) return '—'
+  return DRIVE_TYPE_META[driveType as DriveType]?.label || driveType
+}
 
 const auth = useAuthStore()
 const isMobile = useIsMobile()
@@ -169,7 +177,7 @@ onMounted(async () => {
   <div class="shell-page">
     <div class="section-header">
       <div class="section-header__title">
-        <h2>分享链接缓存</h2>
+        <h1>分享链接缓存</h1>
         <div class="section-header__desc">预览与校验结果缓存，命中后免去重复解析。</div>
       </div>
       <div class="toolbar__right">
@@ -186,7 +194,7 @@ onMounted(async () => {
                 <el-input
                   v-model="cache.query.q"
                   clearable
-                  placeholder="搜索 shareurl"
+                  placeholder="搜索分享链接"
                   :style="{ width: isMobile ? '100%' : '360px' }"
                   @keydown.enter="!isImeComposing($event) && loadCache()"
                   @clear="loadCache"
@@ -194,7 +202,7 @@ onMounted(async () => {
                 <el-input
                   v-model="cache.query.drive_type"
                   clearable
-                  placeholder="drive_type（可选）"
+                  placeholder="网盘类型（可选，如 quark）"
                   :style="{ width: isMobile ? '100%' : '220px' }"
                   @keydown.enter="!isImeComposing($event) && loadCache()"
                   @clear="loadCache"
@@ -203,8 +211,8 @@ onMounted(async () => {
                   v-model="cache.query.ok"
                   :options="[
                     { label: '全部', value: 'all' },
-                    { label: '成功', value: 'ok' },
-                    { label: '失败', value: 'fail' },
+                    { label: '有效', value: 'ok' },
+                    { label: '异常', value: 'fail' },
                   ]"
                 />
                 <el-checkbox v-model="cache.query.expired_only" @change="loadCache">仅过期</el-checkbox>
@@ -219,26 +227,50 @@ onMounted(async () => {
           </section>
 
           <el-table :data="cache.items" border v-loading="cache.loading">
-            <el-table-column prop="shareurl" label="shareurl" min-width="360" show-overflow-tooltip />
-            <el-table-column prop="drive_type" label="drive_type" width="130" />
-            <el-table-column label="结果" width="100">
+            <el-table-column label="分享链接" min-width="340" show-overflow-tooltip>
               <template #default="{ row }">
-                <el-tag :type="row.ok ? 'success' : 'danger'" effect="plain" round>{{ row.ok ? 'OK' : 'FAIL' }}</el-tag>
+                <code class="share-url-cell">{{ row.shareurl }}</code>
+              </template>
+            </el-table-column>
+            <el-table-column label="网盘类型" width="136">
+              <template #default="{ row }">
+                <span v-if="row.drive_type" class="drive-cell">
+                  <DriveTypeIcon :type="row.drive_type" :size="16" />
+                  <span>{{ formatDriveLabel(row.drive_type) }}</span>
+                </span>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="96">
+              <template #default="{ row }">
+                <el-tag :type="row.ok ? 'success' : 'danger'" effect="plain" round>{{ row.ok ? '有效' : '异常' }}</el-tag>
               </template>
             </el-table-column>
             <el-table-column
               prop="message"
-              label="message"
+              label="解析说明"
               min-width="220"
               :show-overflow-tooltip="{
                 appendTo: 'body',
                 popperOptions: { strategy: 'fixed' },
               }"
             />
-            <el-table-column prop="checked_at" label="checked_at" width="180" />
-            <el-table-column prop="expires_at" label="expires_at" width="180" />
-            <el-table-column prop="hit_count" label="hit" width="90" />
-            <el-table-column label="操作" width="110" fixed="right">
+            <el-table-column label="检查时间" width="176">
+              <template #default="{ row }">
+                <span class="time-cell">{{ formatDateTimeText(row.checked_at) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="过期时间" width="176">
+              <template #default="{ row }">
+                <span class="time-cell">{{ formatDateTimeText(row.expires_at) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="命中" width="84" align="right">
+              <template #default="{ row }">
+                <span class="time-cell">{{ row.hit_count ?? 0 }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="96" fixed="right">
               <template #default="{ row }">
                 <el-button link type="danger" :disabled="!canWrite" @click="handleDeleteCacheItem(row.shareurl)">删除</el-button>
               </template>
@@ -264,7 +296,7 @@ onMounted(async () => {
                 <el-input
                   v-model="invalid.query.q"
                   clearable
-                  placeholder="搜索 shareurl"
+                  placeholder="搜索分享链接"
                   :style="{ width: isMobile ? '100%' : '360px' }"
                   @keydown.enter="!isImeComposing($event) && loadInvalid()"
                   @clear="loadInvalid"
@@ -272,7 +304,7 @@ onMounted(async () => {
                 <el-input
                   v-model="invalid.query.drive_type"
                   clearable
-                  placeholder="drive_type（可选）"
+                  placeholder="网盘类型（可选，如 quark）"
                   :style="{ width: isMobile ? '100%' : '220px' }"
                   @keydown.enter="!isImeComposing($event) && loadInvalid()"
                   @clear="loadInvalid"
@@ -286,19 +318,39 @@ onMounted(async () => {
           </section>
 
           <el-table :data="invalid.items" border v-loading="invalid.loading">
-            <el-table-column prop="shareurl" label="shareurl" min-width="360" show-overflow-tooltip />
-            <el-table-column prop="drive_type" label="drive_type" width="130" />
+            <el-table-column label="分享链接" min-width="340" show-overflow-tooltip>
+              <template #default="{ row }">
+                <code class="share-url-cell">{{ row.shareurl }}</code>
+              </template>
+            </el-table-column>
+            <el-table-column label="网盘类型" width="136">
+              <template #default="{ row }">
+                <span v-if="row.drive_type" class="drive-cell">
+                  <DriveTypeIcon :type="row.drive_type" :size="16" />
+                  <span>{{ formatDriveLabel(row.drive_type) }}</span>
+                </span>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
             <el-table-column
               prop="message"
-              label="message"
+              label="失败原因"
               min-width="220"
               :show-overflow-tooltip="{
                 appendTo: 'body',
                 popperOptions: { strategy: 'fixed' },
               }"
             />
-            <el-table-column prop="hit_count" label="hit" width="90" />
-            <el-table-column prop="updated_at" label="updated_at" width="180" />
+            <el-table-column label="命中" width="84" align="right">
+              <template #default="{ row }">
+                <span class="time-cell">{{ row.hit_count ?? 0 }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="更新时间" width="176">
+              <template #default="{ row }">
+                <span class="time-cell">{{ formatDateTimeText(row.updated_at) }}</span>
+              </template>
+            </el-table-column>
             <el-table-column label="操作" width="110" fixed="right">
               <template #default="{ row }">
                 <el-button link type="danger" :disabled="!canWrite" @click="handleDeleteInvalidItem(row.shareurl)">删除</el-button>
@@ -331,5 +383,27 @@ onMounted(async () => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+.share-url-cell {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.drive-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.time-cell {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--ink-muted);
 }
 </style>

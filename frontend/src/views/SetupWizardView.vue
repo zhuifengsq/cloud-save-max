@@ -14,6 +14,7 @@ import {
   setDriveAccountStatus,
 } from '@/api/extensions'
 import { fetchTMDBConfig, patchTMDBConfig } from '@/api/tmdb'
+import logoCat from '@/assets/logo-cat.png'
 import DriveAccountDrawer from '@/components/extensions/DriveAccountDrawer.vue'
 import NotificationConfigView from '@/views/extensions/NotificationConfigView.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -274,8 +275,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="setup">
-    <el-card v-if="!backendReady" shadow="never" style="margin-bottom: 18px">
+  <div class="setup-shell">
+    <div class="setup">
+      <el-card v-if="!backendReady" shadow="never" style="margin-bottom: 18px">
       <template #header>
         <div class="setup__card-title">后端启动中</div>
       </template>
@@ -286,8 +288,16 @@ onBeforeUnmount(() => {
     </el-card>
 
     <div class="setup__header">
-      <div class="setup__title">初始化向导</div>
-      <div class="setup__sub">首次运行需要创建管理员账号，随后可选配置网盘、通知与资源搜索。</div>
+      <div class="setup__brand">
+        <div class="setup__logo">
+          <img :src="logoCat" alt="追剧一体化平台" />
+        </div>
+        <div>
+          <div class="setup__eyebrow">First-Run Setup</div>
+          <h1 class="setup__title">初始化向导</h1>
+          <div class="setup__sub">首次运行需要创建管理员账号，随后可选配置网盘、通知与资源搜索。</div>
+        </div>
+      </div>
     </div>
 
     <el-steps :active="activeStep" finish-status="success" align-center style="margin-bottom: 22px">
@@ -396,12 +406,21 @@ onBeforeUnmount(() => {
         <el-button @click="finish">完成</el-button>
       </div>
     </el-card>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.setup-shell {
+  min-height: 100vh;
+  padding: 28px 16px 40px;
+  background:
+    radial-gradient(640px circle at 14% 12%, rgba(37, 99, 235, 0.12), transparent 55%),
+    radial-gradient(560px circle at 88% 18%, rgba(16, 185, 129, 0.09), transparent 52%);
+}
+
 .setup {
-  padding: 20px;
+  padding: 4px 0;
   max-width: 980px;
   margin: 0 auto;
 }
@@ -410,8 +429,44 @@ onBeforeUnmount(() => {
   margin-bottom: 18px;
 }
 
+.setup__brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.setup__logo {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--panel-shadow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.setup__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.setup__eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brand);
+  margin-bottom: 2px;
+}
+
 .setup__title {
-  font-size: 20px;
+  margin: 0;
+  font-size: 24px;
   font-weight: 700;
   color: var(--el-text-color-primary);
 }

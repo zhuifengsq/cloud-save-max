@@ -521,7 +521,7 @@ onMounted(loadData)
   <div class="shell-page" v-loading="loading">
     <div class="section-header">
       <div class="section-header__title">
-        <h2>通知配置</h2>
+        <h1>通知配置</h1>
         <div class="section-header__desc">通知渠道、触发规则与测试发送。</div>
       </div>
       <div class="toolbar__right">

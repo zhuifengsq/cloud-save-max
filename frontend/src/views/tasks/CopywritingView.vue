@@ -554,7 +554,7 @@ function goBack() {
     <div class="section-header">
       <div class="section-header__title">
         <div class="section-header__eyebrow">Copywriting</div>
-        <h2>生成文案</h2>
+        <h1>生成文案</h1>
         <div class="section-header__desc">修改内容后复制文案或海报，全部在本地完成，不上传服务器。</div>
       </div>
       <div class="toolbar__right">
@@ -841,6 +841,13 @@ function goBack() {
   align-items: stretch;
 }
 
+@media (min-width: 961px) {
+  .copy-poster {
+    position: sticky;
+    top: 20px;
+  }
+}
+
 .copy-poster__frame {
   width: 100%;
   aspect-ratio: 2 / 3;
@@ -1026,6 +1033,7 @@ function goBack() {
   font-weight: 500;
   color: var(--el-text-color-regular);
   cursor: pointer;
+  transition: color 0.16s ease;
 }
 
 .copy-tab.is-active {
