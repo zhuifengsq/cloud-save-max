@@ -735,7 +735,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <el-empty v-if="!upcomingAiring.length" description="未来 7 天暂无已识别的更新日。" :image-size="88" />
+        <div v-if="!upcomingAiring.length" class="empty-state empty-state--compact">
+          <div class="empty-state__title">暂无即将播出剧集</div>
+          <div class="empty-state__desc">未来 7 天暂无已识别的更新日。</div>
+        </div>
         <div v-else class="upcoming-list">
           <div v-for="it in displayedUpcomingAiring" :key="`${it.task.id}-${it.air_date}`" class="upcoming-row">
             <div class="upcoming-row__left">
@@ -805,7 +808,10 @@ onBeforeUnmount(() => {
               :status="(capacityOverview.summary.usage_ratio || 0) >= 0.85 ? 'exception' : 'success'"
             />
           </template>
-          <el-empty v-else description="暂无可统计的容量数据，点击“刷新容量”后再查看。" :image-size="88" />
+          <div v-else class="empty-state empty-state--compact">
+            <div class="empty-state__title">暂无可统计的容量数据</div>
+            <div class="empty-state__desc">点击右上角“刷新容量”获取各网盘空间快照。</div>
+          </div>
         </section>
 
         <section v-if="capacityOverview" class="glass-panel dashboard-section">
@@ -818,7 +824,10 @@ onBeforeUnmount(() => {
           <div v-if="capacityOverview.warning_accounts.length" class="card-grid" style="margin-top: 18px">
             <CapacityAccountCard v-for="item in capacityOverview.warning_accounts" :key="item.id" :account="item" />
           </div>
-          <el-empty v-else description="当前没有超过阈值的账号。" :image-size="88" />
+          <div v-else class="empty-state empty-state--compact">
+            <div class="empty-state__title">暂无容量预警</div>
+            <div class="empty-state__desc">所有账号当前空间使用率均处于设定阈值之内。</div>
+          </div>
         </section>
 
         <template v-if="hasAccounts">
@@ -861,63 +870,12 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
-@media (max-width: 1440px) {
-  .dashboard-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-
-@media (max-width: 900px) {
-  .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1360px) {
+  .dashboard-metrics { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
 }
 
 @media (max-width: 560px) {
   .dashboard-metrics { grid-template-columns: minmax(0, 1fr); }
-}
-
-.metric-tile__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.metric-tile__icon {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: 9px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-}
-
-.metric-tile__icon--brand {
-  background: var(--brand-soft);
-  color: var(--brand);
-}
-
-.metric-tile__icon--success {
-  background: var(--el-color-success-light-9);
-  color: var(--el-color-success);
-}
-
-.metric-tile__icon--cyan {
-  background: rgba(14, 165, 233, 0.14);
-  color: #0284c7;
-}
-
-.metric-tile__icon--violet {
-  background: rgba(139, 92, 246, 0.14);
-  color: #7c3aed;
-}
-
-.metric-tile__icon--warn {
-  background: var(--el-color-warning-light-9);
-  color: var(--el-color-warning);
-}
-
-.metric-tile--warn {
-  border-color: color-mix(in srgb, var(--el-color-warning) 35%, var(--line));
 }
 
 .update-row__drive {
@@ -940,7 +898,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(0, 0.85fr);
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
   min-width: 0;
 }
 

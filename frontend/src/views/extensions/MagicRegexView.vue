@@ -1647,4 +1647,16 @@ onMounted(() => {
   font-weight: 500;
   color: var(--el-text-color-primary);
 }
+
+.page__hint {
+  display: grid;
+  gap: 4px;
+  padding: 12px 16px;
+  border-radius: var(--control-radius);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
 </style>

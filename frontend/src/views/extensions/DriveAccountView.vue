@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import axios, { type AxiosError } from 'axios'
+import { CircleCheck, FolderOpened, Star, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 
@@ -371,22 +372,49 @@ onMounted(loadProbeScheduler)
 
     <section class="metric-strip">
       <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">账号总数</div>
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">账号总数</div>
+          <span class="metric-tile__icon metric-tile__icon--brand" aria-hidden="true">
+            <el-icon><FolderOpened /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ summary.account_count }}</div>
         <div class="metric-tile__hint">所有已接入的网盘账户</div>
       </div>
       <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">启用账号</div>
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">启用账号</div>
+          <span class="metric-tile__icon metric-tile__icon--success" aria-hidden="true">
+            <el-icon><CircleCheck /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ summary.enabled_count }}</div>
         <div class="metric-tile__hint">当前参与运行的账户</div>
       </div>
       <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">默认账号</div>
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">默认账号</div>
+          <span class="metric-tile__icon metric-tile__icon--violet" aria-hidden="true">
+            <el-icon><Star /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ summary.default_count }}</div>
         <div class="metric-tile__hint">默认保存与执行入口</div>
       </div>
-      <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">预警账号</div>
+      <div
+        class="glass-panel metric-tile"
+        :class="{ 'metric-tile--warn': summary.warning_count > 0 }"
+      >
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">预警账号</div>
+          <span
+            class="metric-tile__icon"
+            :class="summary.warning_count > 0 ? 'metric-tile__icon--warn' : 'metric-tile__icon--cyan'"
+            aria-hidden="true"
+          >
+            <el-icon><Warning /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ summary.warning_count }}</div>
         <div class="metric-tile__hint">已超过自定义容量阈值</div>
       </div>

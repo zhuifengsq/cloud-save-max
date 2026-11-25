@@ -29,6 +29,10 @@ html:root {
   --panel-radius: var(--radius);
   --text-secondary: var(--ink-3);
   --accent: var(--brand);
+  --brand-soft: var(--el-color-primary-light-9);
+  --surface-muted: var(--el-fill-color-light);
+  --line-soft: var(--line);
+  --ink-muted: var(--ink-3);
   --scrollbar-thumb: #8b97ab;
   --scrollbar-track: transparent;
   --el-color-primary: var(--brand);
@@ -120,6 +124,13 @@ html:root:has(> head > meta[name='color-scheme'][content='light']) {
     --el-color-danger: #f08c94;
     --el-color-danger-light-9: #40282f;
     --el-color-danger-light-8: #57343d;
+    --el-color-error: var(--el-color-danger);
+    --el-color-error-light-8: #57343d;
+    --el-color-error-light-9: #40282f;
+    --el-radio-button-checked-bg-color: #3b6ef0;
+    --el-radio-button-checked-border-color: #3b6ef0;
+    --el-radio-button-checked-text-color: #ffffff;
+    --el-switch-on-color: #3b6ef0;
     --el-color-info: #a6b3c6;
     --el-color-info-light-9: #283341;
     --el-color-info-light-8: #354352;
@@ -129,7 +140,39 @@ html:root:has(> head > meta[name='color-scheme'][content='light']) {
     --el-fill-color-lighter: #1d2735;
     --el-fill-color-extra-light: #1b2532;
     --el-mask-color: rgba(8, 15, 28, 0.62);
+    --el-radio-button-checked-bg-color: #3b6ef0;
+    --el-radio-button-checked-border-color: #3b6ef0;
+    --el-radio-button-checked-text-color: #ffffff;
+    --el-switch-on-color: #3b6ef0;
   }
+}
+
+html[data-theme='dark'] .el-button--danger:not(.is-plain):not(.is-text):not(.is-link) {
+  --el-button-bg-color: #d64550;
+  --el-button-border-color: #d64550;
+  --el-button-hover-bg-color: #e25862;
+  --el-button-hover-border-color: #e25862;
+  --el-button-active-bg-color: #bd3742;
+  --el-button-active-border-color: #bd3742;
+  --el-button-text-color: #ffffff;
+}
+
+html:root[data-theme='dark'] .el-radio-group {
+  --el-radio-button-checked-bg-color: #3b6ef0;
+  --el-radio-button-checked-border-color: #3b6ef0;
+  --el-radio-button-checked-text-color: #ffffff;
+}
+
+html:root[data-theme='dark'] .el-radio-button.is-active .el-radio-button__inner,
+html:root[data-theme='dark'] .el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background-color: #3b6ef0 !important;
+  border-color: #3b6ef0 !important;
+  color: #ffffff !important;
+  box-shadow: -1px 0 0 0 #3b6ef0 !important;
+}
+
+html[data-theme='dark'] .el-empty__image {
+  opacity: 0.72;
 }
 
 html:root[data-theme='dark'] {
@@ -336,6 +379,53 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.metric-tile__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.metric-tile__icon {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+
+.metric-tile__icon--brand {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.metric-tile__icon--success {
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
+}
+
+.metric-tile__icon--cyan {
+  background: rgba(14, 165, 233, 0.14);
+  color: #0284c7;
+}
+
+.metric-tile__icon--violet {
+  background: rgba(139, 92, 246, 0.14);
+  color: #7c3aed;
+}
+
+.metric-tile__icon--warn {
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+}
+
+.metric-tile--warn {
+  border-color: color-mix(in srgb, var(--el-color-warning) 35%, var(--line));
+}
+
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -402,8 +492,8 @@ h3 {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 26px 12px 18px;
-  gap: 20px;
+  padding: 20px 12px 14px;
+  gap: 14px;
   border: 0;
   border-radius: 0;
   box-shadow: none;
@@ -414,7 +504,7 @@ h3 {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 8px 12px;
+  padding: 0 8px 6px;
 }
 
 .app-logo__mark {
@@ -455,10 +545,10 @@ h3 {
 
 .app-menu .el-menu-item,
 .app-menu .el-sub-menu__title {
-  height: 52px;
-  margin: 5px 0;
+  height: 44px;
+  margin: 3px 0;
   border-radius: var(--control-radius);
-  font-size: 15px;
+  font-size: 14px;
   color: var(--ink-2);
 }
 
@@ -504,7 +594,7 @@ h3 {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -528,11 +618,11 @@ h3 {
 .app-aside-actions {
   flex: 0 0 auto;
   margin-top: 0;
-  padding: 18px 10px 0;
+  padding: 12px 6px 0;
   border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
 }
 
 .app-aside-actions__row {
@@ -609,6 +699,10 @@ h3 {
   text-align: center;
   gap: 8px;
   padding: 36px 20px;
+}
+
+.empty-state--compact {
+  padding: 22px 16px;
 }
 
 .empty-state__icon {
@@ -877,6 +971,10 @@ h3 {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.account-card__title-row {
+  justify-content: flex-start;
 }
 
 .account-card__title-row h3 {

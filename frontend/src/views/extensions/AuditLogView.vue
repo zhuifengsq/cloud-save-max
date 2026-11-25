@@ -176,40 +176,40 @@ onMounted(() => {
 
         <section class="glass-panel table-panel">
           <el-table :data="items" border v-loading="loading">
-            <el-table-column label="时间" min-width="180">
+            <el-table-column label="时间" width="156">
               <template #default="{ row }">
                 <span class="audit-time">{{ formatDateTimeText(row.created_at) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="用户" min-width="140">
+            <el-table-column label="用户" width="110">
               <template #default="{ row }">
                 <span>{{ row.actor_username || (row.actor_user_id ? `#${row.actor_user_id}` : '—') }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" min-width="220">
+            <el-table-column label="操作" min-width="170">
               <template #default="{ row }">
                 <code class="audit-action-pill">{{ row.action }}</code>
               </template>
             </el-table-column>
-            <el-table-column label="目标" min-width="200">
+            <el-table-column label="目标" min-width="135">
               <template #default="{ row }">
                 <span>{{ row.target_type || '—' }}</span>
                 <span v-if="row.target_id" class="muted">:{{ row.target_id }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="结果" width="100">
+            <el-table-column label="结果" width="90">
               <template #default="{ row }">
-                <el-tag :type="row.success ? 'success' : 'danger'" effect="plain" round>
+                <el-tag :type="row.success ? 'success' : 'danger'" round>
                   {{ row.success ? '成功' : '失败' }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="IP" width="140">
+            <el-table-column label="IP" width="124">
               <template #default="{ row }">
                 <span class="audit-ip">{{ row.ip || '—' }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="detail" label="详情" min-width="320" show-overflow-tooltip />
+            <el-table-column prop="detail" label="详情" min-width="200" show-overflow-tooltip />
           </el-table>
 
           <div class="pagination-bar">

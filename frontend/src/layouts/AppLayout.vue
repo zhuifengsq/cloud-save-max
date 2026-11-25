@@ -100,33 +100,34 @@ async function handleLogout() {
           <div class="app-nav-section">
             <div class="app-nav-section__title">系统管理</div>
             <NavMenu :items="secondaryNav" :active-path="route.path" />
-            <div class="app-aside-actions">
-              <div class="app-aside-actions__row">
-                <span class="app-aside-actions__label">主题</span>
-                <el-switch v-model="isDark" inline-prompt active-text="暗" inactive-text="亮" />
-              </div>
-              <div class="app-user-footer">
-                <div class="app-user-avatar" aria-hidden="true">{{ userInitial }}</div>
-                <div class="app-user-meta">
-                  <div class="app-user-name" :title="auth.user?.username || '已登录'">
-                    {{ auth.user?.username || '已登录' }}
-                  </div>
-                  <div class="app-user-role">{{ auth.roles.join(' / ') || '成员' }}</div>
-                </div>
-                <el-tooltip content="退出登录" placement="top">
-                  <el-button
-                    text
-                    aria-label="退出登录"
-                    class="app-logout-btn"
-                    @click="handleLogout"
-                  >
-                    <el-icon><SwitchButton /></el-icon>
-                  </el-button>
-                </el-tooltip>
-              </div>
-            </div>
           </div>
         </nav>
+
+        <div class="app-aside-actions">
+          <div class="app-aside-actions__row">
+            <span class="app-aside-actions__label">主题</span>
+            <el-switch v-model="isDark" inline-prompt active-text="暗" inactive-text="亮" />
+          </div>
+          <div class="app-user-footer">
+            <div class="app-user-avatar" aria-hidden="true">{{ userInitial }}</div>
+            <div class="app-user-meta">
+              <div class="app-user-name" :title="auth.user?.username || '已登录'">
+                {{ auth.user?.username || '已登录' }}
+              </div>
+              <div class="app-user-role">{{ auth.roles.join(' / ') || '成员' }}</div>
+            </div>
+            <el-tooltip content="退出登录" placement="top">
+              <el-button
+                text
+                aria-label="退出登录"
+                class="app-logout-btn"
+                @click="handleLogout"
+              >
+                <el-icon><SwitchButton /></el-icon>
+              </el-button>
+            </el-tooltip>
+          </div>
+        </div>
       </div>
     </aside>
 

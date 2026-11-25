@@ -40,10 +40,7 @@ const runtimeTag = computed<TagProps['type']>(() => {
           <el-tag v-if="account.is_default && !$slots.controls" type="success" effect="plain" round>默认账号</el-tag>
         </div>
         <div class="account-card__meta">
-          <span>{{ account.profile?.nickname || account.profile?.username || '未命名账号' }}</span>
-          （
-          <span>{{ account.profile?.drive_name || account.drive_type }}</span>
-          ）
+          <span>{{ account.profile?.nickname || account.profile?.username || '未命名账号' }}</span>（<span>{{ account.profile?.drive_name || account.drive_type }}</span>）
         </div>
       </div>
 
@@ -107,6 +104,10 @@ const runtimeTag = computed<TagProps['type']>(() => {
 
 .account-card__actions :slotted(.el-button) {
   margin: 0;
+}
+
+.account-card__capacity-total {
+  margin-left: 4px;
 }
 
 .account-card--managed {

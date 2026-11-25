@@ -31,6 +31,7 @@ export type DramaTaskGroupData = {
 import { ArrowRight } from '@element-plus/icons-vue'
 import { useId } from 'vue'
 
+import { formatDateTimeText } from '@/utils/datetime'
 import DriveTypeIcon from './DriveTypeIcon.vue'
 import GeneratedShareStatus from './GeneratedShareStatus.vue'
 
@@ -253,11 +254,11 @@ const executionLabels: Record<string, string> = {
                     v-if="execution.started_at"
                     link
                     type="primary"
-                    :aria-label="`${execution.started_at}，查看日志与目录树`"
+                    :aria-label="`${formatDateTimeText(execution.started_at)}，查看日志与目录树`"
                     aria-haspopup="dialog"
                     @click="emit('execution', task.id, execution.id)"
                   >
-                    {{ execution.started_at }}
+                    {{ formatDateTimeText(execution.started_at) }}
                   </el-button>
                   <span>{{ execution.message }}</span>
                 </span>
@@ -551,7 +552,17 @@ summary:focus-visible {
   color: var(--el-text-color-regular);
 }
 
+.drama-group-task__inline {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.drama-group-task__inline > :not(a) {
+  flex-shrink: 0;
+}
+
 .drama-group-task__inline a {
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
   color: var(--el-color-primary);

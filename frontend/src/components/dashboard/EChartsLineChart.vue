@@ -135,6 +135,7 @@ function buildOption(): ChartOption {
         data: s.values,
         lineStyle: { color: s.color, width: 2.6, type: (s.dashed ? 'dashed' : 'solid') as 'solid' | 'dashed' },
         itemStyle: { color: s.color },
+        ...(s.dashed ? {} : { areaStyle: { opacity: 0.14 } }),
       })),
       ...rightSeries.map((s) => ({
         name: s.name,

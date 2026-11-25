@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Bell, CircleCheck, Setting, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import { fetchNotificationConfig, sendNotificationTest, updateNotificationConfig } from '@/api/notifications'
@@ -533,22 +534,49 @@ onMounted(loadData)
 
     <section class="metric-strip">
       <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">渠道总数</div>
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">渠道总数</div>
+          <span class="metric-tile__icon metric-tile__icon--brand" aria-hidden="true">
+            <el-icon><Bell /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ summary.total }}</div>
         <div class="metric-tile__hint">已接入的通知渠道</div>
       </div>
       <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">已配置</div>
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">已配置</div>
+          <span class="metric-tile__icon metric-tile__icon--cyan" aria-hidden="true">
+            <el-icon><Setting /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ summary.configured }}</div>
         <div class="metric-tile__hint">满足最低配置要求</div>
       </div>
       <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">已启用</div>
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">已启用</div>
+          <span class="metric-tile__icon metric-tile__icon--success" aria-hidden="true">
+            <el-icon><CircleCheck /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ summary.enabled }}</div>
         <div class="metric-tile__hint">当前允许发送的渠道</div>
       </div>
-      <div class="glass-panel metric-tile">
-        <div class="metric-tile__label">最近失败</div>
+      <div
+        class="glass-panel metric-tile"
+        :class="{ 'metric-tile--warn': summary.last_failed > 0 }"
+      >
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">最近失败</div>
+          <span
+            class="metric-tile__icon"
+            :class="summary.last_failed > 0 ? 'metric-tile__icon--warn' : 'metric-tile__icon--violet'"
+            aria-hidden="true"
+          >
+            <el-icon><Warning /></el-icon>
+          </span>
+        </div>
         <div class="metric-tile__value">{{ summary.last_failed }}</div>
         <div class="metric-tile__hint">基于页面内测试结果</div>
       </div>
