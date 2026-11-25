@@ -111,6 +111,8 @@ const detail = reactive({
   tmdbId: 0,
   data: {} as Record<string, any>,
   updateWeekdays: [] as number[],
+  fallbackPoster: '' as string,
+  posterFailed: false,
 })
 
 const currentCategory = computed(() => categories.value.find((c) => c.key === filters.main) || null)
@@ -387,7 +389,7 @@ function onPageChange(page: number) {
 
 const currentPage = computed(() => Math.floor(listState.start / listState.limit) + 1)
 
-async function openDetailByBrief(brief: TMDBBrief) {
+async function openDetailByBrief(brief: TMDBBrief, fallbackPoster = '') {
   const mt = String(brief.media_type || '').trim().toLowerCase()
   if (mt !== 'movie' && mt !== 'tv') {
     ElMessage.warning('不支持的媒体类型')
@@ -403,6 +405,8 @@ async function openDetailByBrief(brief: TMDBBrief) {
   detail.tmdbId = brief.id
   detail.data = {}
   detail.updateWeekdays = []
+  detail.fallbackPoster = fallbackPoster
+  detail.posterFailed = false
   try {
     const data = await fetchTMDBDetail(mt as any, brief.id)
     detail.data = data.data || {}
@@ -427,12 +431,15 @@ async function openDetailFromDouban(row: DoubanListItem) {
     return
   }
   const searchTitle = normalizeDoubanTitleForTMDBSearch(title) || title
+  const doubanFallback = bestDoubanPoster(row)
 
   detail.visible = true
   detail.loading = true
   detail.mediaType = type as any
   detail.tmdbId = 0
   detail.data = {}
+  detail.fallbackPoster = doubanFallback
+  detail.posterFailed = false
 
   try {
     const data = await searchTMDB({ q: searchTitle, type: type as any, year: year || undefined, page: 1 })
@@ -453,7 +460,7 @@ async function openDetailFromDouban(row: DoubanListItem) {
       picked = list.find((x) => String((x as any)[key] || '').startsWith(year)) || null
     }
     picked = picked || list[0]
-    await openDetailByBrief(picked)
+    await openDetailByBrief(picked, doubanFallback)
   } finally {
     detail.loading = false
   }
@@ -524,7 +531,21 @@ const detailTitle = computed(() => {
   return '详情'
 })
 
-const detailPoster = computed(() => posterUrlFromTMDB(detail.data?.poster_path))
+function proxyRemoteImage(url: string) {
+  if (!url || !/^https?:\/\//i.test(url)) return url
+  return `/api/media/proxy-image?url=${encodeURIComponent(url)}`
+}
+
+const detailPoster = computed(() => {
+  const tmdbUrl = !detail.posterFailed ? posterUrlFromTMDB(detail.data?.poster_path) : ''
+  return (tmdbUrl && proxyRemoteImage(tmdbUrl)) || detail.fallbackPoster || ''
+})
+const detailBackdrop = computed(() => {
+  const tmdbUrl = !detail.posterFailed
+    ? posterUrlFromTMDB((detail.data as any)?.backdrop_path || detail.data?.poster_path)
+    : ''
+  return (tmdbUrl && proxyRemoteImage(tmdbUrl)) || detail.fallbackPoster || detailPoster.value || ''
+})
 
 const tvSeasons = computed(() => {
   const seasons = (detail.data as any)?.seasons
@@ -774,39 +795,78 @@ watch(() => route.name, (name, previousName) => {
       v-model="detail.visible"
       :title="detailTitle"
       class="media-detail-dialog"
-      width="640px"
+      width="700px"
       align-center
     >
       <div v-loading="detail.loading" class="detail">
-        <div class="detail__top">
-          <el-image v-if="detailPoster" :src="detailPoster" fit="cover" class="detail__poster" />
-          <div class="detail__meta">
-            <div class="detail__name">{{ detailTitle }}</div>
-            <div class="detail__sub">
-              <span v-if="detail.mediaType === 'movie'">{{ detail.data.release_date }}</span>
-              <span v-else-if="detail.mediaType === 'tv'">{{ detail.data.first_air_date }}</span>
-              <span v-if="detail.data.vote_average != null"> · {{ Number(detail.data.vote_average).toFixed(1) }}</span>
+        <div class="detail__hero">
+          <div
+            v-if="detailBackdrop"
+            class="detail__backdrop"
+            :style="{ backgroundImage: `url(${detailBackdrop})` }"
+            aria-hidden="true"
+          />
+          <div class="detail__hero-scrim" aria-hidden="true" />
+          <div class="detail__top">
+            <el-image
+              v-if="detailPoster"
+              :src="detailPoster"
+              fit="cover"
+              class="detail__poster"
+              @error="detail.posterFailed = true"
+            />
+            <div v-else class="detail__poster detail__poster--fallback" aria-hidden="true">
+              {{ detailTitle.slice(0, 1) }}
             </div>
-            <div class="detail__sub" v-if="detail.data.genres?.length">
-              {{ detail.data.genres.map((g: any) => g.name).filter(Boolean).join(' / ') }}
-            </div>
-            <div class="detail__sub" v-if="detail.mediaType === 'tv' && (detail.data.number_of_seasons != null || tvTotalEpisodes != null)">
-              <span v-if="detail.data.number_of_seasons != null">季数：{{ detail.data.number_of_seasons }}</span>
-              <span v-if="tvTotalEpisodes != null"> · 总集数：{{ tvTotalEpisodes }}</span>
-            </div>
-            <div class="detail__sub" v-if="detail.mediaType === 'tv' && tvProgressText">
-              {{ tvProgressText }}
-              <span v-if="tvLastEpisodeToAir">
-                · 当前到 S{{ tvLastEpisodeToAir.season_number }}E{{ tvLastEpisodeToAir.episode_number }}
-              </span>
-            </div>
-            <div class="detail__sub" v-if="detail.mediaType === 'tv' && tvUpdateText">
-              {{ tvUpdateText }}
+            <div class="detail__meta">
+              <div class="detail__headline">
+                <div class="detail__name">{{ detailTitle }}</div>
+                <span
+                  v-if="detail.data.vote_average != null"
+                  class="detail__rating"
+                  :class="{ 'detail__rating--high': Number(detail.data.vote_average) >= 8 }"
+                >
+                  <span aria-hidden="true">★</span>
+                  <span>{{ Number(detail.data.vote_average).toFixed(1) }}</span>
+                </span>
+                <el-tag size="small" effect="plain" round>
+                  {{ detail.mediaType === 'movie' ? '电影' : detail.mediaType === 'tv' ? '剧集' : '条目' }}
+                </el-tag>
+              </div>
+              <div class="detail__sub">
+                <span v-if="detail.mediaType === 'movie' && detail.data.release_date">首映：{{ detail.data.release_date }}</span>
+                <span v-else-if="detail.mediaType === 'tv' && detail.data.first_air_date">首播：{{ detail.data.first_air_date }}</span>
+                <template v-if="detail.mediaType === 'tv' && (detail.data.number_of_seasons != null || tvTotalEpisodes != null)">
+                  <span v-if="detail.data.first_air_date"> · </span>
+                  <span v-if="detail.data.number_of_seasons != null">{{ detail.data.number_of_seasons }} 季</span>
+                  <span v-if="detail.data.number_of_seasons != null && tvTotalEpisodes != null"> · </span>
+                  <span v-if="tvTotalEpisodes != null">共 {{ tvTotalEpisodes }} 集</span>
+                </template>
+              </div>
+              <div v-if="detail.data.genres?.length" class="detail__genres">
+                <span
+                  v-for="genre in detail.data.genres.map((g: any) => g.name).filter(Boolean)"
+                  :key="genre"
+                  class="detail__genre-chip"
+                >
+                  {{ genre }}
+                </span>
+              </div>
+              <div class="detail__sub" v-if="detail.mediaType === 'tv' && tvProgressText">
+                {{ tvProgressText }}
+                <span v-if="tvLastEpisodeToAir">
+                  · 当前到 S{{ tvLastEpisodeToAir.season_number }}E{{ tvLastEpisodeToAir.episode_number }}
+                </span>
+              </div>
+              <div class="detail__sub" v-if="detail.mediaType === 'tv' && tvUpdateText">
+                {{ tvUpdateText }}
+              </div>
             </div>
           </div>
         </div>
-        <div class="detail__overview" v-if="detail.data.overview">
-          {{ detail.data.overview }}
+        <div class="detail__overview-box" v-if="detail.data.overview">
+          <div class="detail__section-title">剧情简介</div>
+          <div class="detail__overview">{{ detail.data.overview }}</div>
         </div>
         <div v-if="detail.mediaType === 'tv' && tvSeasons.length" class="detail__seasons">
           <div class="detail__section-title">季信息</div>
@@ -1182,35 +1242,123 @@ watch(() => route.name, (name, previousName) => {
 .detail {
   padding: 4px 4px 18px;
   overflow-wrap: anywhere;
+  display: grid;
+  gap: 16px;
+}
+.detail__hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  background: var(--surface-muted);
+}
+.detail__backdrop {
+  position: absolute;
+  inset: -16px;
+  background-size: cover;
+  background-position: center;
+  filter: blur(22px) saturate(1.25);
+  opacity: 0.52;
+  transform: scale(1.08);
+}
+.detail__hero-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--card) 68%, transparent) 0%,
+    color-mix(in srgb, var(--card) 88%, transparent) 62%,
+    var(--card) 100%
+  );
 }
 .detail__top {
+  position: relative;
+  z-index: 1;
   display: flex;
-  gap: 14px;
+  gap: 18px;
+  align-items: flex-start;
 }
 .detail__poster {
-  width: 140px;
+  width: 136px;
   height: 196px;
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
   flex: none;
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.28);
+}
+.detail__poster--fallback {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(145deg, var(--surface-muted), var(--card));
+  color: var(--ink-muted);
+  font-size: 36px;
+  font-weight: 700;
 }
 .detail__meta {
   flex: 1;
   min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.detail__headline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .detail__name {
-  font-size: 16px;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--ink);
+}
+.detail__rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #fff;
+  font-size: 12px;
   font-weight: 600;
-  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.detail__rating--high {
+  background: rgba(217, 119, 6, 0.92);
+  color: #fffbeb;
+}
+.detail__genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.detail__genre-chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--ink-2);
+  background: color-mix(in srgb, var(--surface-muted) 88%, transparent);
+  border: 1px solid var(--line);
 }
 .detail__sub {
   color: var(--el-text-color-secondary);
+  font-size: 13px;
   line-height: 1.6;
 }
+.detail__overview-box {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+}
 .detail__overview {
-  margin-top: 14px;
   white-space: pre-wrap;
-  line-height: 1.7;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--ink-2);
   text-wrap: pretty;
 }
 .existing-task-body {

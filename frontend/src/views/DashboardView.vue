@@ -697,7 +697,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <el-empty v-if="!recentUpdates.length" description="暂无新文件转存记录" :image-size="88" />
+        <div v-if="!recentUpdates.length" class="empty-state empty-state--compact">
+          <div class="empty-state__title">暂无转存记录</div>
+          <div class="empty-state__desc">暂无新文件转存记录。</div>
+        </div>
         <div v-else class="update-list">
           <div v-for="item in recentUpdates" :key="`${item.task_id}-${item.started_at}`" class="update-row">
             <div class="update-row__main">
@@ -987,14 +990,13 @@ onBeforeUnmount(() => {
 }
 
 .failure-entry-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .failure-task-link {
-  margin-top: 8px;
+  align-self: flex-end;
   padding-block: 3px;
   color: var(--el-color-primary);
   font-size: 12px;

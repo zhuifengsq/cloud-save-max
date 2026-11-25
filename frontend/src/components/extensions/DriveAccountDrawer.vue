@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
 import type { ConfigFieldItem, DriveAccountItem, DriveTypeItem } from '@/types/extensions'
 import { buildAccountConfigUpdate } from '@/utils/driveAccountConfig'
 
@@ -114,6 +115,12 @@ function submit() {
     destroy-on-close
     @close="closeForm"
   >
+    <template #header>
+      <div class="drawer-title-with-icon">
+        <DriveTypeIcon v-if="state.drive_type" :type="state.drive_type" :size="22" />
+        <span>{{ isEditing ? '编辑账号' : '新增账号' }}</span>
+      </div>
+    </template>
     <el-form label-position="top" class="drawer-form">
       <div class="drawer-form__section">
         <div class="drawer-form__section-title">基本信息</div>
@@ -242,5 +249,14 @@ function submit() {
   justify-content: flex-end;
   gap: 12px;
   width: 100%;
+}
+
+.drawer-title-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
 }
 </style>

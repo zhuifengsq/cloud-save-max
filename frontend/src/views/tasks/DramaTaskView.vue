@@ -1571,20 +1571,26 @@ watch(() => route.name, (name, previousName) => {
     </el-dialog>
 
     <el-dialog v-if="isTaskRoute" v-model="runLogDialog.visible" :title="runLogDialog.title" :width="isMobile ? '96vw' : '1100px'" :fullscreen="isMobile">
-      <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px">
-        <el-tag v-if="runLogDialog.status" :type="runLogDialog.status === 'success' ? 'success' : runLogDialog.status === 'running' ? 'warning' : runLogDialog.status === 'skipped' ? 'info' : 'danger'">
+      <div class="run-log-toolbar">
+        <el-tag
+          v-if="runLogDialog.status"
+          round
+          :type="runLogDialog.status === 'success' ? 'success' : runLogDialog.status === 'running' ? 'warning' : runLogDialog.status === 'skipped' ? 'info' : 'danger'"
+        >
           {{ runLogDialog.status }}
         </el-tag>
-        <el-tag v-if="runLogDialog.stage" type="warning">阶段：{{ runLogDialog.stage }}</el-tag>
-        <el-button style="margin-left: auto" @click="stopRunLogStream">停止读取</el-button>
-        <el-button @click="copyRunLog">复制日志</el-button>
+        <el-tag v-if="runLogDialog.stage" type="warning" round>阶段：{{ runLogDialog.stage }}</el-tag>
+        <div class="run-log-toolbar__actions">
+          <el-button @click="stopRunLogStream">停止读取</el-button>
+          <el-button type="primary" plain @click="copyRunLog">复制日志</el-button>
+        </div>
       </div>
-      <el-alert v-if="runLogDialog.truncated" title="保存日志已截断" type="warning" :closable="false" />
-      <el-alert v-if="runLogDialog.treeTruncated" title="目录树已截断" type="warning" :closable="false" />
-      <el-alert v-if="runLogDialog.error" :title="runLogDialog.error" type="error"><el-button @click="loadExecutionChunk">重试</el-button></el-alert>
-      <el-button v-if="!runLogDialog.complete" :loading="runLogDialog.loading" @click="loadExecutionChunk">继续读取日志</el-button>
-      <pre v-if="runLogDialog.tree" style="white-space:pre-wrap">{{ runLogDialog.tree }}</pre>
-      <pre ref="runLogPre" style="white-space: pre-wrap; font-size: 12px; line-height: 1.5; background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 16px; padding: 12px; max-height: 65vh; overflow: auto">{{ runLogDialog.content }}</pre>
+      <el-alert v-if="runLogDialog.truncated" class="run-log-alert" title="保存日志已截断" type="warning" :closable="false" />
+      <el-alert v-if="runLogDialog.treeTruncated" class="run-log-alert" title="目录树已截断" type="warning" :closable="false" />
+      <el-alert v-if="runLogDialog.error" class="run-log-alert" :title="runLogDialog.error" type="error"><el-button @click="loadExecutionChunk">重试</el-button></el-alert>
+      <el-button v-if="!runLogDialog.complete" :loading="runLogDialog.loading" style="margin-bottom: 10px" @click="loadExecutionChunk">继续读取日志</el-button>
+      <pre v-if="runLogDialog.tree" class="terminal-pre terminal-pre--tree">{{ runLogDialog.tree }}</pre>
+      <pre ref="runLogPre" class="terminal-pre">{{ runLogDialog.content }}</pre>
     </el-dialog>
 
     <el-dialog v-if="isTaskRoute" v-model="runAllDialog.visible" :title="runAllDialog.title" :width="isMobile ? '96vw' : '1100px'" :fullscreen="isMobile">
@@ -1921,6 +1927,45 @@ watch(() => route.name, (name, previousName) => {
 .filter-strip .toolbar__left {
   flex-wrap: wrap;
   row-gap: 8px;
+}
+
+.run-log-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.run-log-toolbar__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.run-log-alert {
+  margin-bottom: 10px;
+}
+
+.terminal-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  background: #0d131f;
+  color: #dbe6f7;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  max-height: 65vh;
+  overflow: auto;
+}
+
+.terminal-pre--tree {
+  margin-bottom: 12px;
+  max-height: 28vh;
 }
 
 @media (max-width: 767px) {

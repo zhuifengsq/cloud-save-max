@@ -1402,7 +1402,10 @@ watch(
                 :error="detailRefreshErrors[it.tmdbId]" @refresh="refreshDramaDetail(it)"
               />
               <img v-if="it.posterUrl && posterFailures[it.posterUrl] !== 'unavailable'" class="poster-img" :src="posterSource(it.posterUrl)" @error="handlePosterError(it.posterUrl)" :alt="`${it.title} 海报`" loading="lazy" decoding="async" />
-              <div v-else class="poster-fallback">暂无海报</div>
+              <div v-else class="poster-fallback">
+                <span class="poster-fallback__monogram" aria-hidden="true">{{ String(it.title || '?').slice(0, 1) }}</span>
+                <span class="poster-fallback__label">暂无海报</span>
+              </div>
               <span v-if="it.dateKey === todayKey() && it.episodeNumbers.length" class="poster-badge poster-badge--ep">
                 今日 {{ formatEpisodeList(it.episodeNumbers) }}
               </span>
@@ -1736,12 +1739,35 @@ watch(
 }
 
 .poster-fallback {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   height: 100%;
+  padding-bottom: 52px;
+  background: linear-gradient(145deg, #243046 0%, #172030 60%, #111827 100%);
   color: #aebace;
-  font-size: 13px;
-  letter-spacing: .12em;
+}
+
+.poster-fallback__monogram {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(138, 171, 255, 0.14);
+  border: 1px solid rgba(138, 171, 255, 0.24);
+  color: #dce6ff;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.poster-fallback__label {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  opacity: 0.78;
 }
 
 .poster-overlay {

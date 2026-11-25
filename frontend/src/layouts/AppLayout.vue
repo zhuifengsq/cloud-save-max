@@ -172,7 +172,7 @@ async function handleLogout() {
     </el-drawer>
 
     <main id="main-content" tabindex="-1" class="app-content">
-      <header class="glass-panel app-header">
+      <header class="glass-panel app-header" :class="{ 'app-header--compact': breadcrumbs.length <= 1 }">
         <div class="app-header__left">
           <el-button text aria-label="打开导航菜单" class="app-header__menu" @click="mobileNavVisible = true">
             <el-icon><Menu /></el-icon>

@@ -82,6 +82,14 @@ function submit() {
     :title="channel ? `配置渠道 · ${channel.title}` : '配置渠道'"
     @close="closeForm"
   >
+    <template #header>
+      <div class="drawer-title-with-icon">
+        <span v-if="channel" class="drawer-channel-badge" aria-hidden="true">
+          {{ String(channel.title || channel.id || '?').slice(0, 1).toUpperCase() }}
+        </span>
+        <span>{{ channel ? `配置渠道 · ${channel.title}` : '配置渠道' }}</span>
+      </div>
+    </template>
     <el-form v-if="channel" label-position="top" class="drawer-form">
       <div class="drawer-form__section">
         <div class="drawer-form__section-title">运行控制</div>
@@ -175,5 +183,28 @@ function submit() {
   justify-content: flex-end;
   gap: 12px;
   width: 100%;
+}
+
+.drawer-title-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.drawer-channel-badge {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 13px;
+  font-weight: 700;
 }
 </style>

@@ -289,6 +289,14 @@ h3 {
   backdrop-filter: none;
 }
 
+html:root[data-theme='dark'] .app-content {
+  background: radial-gradient(760px 260px at 50% -40px, rgba(59, 110, 240, 0.085), transparent 70%);
+}
+
+html:root[data-theme='dark'] .glass-panel {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--panel-shadow);
+}
+
 .shell-page,
 .page-stack,
 .dashboard {
@@ -766,6 +774,12 @@ h3 {
   background: transparent;
   box-shadow: none;
   min-height: 24px;
+}
+
+@media (min-width: 768px) {
+  .app-header.app-header--compact {
+    display: none;
+  }
 }
 
 .app-header__left {
