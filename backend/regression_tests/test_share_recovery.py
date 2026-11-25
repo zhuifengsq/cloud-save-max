@@ -57,6 +57,8 @@ class ShareRecoveryTests(unittest.TestCase):
                 raise outcome
             return (outcome, False, {})
 
+        from app.infrastructure.execution.drama_executor import ShareSourceInvalidError
+
         class FakeDrama:
             def __init__(self, *, adapter, task_data, log):
                 self.data, self.log = task_data, log
@@ -64,7 +66,7 @@ class ShareRecoveryTests(unittest.TestCase):
             def execute(self):
                 if always_fail or self.data['shareurl'].endswith('/old'):
                     self.log.set_stage('get_stoken')
-                    raise RuntimeError('分享已失效')
+                    raise ShareSourceInvalidError('分享已失效')
                 tree = Tree()
                 tree.create_node('完成', 'root')
                 return tree

@@ -1497,7 +1497,14 @@ watch(() => route.name, (name, previousName) => {
     </ResponsivePagination>
     <el-dialog v-if="isTaskRoute" v-model="history.visible" title="执行历史">
       <el-alert v-if="history.error" :title="history.error" type="error"><el-button @click="loadHistory">重试</el-button></el-alert>
-      <div v-loading="history.loading">
+      <div v-if="history.loading && !history.items.length" class="task-skeleton" aria-hidden="true">
+        <div v-for="i in 4" :key="`hist-sk-${i}`" class="task-skeleton__row">
+          <span class="task-skeleton__bar" style="width: 32%"></span>
+          <span class="task-skeleton__bar task-skeleton__bar--soft" style="width: 14%"></span>
+          <span class="ui-skeleton" style="flex: 1; height: 11px"></span>
+        </div>
+      </div>
+      <div v-else v-loading="history.loading && Boolean(history.items.length)">
         <div v-for="execution in history.items" :key="execution.id"><el-button link @click="openExecution(history.taskId, execution.id)">{{ execution.started_at }} · {{ execution.status }}</el-button> {{ execution.message }}</div>
       </div>
       <el-pagination v-model:current-page="history.page" :page-size="20" :total="history.total" layout="prev,pager,next" @current-change="loadHistory" />
@@ -1954,13 +1961,25 @@ watch(() => route.name, (name, previousName) => {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.65;
-  background: #0d131f;
-  color: #dbe6f7;
+  background: var(--surface-muted);
+  color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 14px 16px;
   max-height: 65vh;
   overflow: auto;
+}
+
+:global(html[data-theme='dark']) .terminal-pre {
+  background: #0d131f;
+  color: #dbe6f7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :global(html:not([data-theme='light'])) .terminal-pre {
+    background: #0d131f;
+    color: #dbe6f7;
+  }
 }
 
 .terminal-pre--tree {

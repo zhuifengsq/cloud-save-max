@@ -131,6 +131,15 @@ def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, sh
 
     candidates = filter_files(candidates)
 
+    if candidates and replace and re.search(r"\{I+\}", replace):
+        normalized_dest = [
+            {"file_name": _get_name(raw), "dir": _is_dir(raw)}
+            for raw in dest_file_list
+            if _get_name(raw)
+        ]
+        mr.set_dir_file_list(normalized_dest, replace)
+        mr.sort_file_list(candidates)
+
     keep_idx = conflict_winners(
         ((f.get("file_name_re"), _to_size(f.get("size")), f.get("updated_at")) for f in candidates),
         ignore_extension,

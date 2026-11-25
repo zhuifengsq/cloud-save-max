@@ -1687,6 +1687,13 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         message = str(data.get("message") or "").strip()
         if str(status) == "500":
             return {"kind": "auth", "message": message or "账号未登录或 Cookie 已失效"}
+        if errno in (-6, -21) or any(
+            word in message for word in ("登录", "认证", "Cookie", "cookie")
+        ):
+            return {
+                "kind": "auth",
+                "message": message or self.ERROR_CODES.get(errno, "认证失败，请检查Cookie是否有效"),
+            }
         if errno in (4, 200025) or "提取码" in message:
             return {"kind": "passcode", "message": message or "提取码错误"}
         if errno in self.SHARE_INVALID_ERRNOS or any(
@@ -1698,11 +1705,6 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             return {"kind": "pending", "message": message or "分享文件夹等待审核中"}
         if errno == -62 or "验证码" in message:
             return {"kind": "captcha", "message": message or "需要输入验证码"}
-        if errno in (-6, -21):
-            return {
-                "kind": "auth",
-                "message": message or self.ERROR_CODES.get(errno, "认证失败，请检查Cookie是否有效"),
-            }
         if errno == -65 or "频率" in message or "限流" in message or str(status) == "429":
             return {"kind": "throttled", "message": message or "访问频率过高，请稍后重试"}
         return {"kind": "unknown", "message": message}

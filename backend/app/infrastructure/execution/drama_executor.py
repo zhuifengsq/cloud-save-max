@@ -7,10 +7,11 @@ import time
 from hashlib import sha256
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, NoReturn, TypeVar
 
 from treelib import Tree
 from app.application.drama_file_rules import FileFilters, split_words, transfer_target_key
+from app.application.episode_number import episode_from_folder_name
 from app.infrastructure.execution.drama_plan import (DramaPlanItem, build_transfer_plan, _parse_size, _to_size, _normalize_name, _is_dir, _get_name, _get_fid, _get_fid_token, _get_updated_at)
 from app.infrastructure.execution.drama_progress import calculate_saved_latest
 
@@ -38,7 +39,7 @@ from app.core.settings import settings
 from app.infrastructure.execution.execution_log import ExecutionLog
 from app.domain.task_run import ExecutionLogPort
 from app.infrastructure.execution.magic_rename import MagicRename
-from app.infrastructure.execution.retry_utils import RetryResult, retry_call, summarize_payload
+from app.infrastructure.execution.retry_utils import RetryResult, is_transient_error, retry_call, summarize_payload
 
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,18 @@ FOLDER_SCOPE_RULES = {
 
 class SkipTask(Exception):
     pass
+
+
+class ShareSourceInvalidError(RuntimeError):
+    """Confirmed invalid, expired, or removed share link."""
+
+
+class ShareAccessError(RuntimeError):
+    """Share access error that must not trigger share link replacement."""
+
+    def __init__(self, message: str, *, reason: str = "unknown") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 T = TypeVar("T")
@@ -215,8 +228,18 @@ class DramaTaskExecutor:
             return created
         raise RuntimeError("创建目录失败")
 
+    def _supports_complete_listing(self) -> bool:
+        return getattr(self.adapter, "SUPPORTS_COMPLETE_LISTING", None) is True
+
     def _list_dest_names(self, dest_fid: str, ignore_extension: bool) -> set[str]:
-        listing = self._ls_dir(dest_fid)
+        if self._supports_complete_listing():
+            listing = self._retry(
+                action="ls_dir",
+                fn=lambda: self.adapter.ls_dir_complete(dest_fid),
+                validate=lambda r: _validate_code_status("ls_dir", r),
+            )
+        else:
+            listing = self._ls_dir(dest_fid)
         raw_items = (((listing or {}).get("data") or {}).get("list")) or []
         names: set[str] = set()
         for raw in raw_items:
@@ -229,10 +252,11 @@ class DramaTaskExecutor:
         return names
 
     def _list_dest_for_diff(self, dest_fid: str, *, require_complete: bool = False) -> tuple[list[dict[str, Any]], bool]:
-        if getattr(self.adapter, "SUPPORTS_COMPLETE_LISTING", None) is True:
+        if self._supports_complete_listing():
             listing = self.adapter.ls_dir_complete(dest_fid)
             if _validate_code_status("ls_dir", listing).ok:
                 return (listing.get("data") or {}).get("list") or [], True
+            raise SkipTask("无法完整读取目标目录，转存结果待确认")
         if require_complete:
             raise SkipTask("无法完整读取目标目录，转存结果待确认")
         listing = self._ls_dir(dest_fid)
@@ -270,7 +294,41 @@ class DramaTaskExecutor:
         items = detail["data"]["list"]
         return items, self._share_listing_complete(detail, items)
 
+    def _classify_share_response(self, response: Any, fallback_message: str) -> tuple[str, str]:
+        if isinstance(response, dict):
+            classifier = getattr(self.adapter, "classify_share_failure", None)
+            if callable(classifier):
+                classified = classifier(response)
+                if isinstance(classified, dict):
+                    kind = str(classified.get("kind") or "unknown").strip().lower()
+                    msg = str(classified.get("message") or "").strip() or fallback_message
+                    return kind, msg
+            msg = str(response.get("message") or "").strip() or fallback_message
+            return "unknown", msg
+        return "unknown", fallback_message
+
+    def _raise_classified_share_error(self, exc: Exception, response: Any, default_message: str) -> NoReturn:
+        raw_message = str(exc).strip() or default_message
+        kind, classified_msg = self._classify_share_response(response, raw_message)
+        message = classified_msg or raw_message
+        if kind == "invalid":
+            raise ShareSourceInvalidError(message) from exc
+        if kind == "pending":
+            raise SkipTask(message) from exc
+        if kind in {"auth", "throttled", "passcode", "captcha"}:
+            raise ShareAccessError(message, reason=kind) from exc
+        if is_transient_error(exc) or is_transient_error(message):
+            raise ShareAccessError(message, reason="transient") from exc
+        raise exc
+
     def _fetch_share_detail(self, *, pwd_id: str, stoken: str, pdir_fid: str) -> dict[str, Any]:
+        last_detail_resp: list[Any] = [None]
+
+        def _call_detail() -> dict[str, Any]:
+            resp = self.adapter.get_detail(pwd_id, stoken, pdir_fid or "")
+            last_detail_resp[0] = resp
+            return resp
+
         def _validate(detail: dict[str, Any]) -> RetryResult:
             if not isinstance(detail, dict):
                 return RetryResult(value=detail, ok=False, error_message=f"get_detail invalid response: {summarize_payload(detail)}")
@@ -287,7 +345,10 @@ class DramaTaskExecutor:
                 return RetryResult(value=detail, ok=False, error_message=f"get_detail invalid item: {summarize_payload(detail)}")
             return RetryResult(value=detail, ok=True)
 
-        return self._retry(action="get_detail", fn=lambda: self.adapter.get_detail(pwd_id, stoken, pdir_fid or ""), validate=_validate)
+        try:
+            return self._retry(action="get_detail", fn=_call_detail, validate=_validate)
+        except Exception as exc:
+            self._raise_classified_share_error(exc, last_detail_resp[0], "获取分享详情失败")
 
     def _share_listing_complete(self, detail: dict[str, Any], items: list[dict[str, Any]]) -> bool:
         metadata = detail.get("metadata", {})
@@ -651,7 +712,7 @@ class DramaTaskExecutor:
 
     def _read_rename_names(self, dest_fid: str) -> dict[str, str] | None:
         try:
-            if self._quark_strategy is None and getattr(self.adapter, "SUPPORTS_COMPLETE_LISTING", None) is True:
+            if self._supports_complete_listing():
                 listing = self._retry(action="ls_dir", fn=lambda: self.adapter.ls_dir_complete(dest_fid),
                                       validate=lambda r: _validate_code_status("ls_dir", r))
             else:
@@ -728,6 +789,13 @@ class DramaTaskExecutor:
 
         self._set_stage("get_stoken")
         self._section("获取分享 token")
+        last_token_resp: list[Any] = [None]
+
+        def _call_get_stoken() -> dict[str, Any]:
+            resp = self.adapter.get_stoken(pwd_id, passcode or "")
+            last_token_resp[0] = resp
+            return resp
+
         def _validate_stoken(resp: dict[str, Any]) -> RetryResult:
             st = ((resp or {}).get("data") or {}).get("stoken")
             if st:
@@ -735,11 +803,14 @@ class DramaTaskExecutor:
             msg = (resp or {}).get("message") or "获取分享 token 失败"
             return RetryResult(value=resp, ok=False, error_message=f"{msg} resp={summarize_payload(resp)}")
 
-        token_response = self._retry(action="get_stoken", fn=lambda: self.adapter.get_stoken(pwd_id, passcode or ""), validate=_validate_stoken)
+        try:
+            token_response = self._retry(action="get_stoken", fn=_call_get_stoken, validate=_validate_stoken)
+        except Exception as exc:
+            self._raise_classified_share_error(exc, last_token_resp[0], "获取分享 token 失败")
         stoken = ((token_response or {}).get("data") or {}).get("stoken")
         if not stoken:
             message = (token_response or {}).get("message") or "获取分享 token 失败"
-            raise RuntimeError(str(message))
+            self._raise_classified_share_error(RuntimeError(str(message)), token_response, "获取分享 token 失败")
         self._line("OK: stoken 获取成功")
 
         pdir_fid = str(extracted_pdir_fid or "")
@@ -762,11 +833,14 @@ class DramaTaskExecutor:
         ignore_extension = bool(self.task_data.get("ignore_extension"))
         addition = self.task_data.get("addition") or {}
         folder_mode = str(addition.get("folder_mode") or "normal").strip().lower()
+        supports_complete = self._supports_complete_listing()
         tracked_quark = self._quark_strategy is not None and self._transfer_store is not None
         if folder_mode == "folder_diff":
-            dest_file_list, dest_complete = self._list_dest_for_diff(dest_root_fid, require_complete=tracked_quark)
+            dest_file_list, dest_complete = self._list_dest_for_diff(
+                dest_root_fid, require_complete=supports_complete or tracked_quark
+            )
             dest_names, dest_dir_map, ambiguous_dirs = self._dest_children(dest_file_list, ignore_extension)
-        elif tracked_quark:
+        elif supports_complete or tracked_quark:
             dest_file_list, _ = self._list_dest_for_diff(dest_root_fid, require_complete=True)
         else:
             dest_listing = self._ls_dir(dest_root_fid)
@@ -1183,11 +1257,9 @@ class DramaTaskExecutor:
         resuming = share_name in self._fallback_dirs
         if share_name in dest_dir_map and not resuming:
             self._line(f"跳过已存在的文件夹: {share_name}")
-            try:
-                if dest_dir_map[share_name]:
-                    self._add_saved_names(self._list_dest_names(dest_dir_map[share_name], ignore_extension))
-            except Exception as exc:
-                self._line(f"统计已存在目录失败: {exc}")
+            hint = episode_from_folder_name(share_name)
+            if hint:
+                self._folder_episode_hints.append(int(hint))
             return []
         # 按目录 ID 直转无法检查其中的文件，存在文件规则时走逐文件路径。
         rules = self._file_filter_rules()
@@ -1217,8 +1289,6 @@ class DramaTaskExecutor:
                     if saved_names:
                         self._add_saved_names(saved_names)
                     else:
-                        from app.application.episode_number import episode_from_folder_name
-
                         hint = episode_from_folder_name(share_name)
                         if hint:
                             self._folder_episode_hints.append(int(hint))

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from threading import Lock, Thread
+from threading import Condition, Lock, Thread
+import time
 
 from app.core.errors import ApiError
+from app.core.settings import settings
 
 
 class TaskAdmission:
@@ -13,6 +15,7 @@ class TaskAdmission:
     def __init__(self, max_active: int):
         self._max_active = max_active
         self._lock = Lock()
+        self._cond = Condition(self._lock)
         self._active = 0
         self._task_ids: set[int] = set()
 
@@ -30,6 +33,22 @@ class TaskAdmission:
             if task_id is not None:
                 self._task_ids.add(task_id)
         return TaskSlot(self, task_id)
+
+    def wait_for_capacity(self, task_id: int | None, timeout: float = 0.0) -> TaskSlot:
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        with self._lock:
+            while True:
+                if task_id is not None and task_id in self._task_ids:
+                    raise ApiError("TASK_ALREADY_RUNNING", "该任务正在执行，请等待本次执行结束", 409)
+                if self._active < self._max_active:
+                    self._active += 1
+                    if task_id is not None:
+                        self._task_ids.add(task_id)
+                    return TaskSlot(self, task_id)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ApiError("TASK_CAPACITY_EXCEEDED", "正在执行的任务过多，请稍后再试", 429)
+                self._cond.wait(timeout=remaining)
 
 
 class TaskSlot:
@@ -53,6 +72,7 @@ class TaskSlot:
             admission._active -= 1
             if self._task_id is not None:
                 admission._task_ids.remove(self._task_id)
+            admission._cond.notify_all()
 
     def start_worker(self, target: Callable[[], None]) -> None:
         def run():
@@ -66,4 +86,4 @@ class TaskSlot:
             raise
 
 
-task_admission = TaskAdmission(max_active=4)
+task_admission = TaskAdmission(max_active=settings.drama_task_max_active)

@@ -56,6 +56,10 @@ function syncDocumentTheme(pref: ThemePreference, resolved: ResolvedTheme) {
     if (meta) {
       meta.setAttribute('content', pref === 'system' ? 'light dark' : pref)
     }
+    const themeMeta = document.querySelector('meta[name="theme-color"]')
+    if (themeMeta) {
+      themeMeta.setAttribute('content', resolved === 'dark' ? '#10151e' : '#f5f7fa')
+    }
     document.documentElement.dataset.theme = resolved
   }
   if (typeof window !== 'undefined') {

@@ -1,6 +1,7 @@
 """任务仓储（S3 逐步把 services 里的 select() 搬到这里）。"""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sqlalchemy import case, func, select, update
@@ -211,10 +212,32 @@ def build_task_row(**kwargs):
     return Task(**kwargs)
 
 
+def _parse_json_dict(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _to_positive_int(value) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def stop_completed_drama_tasks(db: Session, *, language: str, poster_language: str) -> dict:
-    """停用 TMDB 状态为已完结/已取消的追剧任务，返回 checked/matched_ids/stopped。"""
+    """仅停用 TMDB 已完结/已取消、已追平最新一集且无未完成转存断点的追剧任务。"""
     from sqlalchemy import and_, func, update as sa_update
 
+    from app.domain.tmdb import is_saved_latest_caught_up, resolve_tmdb_latest_aired_episode
+    from app.infrastructure.persistence.models.drama_transfer_checkpoint import DramaTransferCheckpoint
     from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
 
     checked = int(
@@ -229,30 +252,54 @@ def stop_completed_drama_tasks(db: Session, *, language: str, poster_language: s
         or 0
     )
     ended_statuses = ["Ended", "Canceled"]
-    matched_ids = list(
-        db.execute(
-            select(Task.id)
-            .join(
-                TMDBMediaCache,
-                and_(
-                    TMDBMediaCache.media_type == Task.tmdb_media_type,
-                    TMDBMediaCache.tmdb_id == Task.tmdb_id,
-                    TMDBMediaCache.language == language,
-                    TMDBMediaCache.poster_language == poster_language,
-                ),
-            )
-            .where(
-                Task.task_type == "drama",
-                Task.enabled.is_(True),
-                Task.tmdb_id.is_not(None),
-                Task.tmdb_media_type == "tv",
-                TMDBMediaCache.status.in_(ended_statuses),
-            )
-            .order_by(Task.id.desc())
+    active_checkpoint_task_ids = {
+        int(tid)
+        for tid in db.execute(select(DramaTransferCheckpoint.task_id)).scalars().all()
+        if tid is not None
+    }
+    rows = db.execute(
+        select(Task.id, Task.extra_json, TMDBMediaCache.payload_json)
+        .join(
+            TMDBMediaCache,
+            and_(
+                TMDBMediaCache.media_type == Task.tmdb_media_type,
+                TMDBMediaCache.tmdb_id == Task.tmdb_id,
+                TMDBMediaCache.language == language,
+                TMDBMediaCache.poster_language == poster_language,
+            ),
         )
-        .scalars()
-        .all()
-    )
+        .where(
+            Task.task_type == "drama",
+            Task.enabled.is_(True),
+            Task.tmdb_id.is_not(None),
+            Task.tmdb_media_type == "tv",
+            TMDBMediaCache.status.in_(ended_statuses),
+        )
+        .order_by(Task.id.desc())
+    ).all()
+
+    matched_ids: list[int] = []
+    for task_id, extra_json, payload_json in rows:
+        tid = int(task_id)
+        if tid in active_checkpoint_task_ids:
+            continue
+        details = _parse_json_dict(payload_json)
+        tmdb_season, tmdb_episode, _ = resolve_tmdb_latest_aired_episode(details)
+        if tmdb_season is None or tmdb_episode is None:
+            continue
+        extra = _parse_json_dict(extra_json)
+        saved_latest = extra.get("saved_latest") if isinstance(extra.get("saved_latest"), dict) else {}
+        saved_season = _to_positive_int(saved_latest.get("season"))
+        saved_episode = _to_positive_int(saved_latest.get("episode"))
+        if not is_saved_latest_caught_up(
+            tmdb_season=tmdb_season,
+            tmdb_episode=tmdb_episode,
+            saved_season=saved_season,
+            saved_episode=saved_episode,
+        ):
+            continue
+        matched_ids.append(tid)
+
     stopped = 0
     if matched_ids:
         db.execute(sa_update(Task).where(Task.id.in_(matched_ids)).values(enabled=False))

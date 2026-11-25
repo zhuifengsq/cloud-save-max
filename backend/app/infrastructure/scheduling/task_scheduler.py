@@ -283,6 +283,7 @@ def run_drama_tasks(timezone_name: str | None = None) -> None:
     schedule_now = task_schedule_time(timezone_name)
     order, identities = _scheduled_drama_order()
     ready, running, finished = [], {}, {}
+    capacity_deadline: float | None = None
     with ThreadPoolExecutor(max_workers=task_admission.max_active, thread_name_prefix="drama") as pool:
         while order.is_active():
             for tid in order.get_ready():
@@ -291,19 +292,39 @@ def run_drama_tasks(timezone_name: str | None = None) -> None:
                 tid = heapq.heappop(ready)
                 try:
                     slot = task_admission.reserve(tid)
+                    capacity_deadline = None
                 except ApiError as exc:
                     if exc.code == "TASK_CAPACITY_EXCEEDED" and running:
                         heapq.heappush(ready, tid)
                         break
-                    logger.info("跳过本轮追剧任务 task_id=%s code=%s", tid, exc.code)
-                    order.done(tid)
-                    continue
+                    if exc.code == "TASK_CAPACITY_EXCEEDED":
+                        wait_seconds = float(getattr(settings, "drama_scheduler_capacity_wait_seconds", 30.0) or 0.0)
+                        if capacity_deadline is None:
+                            capacity_deadline = time.monotonic() + max(0.0, wait_seconds)
+                        remaining = capacity_deadline - time.monotonic()
+                        if remaining > 0:
+                            try:
+                                slot = task_admission.wait_for_capacity(tid, timeout=remaining)
+                                capacity_deadline = None
+                            except ApiError as wait_exc:
+                                logger.info("跳过本轮追剧任务 task_id=%s code=%s", tid, wait_exc.code)
+                                order.done(tid)
+                                continue
+                        else:
+                            logger.info("跳过本轮追剧任务 task_id=%s code=%s", tid, exc.code)
+                            order.done(tid)
+                            continue
+                    else:
+                        logger.info("跳过本轮追剧任务 task_id=%s code=%s", tid, exc.code)
+                        order.done(tid)
+                        continue
                 try:
                     running[pool.submit(_run_scheduled_drama, tid, identities[tid], schedule_now, slot)] = tid
                 except BaseException:
                     slot.release()
                     raise
             if running:
+                capacity_deadline = None
                 completed, _ = wait(running, return_when=FIRST_COMPLETED)
                 for future in completed:
                     tid = running.pop(future)

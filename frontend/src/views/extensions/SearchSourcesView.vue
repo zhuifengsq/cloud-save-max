@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CircleCheck, Connection, Cpu } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import WpsPluginSettings from '@/components/search/WpsPluginSettings.vue'
 
@@ -176,7 +177,12 @@ async function toggleApi(item: ApiSearchSource, enabled: boolean) {
 
 async function removeApi(item: ApiSearchSource) {
   try {
-    await ElMessageBox.confirm(`删除搜索源“${item.name}”？`, '确认删除', { type: 'warning' })
+    await ElMessageBox.confirm(`删除搜索源“${item.name}”？`, '确认删除', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      confirmButtonClass: 'el-button--danger',
+    })
     await deleteApiSearchSource(item.id)
     ElMessage.success('已删除')
     await refresh()
@@ -249,36 +255,87 @@ onMounted(() => { if (canRead.value) refresh() })
 </script>
 
 <template>
-  <section class="search-sources-page">
-    <div class="page-heading">
-      <div>
-        <div class="page-heading__eyebrow">SEARCH SOURCES</div>
+  <section class="shell-page search-sources-page">
+    <div class="section-header">
+      <div class="section-header__title">
         <h1>搜索源管理</h1>
-        <p>搜索结果会出现在新增追剧任务时，选择链接后再保存任务。</p>
+        <div class="section-header__desc">搜索结果会出现在新增追剧任务时，选择链接后再保存任务。</div>
       </div>
-      <el-button :loading="loading" @click="refresh">刷新全部</el-button>
+      <div class="toolbar__right">
+        <el-button type="primary" :loading="loading" @click="refresh">刷新全部</el-button>
+      </div>
     </div>
 
-    <div class="source-overview">
-      <div class="source-overview__item"><span>API 搜索源</span><strong>{{ apiSources.length }}</strong></div>
-      <div class="source-overview__item"><span>Python 插件</span><strong>{{ plugins.length }}</strong></div>
-      <div class="source-overview__item"><span>已启用</span><strong>{{ apiSources.filter(item => item.enabled).length + plugins.filter(item => item.enabled).length }}</strong></div>
-    </div>
+    <section class="metric-strip source-overview">
+      <div class="glass-panel metric-tile">
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">API 搜索源</div>
+          <span class="metric-tile__icon metric-tile__icon--brand" aria-hidden="true">
+            <el-icon><Connection /></el-icon>
+          </span>
+        </div>
+        <div class="metric-tile__value">{{ apiSources.length }}</div>
+        <div class="metric-tile__hint">自定义 JSON 接口</div>
+      </div>
+      <div class="glass-panel metric-tile">
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">Python 插件</div>
+          <span class="metric-tile__icon metric-tile__icon--violet" aria-hidden="true">
+            <el-icon><Cpu /></el-icon>
+          </span>
+        </div>
+        <div class="metric-tile__value">{{ plugins.length }}</div>
+        <div class="metric-tile__hint">服务端脚本搜索源</div>
+      </div>
+      <div class="glass-panel metric-tile">
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">已启用</div>
+          <span class="metric-tile__icon metric-tile__icon--success" aria-hidden="true">
+            <el-icon><CircleCheck /></el-icon>
+          </span>
+        </div>
+        <div class="metric-tile__value">{{ apiSources.filter(item => item.enabled).length + plugins.filter(item => item.enabled).length }}</div>
+        <div class="metric-tile__hint">当前参与搜索的源总数</div>
+      </div>
+    </section>
 
     <el-alert v-if="!canRead" title="搜索源配置仅限管理员查看" type="warning" :closable="false" />
-    <el-tabs v-else v-model="activeTab" class="source-tabs">
+    <el-tabs v-else v-model="activeTab" class="glass-panel source-tabs">
       <el-tab-pane label="API 搜索源" name="api">
         <div class="tab-heading">
           <p>配置返回 JSON 的搜索接口。URL 或请求体中用 <code>[[keyword]]</code> 表示搜索关键词。</p>
           <el-button type="primary" :disabled="!canWrite" @click="openApiEditor()">新增 API 源</el-button>
         </div>
-        <el-empty v-if="!loading && !apiSources.length" description="还没有 API 搜索源" />
-        <div v-else class="source-grid">
+        <div v-if="loading && !apiSources.length" class="source-grid" aria-hidden="true">
+          <div v-for="i in 3" :key="`api-sk-${i}`" class="glass-panel source-card">
+            <div class="source-card__header">
+              <span class="ui-skeleton" style="width: 48%; height: 22px"></span>
+              <span class="ui-skeleton ui-skeleton--pill" style="width: 40px; height: 20px"></span>
+            </div>
+            <span class="ui-skeleton ui-skeleton--pill" style="width: 60px; height: 22px"></span>
+            <span class="ui-skeleton" style="width: 100%; height: 52px"></span>
+          </div>
+        </div>
+        <div v-else-if="!apiSources.length" class="empty-state">
+          <div class="empty-state__title">还没有 API 搜索源</div>
+          <div class="empty-state__desc">新增 JSON 搜索接口后，即可在创建追剧任务时自动聚合结果。</div>
+          <div class="empty-state__actions">
+            <el-button type="primary" :disabled="!canWrite" @click="openApiEditor()">新增 API 源</el-button>
+          </div>
+        </div>
+        <div v-else class="source-grid" v-loading="loading">
           <article v-for="item in apiSources" :key="item.id" class="glass-panel source-card">
             <header class="source-card__header">
               <hgroup class="source-card__heading">
                 <h3>{{ item.name }}</h3>
-                <p>{{ item.method }}</p>
+                <div class="source-card__badges">
+                  <el-tag :type="item.method === 'POST' ? 'warning' : 'primary'" effect="plain" size="small">
+                    {{ item.method }}
+                  </el-tag>
+                  <el-tag :type="item.enabled ? 'success' : 'info'" effect="plain" round size="small">
+                    {{ item.enabled ? '已启用' : '已停用' }}
+                  </el-tag>
+                </div>
               </hgroup>
               <el-switch
                 :aria-label="`启用 ${item.name}`"
@@ -288,15 +345,9 @@ onMounted(() => { if (canRead.value) refresh() })
               />
             </header>
 
-            <div>
-              <el-tag :type="item.enabled ? 'success' : 'info'" effect="plain" round size="small">
-                {{ item.enabled ? '已启用' : '已停用' }}
-              </el-tag>
-            </div>
-
             <div class="source-card__body">
               <div class="source-card__label">接口 URL</div>
-              <p class="source-card__summary">{{ item.url }}</p>
+              <p class="source-card__summary source-card__summary--mono">{{ item.url }}</p>
             </div>
 
             <footer class="source-card__actions">
@@ -329,13 +380,34 @@ class MySearchPlugin(BaseSearchPlugin):
         return []  # 实际结果格式：{"taskname": "片名", "shareurl": "真实分享链接"}</pre>
           <p>文件名中的 key 必须与类的 key 一致。上传后在列表中启用，再用“测试搜索”检查结果。</p>
         </details>
-        <el-empty v-if="!loading && !plugins.length" description="还没有 Python 搜索插件" />
-        <div v-else class="source-grid">
+        <div v-if="loading && !plugins.length" class="source-grid" aria-hidden="true">
+          <div v-for="i in 3" :key="`plug-sk-${i}`" class="glass-panel source-card">
+            <div class="source-card__header">
+              <span class="ui-skeleton" style="width: 52%; height: 22px"></span>
+              <span class="ui-skeleton ui-skeleton--pill" style="width: 40px; height: 20px"></span>
+            </div>
+            <span class="ui-skeleton ui-skeleton--pill" style="width: 60px; height: 22px"></span>
+            <span class="ui-skeleton" style="width: 100%; height: 52px"></span>
+          </div>
+        </div>
+        <div v-else-if="!plugins.length" class="empty-state">
+          <div class="empty-state__title">还没有 Python 搜索插件</div>
+          <div class="empty-state__desc">上传符合规范的 <code>_plugin.py</code> 脚本后，可在此启用并测试搜索。</div>
+        </div>
+        <div v-else class="source-grid" v-loading="loading">
           <article v-for="item in plugins" :key="item.key" class="glass-panel source-card">
             <header class="source-card__header">
               <hgroup class="source-card__heading">
                 <h3>{{ item.name || item.key }}</h3>
-                <p>{{ item.key }}</p>
+                <div class="source-card__badges">
+                  <code class="source-card__key">{{ item.key }}</code>
+                  <el-tag
+                    :type="item.status !== 'ready' ? 'danger' : item.enabled ? 'success' : 'info'"
+                    effect="plain" round size="small"
+                  >
+                    {{ item.status !== 'ready' ? '异常' : item.enabled ? '已启用' : '已停用' }}
+                  </el-tag>
+                </div>
               </hgroup>
               <el-switch
                 :aria-label="`启用 ${item.name || item.key}`"
@@ -344,15 +416,6 @@ class MySearchPlugin(BaseSearchPlugin):
                 @change="togglePlugin(item, Boolean($event))"
               />
             </header>
-
-            <div>
-              <el-tag
-                :type="item.status !== 'ready' ? 'danger' : item.enabled ? 'success' : 'info'"
-                effect="plain" round size="small"
-              >
-                {{ item.status !== 'ready' ? '异常' : item.enabled ? '已启用' : '已停用' }}
-              </el-tag>
-            </div>
 
             <div class="source-card__body">
               <div class="source-card__label">插件说明</div>
@@ -439,7 +502,16 @@ class MySearchPlugin(BaseSearchPlugin):
     <el-dialog v-model="test.visible" :title="`测试搜索：${test.title}`" width="min(760px, 96vw)" append-to-body>
       <div class="test-bar"><el-input v-model="test.keyword" placeholder="输入影视名称" @keydown.enter="!isImeComposing($event) && runTest()" /><el-button type="primary" :loading="test.loading" @click="runTest">搜索</el-button></div>
       <p v-if="test.message" class="test-message">{{ test.message }}</p>
-      <el-empty v-if="!test.loading && !test.results.length" description="暂无搜索结果" />
+      <div v-if="test.loading" class="test-results" aria-hidden="true">
+        <div v-for="i in 3" :key="`test-sk-${i}`" class="test-result">
+          <span class="ui-skeleton" style="width: 58%; height: 16px"></span>
+          <span class="ui-skeleton" style="width: 92%; height: 13px; margin-top: 8px"></span>
+        </div>
+      </div>
+      <div v-else-if="!test.results.length" class="empty-state empty-state--compact">
+        <div class="empty-state__title">暂无搜索结果</div>
+        <div class="empty-state__desc">输入影视关键词后点击搜索验证结果解析。</div>
+      </div>
       <div v-else class="test-results">
         <div v-for="(item, index) in test.results" :key="`${item.shareurl}-${index}`" class="test-result">
           <div class="test-result__head">
@@ -454,25 +526,20 @@ class MySearchPlugin(BaseSearchPlugin):
 </template>
 
 <style scoped>
-.search-sources-page { width: 100%; display: grid; gap: 20px; }
-.page-heading, .tab-heading, .test-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.page-heading { padding: 0; }
-.page-heading__eyebrow { display: none; margin-bottom: 6px; color: var(--el-color-primary); font-size: 11px; font-weight: 750; letter-spacing: .18em; }
-.page-heading h1 { margin: 0 0 6px; font-size: 22px; font-weight: 700; line-height: 1.3; letter-spacing: -.02em; }
-.page-heading p, .tab-heading p { margin: 0; font-size: 13px; color: var(--el-text-color-secondary); line-height: 1.6; }
-.source-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.source-overview__item { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border: 1px solid var(--panel-border); border-radius: var(--panel-radius); background: var(--panel-bg); box-shadow: var(--panel-shadow); color: var(--el-text-color-secondary); font-size: 13px; }
-.source-overview__item strong { color: var(--el-text-color-primary); font-size: 24px; line-height: 1; }
-.source-tabs { padding: 20px 24px 28px; border: 1px solid var(--panel-border); border-radius: var(--panel-radius); background: var(--panel-bg); box-shadow: var(--panel-shadow); }
-.source-tabs :deep(.el-tabs__item) { height: 48px; font-size: 14px; font-weight: 650; }
-.source-tabs :deep(.el-tabs__header) { margin-bottom: 22px; }
-.tab-heading { margin: 0 0 20px; padding: 2px 0 20px; border-bottom: 1px solid var(--panel-border); }
+.search-sources-page { width: 100%; }
+.tab-heading, .test-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.tab-heading p { margin: 0; font-size: 13px; color: var(--el-text-color-secondary); line-height: 1.6; }
+.source-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.source-tabs { padding: 18px 22px 24px; }
+.source-tabs :deep(.el-tabs__item) { height: 46px; font-size: 14px; font-weight: 600; }
+.source-tabs :deep(.el-tabs__header) { margin-bottom: 20px; }
+.tab-heading { margin: 0 0 18px; padding: 2px 0 18px; border-bottom: 1px solid var(--panel-border); }
 .tab-heading p { max-width: 75ch; font-size: 13px; }
-.tab-heading code { padding: 2px 5px; border-radius: 5px; background: var(--el-fill-color-light); color: var(--el-color-primary); }
+.tab-heading code { padding: 2px 6px; border-radius: 5px; background: var(--surface-muted); color: var(--el-color-primary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .file-input { display: none; }
-.plugin-help { margin: 0 0 18px; color: var(--el-text-color-secondary); }
-.plugin-help summary { cursor: pointer; color: var(--el-color-primary); }
-.plugin-help pre { margin: 10px 0; padding: 12px; overflow-x: auto; border-radius: 8px; background: var(--el-fill-color-light); color: var(--el-text-color-primary); }
+.plugin-help { margin: 0 0 18px; color: var(--el-text-color-secondary); font-size: 13px; }
+.plugin-help summary { cursor: pointer; color: var(--el-color-primary); font-weight: 500; }
+.plugin-help pre { margin: 10px 0; padding: 14px; overflow-x: auto; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-muted); color: var(--ink); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; line-height: 1.55; }
 .source-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
@@ -481,27 +548,41 @@ class MySearchPlugin(BaseSearchPlugin):
 .source-card {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
   min-width: 0;
-  min-height: 260px;
-  padding: 22px;
+  min-height: 230px;
+  padding: 20px;
 }
 .source-card__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .source-card__header .el-switch { flex-shrink: 0; }
 .source-card__heading { min-width: 0; overflow-wrap: anywhere; }
-.source-card__heading h3 { margin: 0; font-size: 18px; line-height: 1.35; }
-.source-card__heading p { margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 13px; }
-.source-card__body { display: flex; flex: 1; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
+.source-card__heading h3 { margin: 0; font-size: 17px; font-weight: 650; line-height: 1.35; color: var(--ink); }
+.source-card__badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.source-card__key {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.source-card__body { display: flex; flex: 1; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
 .source-card__label { color: var(--el-text-color-secondary); font-size: 12px; font-weight: 600; }
 .source-card__summary,
 .source-card__error {
   margin: 0;
   padding: 10px 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--panel-radius);
-  background: var(--el-fill-color-blank);
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--surface-muted);
   font-size: 13px;
   line-height: 1.5;
+  color: var(--ink);
+}
+.source-card__summary--mono {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
 }
 .source-card__error {
   border-color: var(--el-color-danger-light-7);
@@ -509,7 +590,7 @@ class MySearchPlugin(BaseSearchPlugin):
   color: var(--el-color-danger);
 }
 .source-card__cache { margin: 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
-.source-card__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.source-card__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
 .source-card__actions > .el-button { margin: 0; }
 .mapping-help { margin: 0 0 14px; color: var(--el-text-color-secondary); line-height: 1.6; }
 :global(.api-editor-dialog.el-dialog) {
@@ -542,19 +623,19 @@ class MySearchPlugin(BaseSearchPlugin):
 .mapping-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
 .test-bar .el-input { flex: 1; }
 .test-message { color: var(--el-text-color-secondary); }
-.test-results { max-height: 48vh; overflow-y: auto; display: grid; gap: 10px; }
-.test-result { padding: 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 10px; }
+.test-results { max-height: 48vh; overflow-y: auto; display: grid; gap: 10px; margin-top: 12px; }
+.test-result { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
 .test-result__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.test-result__source { padding: 1px 8px; border-radius: 999px; background: var(--el-fill-color-light); color: var(--el-text-color-secondary); font-size: 11px; line-height: 18px; }
-.test-result__link { margin-top: 6px; overflow-wrap: anywhere; color: var(--el-color-primary); }
+.test-result__source { padding: 1px 8px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); color: var(--el-text-color-secondary); font-size: 11px; line-height: 18px; }
+.test-result__link { margin-top: 6px; overflow-wrap: anywhere; color: var(--el-color-primary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 @media (max-width: 700px) {
-  .page-heading, .tab-heading { align-items: flex-start; }
-  .page-heading, .tab-heading { flex-direction: column; }
-  .page-heading h1 { font-size: 19px; }
-  .source-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
-  .source-overview__item { display: block; padding: 12px; font-size: 11px; }
-  .source-overview__item strong { display: block; margin-top: 7px; font-size: 21px; }
-  .source-card { min-height: auto; padding: 18px; }
+  .tab-heading { flex-direction: column; align-items: flex-start; }
+  .source-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .source-overview .metric-tile { padding: 12px; }
+  .source-overview .metric-tile__icon { display: none; }
+  .source-overview .metric-tile__value { font-size: 20px; margin-top: 6px; }
+  .source-overview .metric-tile__hint { display: none; }
+  .source-card { min-height: auto; padding: 16px; }
   .mapping-grid { grid-template-columns: 1fr; }
   .editor-top-grid { grid-template-columns: 1fr; gap: 0; }
   .editor-card { padding: 14px; }

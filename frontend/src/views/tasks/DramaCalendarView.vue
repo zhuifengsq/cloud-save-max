@@ -77,6 +77,7 @@ function posterThumbSource(url: string) {
 
 const loading = ref(false)
 const tasks = ref<TaskOverview[]>([])
+const showCalendarSkeleton = computed(() => loading.value && !tasks.value.length)
 // 详情与工作台共用一份缓存；这里只维护由它派生出的日历映射
 const detailsById = tmdbDetailsById
 const derivedVersion: Record<number, number> = {}
@@ -1377,7 +1378,26 @@ watch(
       :title="`有 ${unknownTasks.length} 个启用追剧任务未能判断更新日（未关联 TMDB 且未配置 runweek）`"
     />
 
-    <div v-if="viewMode === 'week'" v-loading="loading" class="week">
+    <div v-if="viewMode === 'week' && showCalendarSkeleton" class="week" aria-hidden="true">
+      <section v-for="i in 3" :key="`cal-week-sk-${i}`" class="weekday">
+        <div class="weekday-title">
+          <div class="weekday-title__left">
+            <span class="ui-skeleton" style="width: 52px; height: 26px"></span>
+            <span class="ui-skeleton" style="width: 44px; height: 14px"></span>
+          </div>
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 48px; height: 22px"></span>
+        </div>
+        <div class="weekday-grid">
+          <div v-for="j in 5" :key="`cal-card-sk-${i}-${j}`" class="show-card show-card--skeleton">
+            <div class="poster-card poster-card--skeleton">
+              <span class="ui-skeleton" style="width: 100%; height: 100%; border-radius: inherit"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div v-else-if="viewMode === 'week'" v-loading="loading && Boolean(tasks.length)" class="week">
       <section
         v-for="sec in weekSections"
         :key="sec.key"
@@ -1426,7 +1446,28 @@ watch(
       </section>
     </div>
 
-    <div v-else v-loading="loading" class="month">
+    <div v-else-if="showCalendarSkeleton" class="month" aria-hidden="true">
+      <div class="month-bar">
+        <span class="ui-skeleton" style="width: 112px; height: 24px"></span>
+        <div class="month-nav">
+          <span class="ui-skeleton" style="width: 68px; height: 32px"></span>
+          <span class="ui-skeleton ui-skeleton--circle" style="width: 32px; height: 32px"></span>
+          <span class="ui-skeleton ui-skeleton--circle" style="width: 32px; height: 32px"></span>
+        </div>
+      </div>
+      <div class="month-weekdays">
+        <div v-for="w in weekdays" :key="w.key" class="month-weekday">{{ w.label }}</div>
+      </div>
+      <div class="month-grid">
+        <div v-for="i in 35" :key="`cal-month-sk-${i}`" class="month-cell">
+          <span class="ui-skeleton" style="width: 18px; height: 14px"></span>
+          <span v-if="i % 3 === 1" class="ui-skeleton" style="width: 84%; height: 22px"></span>
+          <span v-if="i % 5 === 2" class="ui-skeleton" style="width: 72%; height: 22px"></span>
+        </div>
+      </div>
+    </div>
+
+    <div v-else v-loading="loading && Boolean(tasks.length)" class="month">
       <div class="month-bar">
         <div class="month-title">{{ monthTitle }}</div>
         <div class="month-legend">

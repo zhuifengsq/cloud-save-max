@@ -1,22 +1,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from app.application.dto.task import DramaUpdateProgressOut
+from app.domain.tmdb import is_saved_latest_caught_up, resolve_tmdb_latest_aired_episode as _resolve_tmdb_latest_aired_episode
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_air_date(value: Any) -> date | None:
-    try:
-        s = str(value or "").strip()
-        if not s:
-            return None
-        return date.fromisoformat(s)
-    except Exception:
-        return None
 
 
 def resolve_tmdb_latest_aired_episode(
@@ -24,26 +15,12 @@ def resolve_tmdb_latest_aired_episode(
 ) -> tuple[int | None, int | None, str | None]:
     if not isinstance(details, dict):
         return None, None, "TMDB 缓存缺失"
-
-    next_ep = details.get("next_episode_to_air") if isinstance(details.get("next_episode_to_air"), dict) else None
-    last_ep = details.get("last_episode_to_air") if isinstance(details.get("last_episode_to_air"), dict) else None
-
-    picked = None
-    if isinstance(next_ep, dict):
-        ad = _parse_air_date(next_ep.get("air_date"))
-        if ad is not None and ad <= (today or datetime.now().date()):
-            picked = next_ep
-    if picked is None:
-        picked = last_ep if isinstance(last_ep, dict) else None
-    if not isinstance(picked, dict):
-        return None, None, "TMDB 缓存缺少 last/next episode"
-
-    try:
-        season = int(picked.get("season_number") or 0)
-        episode = int(picked.get("episode_number") or 0)
-    except Exception:
-        return None, None, "TMDB last/next episode 数据异常"
-    if season <= 0 or episode <= 0:
+    season, episode, _air_date = _resolve_tmdb_latest_aired_episode(details, today=today)
+    if season is None or episode is None:
+        next_ep = details.get("next_episode_to_air")
+        last_ep = details.get("last_episode_to_air")
+        if not isinstance(next_ep, dict) and not isinstance(last_ep, dict):
+            return None, None, "TMDB 缓存缺少 last/next episode"
         return None, None, "TMDB last/next episode 数据缺失"
     return season, episode, None
 
@@ -101,8 +78,24 @@ def build_drama_update_progress(
             snapshot_captured_at=saved_at,
             reason="当前季无匹配文件",
         )
+    if saved_season is None and int(tmdb_season) > 1:
+        return DramaUpdateProgressOut(
+            available=False,
+            tmdb_season=tmdb_season,
+            tmdb_episode=tmdb_episode,
+            saved_season=saved_season,
+            saved_episode=saved_episode,
+            snapshot_captured_at=saved_at,
+            reason="缺少已存季号，无法确认当前季进度",
+        )
 
     behind = max(0, int(tmdb_episode) - int(saved_episode))
+    caught_up = is_saved_latest_caught_up(
+        tmdb_season=tmdb_season,
+        tmdb_episode=tmdb_episode,
+        saved_season=saved_season,
+        saved_episode=saved_episode,
+    )
     return DramaUpdateProgressOut(
         available=True,
         tmdb_season=tmdb_season,
@@ -110,7 +103,7 @@ def build_drama_update_progress(
         saved_season=saved_season,
         saved_episode=saved_episode,
         behind_episodes=behind,
-        is_latest=behind == 0,
+        is_latest=caught_up,
         snapshot_captured_at=saved_at,
         reason=None,
     )

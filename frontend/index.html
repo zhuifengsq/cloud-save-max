@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f5f7fa" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="追剧一体化平台" />
     <script>
       try {
         var stored = localStorage.getItem('theme')
@@ -11,9 +16,13 @@
         if (meta) meta.setAttribute('content', valid || 'light dark')
         var resolved = valid || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
         document.documentElement.dataset.theme = resolved
+        var themeMeta = document.querySelector('meta[name="theme-color"]')
+        if (themeMeta) themeMeta.setAttribute('content', resolved === 'dark' ? '#10151e' : '#f5f7fa')
       } catch (e) {}
     </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>追剧一体化平台</title>
   </head>

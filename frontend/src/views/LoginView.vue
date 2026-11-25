@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import logoCat from '@/assets/logo-cat.png'
+import logoCat from '@/assets/logo-cat.webp'
 import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()

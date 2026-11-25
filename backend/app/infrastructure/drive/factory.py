@@ -382,12 +382,26 @@ class AccountManager:
         Returns:
             适配器实例
         """
-        # 1. 任务指定了账户名
+        # 1. 任务指定了账户名（显式指定时不允许静默回退到其他账户或错误网盘）
         if account_name := task.get("account_name"):
             adapter = self.adapters.get(account_name)
-            if adapter:
-                return adapter
-            logger.warning("指定的账户 '%s' 不存在，尝试自动选择", account_name)
+            shareurl = task.get("shareurl", "")
+            expected_drive_type = AdapterFactory.get_drive_type_by_url(shareurl) if shareurl else None
+            if adapter is None:
+                logger.warning("指定的账户 '%s' 不存在或不可用", account_name)
+                return None
+            if (not allow_inactive) and not getattr(adapter, "is_active", True):
+                logger.warning("指定的账户 '%s' 当前不可用", account_name)
+                return None
+            if expected_drive_type and adapter.DRIVE_TYPE != expected_drive_type:
+                logger.warning(
+                    "指定的账户 '%s' 网盘类型 (%s) 与分享链接类型 (%s) 不匹配",
+                    account_name,
+                    adapter.DRIVE_TYPE,
+                    expected_drive_type,
+                )
+                return None
+            return adapter
 
         # 2. 根据 URL 判断网盘类型
         shareurl = task.get("shareurl", "")

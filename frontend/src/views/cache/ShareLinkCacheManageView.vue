@@ -145,6 +145,7 @@ async function handleClearInvalidAll() {
     type: 'warning',
     confirmButtonText: '清空',
     cancelButtonText: '取消',
+    confirmButtonClass: 'el-button--danger',
   })
   const out = await clearInvalidShareLinks({})
   ElMessage.success(`已清空 ${out.deleted || 0} 条`)

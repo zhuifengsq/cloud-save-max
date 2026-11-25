@@ -358,3 +358,88 @@ def _normalize_cast(payload: Any) -> list[dict[str, str]]:
             continue
         out.append({"name": name, "character": str(item.get("character") or "").strip()})
     return out
+
+
+def _to_int_optional(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_tmdb_latest_aired_episode(
+    details: dict[str, Any] | None,
+    *,
+    today: date | None = None,
+) -> tuple[int | None, int | None, str | None]:
+    """根据 TMDB 剧集详情计算截至 today 的最新已播出季/集（优先逐集 air_date，避免超前标记）。"""
+    if not isinstance(details, dict):
+        return None, None, None
+    ref_day = today or date.today()
+    seasons = details.get("seasons")
+    best_season: int | None = None
+    best_episode: int | None = None
+    best_air_date: date | None = None
+    has_episode_rows = False
+    if isinstance(seasons, list):
+        for season in seasons:
+            if not isinstance(season, dict):
+                continue
+            s_num = _to_int_optional(season.get("season_number"))
+            if s_num is None or s_num <= 0:
+                continue
+            episodes = season.get("episodes")
+            if not isinstance(episodes, list):
+                continue
+            for ep in episodes:
+                if not isinstance(ep, dict):
+                    continue
+                has_episode_rows = True
+                ep_num = _to_int_optional(ep.get("episode_number"))
+                air_day = _parse_date(ep.get("air_date"))
+                if ep_num is None or ep_num <= 0 or air_day is None or air_day > ref_day:
+                    continue
+                if best_season is None or (s_num, ep_num) > (best_season, int(best_episode or 0)):
+                    best_season = s_num
+                    best_episode = ep_num
+                    best_air_date = air_day
+    if best_season is not None and best_episode is not None:
+        return best_season, best_episode, best_air_date.isoformat() if best_air_date else None
+
+    next_ep = details.get("next_episode_to_air")
+    if not has_episode_rows and isinstance(next_ep, dict):
+        s_num = _to_int_optional(next_ep.get("season_number"))
+        ep_num = _to_int_optional(next_ep.get("episode_number"))
+        air_day = _parse_date(next_ep.get("air_date"))
+        if s_num is not None and s_num > 0 and ep_num is not None and ep_num > 0 and air_day is not None and air_day <= ref_day:
+            return s_num, ep_num, air_day.isoformat()
+
+    last_ep = details.get("last_episode_to_air")
+    if isinstance(last_ep, dict):
+        s_num = _to_int_optional(last_ep.get("season_number"))
+        ep_num = _to_int_optional(last_ep.get("episode_number"))
+        air_day = _parse_date(last_ep.get("air_date"))
+        if s_num is not None and s_num > 0 and ep_num is not None and ep_num > 0:
+            if not has_episode_rows and (air_day is None or air_day <= ref_day):
+                return s_num, ep_num, air_day.isoformat() if air_day else None
+    return None, None, None
+
+
+def is_saved_latest_caught_up(
+    *,
+    tmdb_season: int | None,
+    tmdb_episode: int | None,
+    saved_season: int | None,
+    saved_episode: int | None,
+) -> bool:
+    """判断已转存进度是否已追平当前已播最新一集；季号缺失且目标季 > 1 时不误判为最新。"""
+    if tmdb_season is None or tmdb_episode is None or saved_episode is None:
+        return False
+    if saved_season is None:
+        if int(tmdb_season) > 1:
+            return False
+    elif int(saved_season) != int(tmdb_season):
+        return False
+    return int(saved_episode) >= int(tmdb_episode)

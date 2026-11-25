@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { Collection, DocumentCopy, Film, MagicStick } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import DramaLeadInDirPicker from '@/components/extensions/DramaLeadInDirPicker.vue'
 import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 import {
   fetchDramaLeadInSettings,
@@ -33,6 +35,7 @@ import { formatBytes } from '@/utils/capacity'
 import { formatDateTimeText } from '@/utils/datetime'
 
 const auth = useAuthStore()
+const isMobile = useIsMobile()
 const canWrite = computed(() => auth.permissions.includes(TASK_WRITE))
 
 const loading = ref(false)
@@ -396,7 +399,7 @@ async function clearLeadInDrive(drive: LeadInDriveForm) {
     await ElMessageBox.confirm(
       `确定清空「${drive.drive_name}」的引流配置？保存后生效，该网盘将不再提供引流文件。`,
       '清空引流配置',
-      { type: 'warning' },
+      { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
     )
   } catch {
     return
@@ -715,7 +718,12 @@ async function saveFilterRule() {
 
 async function deleteFilterRule(index: number) {
   const name = filterRules.rules[index]?.name || ''
-  await ElMessageBox.confirm(`确定删除过滤词规则「${name}」？`, '删除确认', { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' })
+  await ElMessageBox.confirm(`确定删除过滤词规则「${name}」？`, '删除确认', {
+    type: 'warning',
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+    confirmButtonClass: 'el-button--danger',
+  })
   const rules = filterRules.rules.filter((_, i) => i !== index)
   try {
     const { saveFilterRules } = await import('@/api/systemSettings')
@@ -802,7 +810,12 @@ async function removeRule(rule: MagicRegexRuleSetting) {
     ? `将清除对 ${rule.key} 的覆盖配置，恢复为系统默认值。`
     : `将删除 ${rule.key} 规则。`
   try {
-    await ElMessageBox.confirm(message, title, { type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消' })
+    await ElMessageBox.confirm(message, title, {
+      type: 'warning',
+      confirmButtonText: rule.built_in ? '恢复默认' : '删除',
+      cancelButtonText: '取消',
+      ...(rule.built_in ? {} : { confirmButtonClass: 'el-button--danger' }),
+    })
   } catch {
     return
   }
@@ -974,11 +987,30 @@ async function submitTemplate() {
 
 async function removeTemplate(template: TaskTemplate) {
   try {
-    await ElMessageBox.confirm(`确定删除模板"${template.name}"？`, '删除模板', { type: 'warning' })
+    await ElMessageBox.confirm(`确定删除模板"${template.name}"？`, '删除模板', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      confirmButtonClass: 'el-button--danger',
+    })
     await deleteTaskTemplate(template.id)
     ElMessage.success('已删除')
     await loadTemplates()
   } catch {}
+}
+
+const configuredLeadInCount = computed(() => dramaLeadIn.drives.filter((d) => d.configured).length)
+
+function templateConfigCount(row: TaskTemplate) {
+  const cfg = row?.config || {}
+  return Object.values(cfg).filter((v) => String(v ?? '').trim() !== '').length
+}
+
+function filterKeywordList(keywords?: string) {
+  return String(keywords || '')
+    .split('|')
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
 
 onMounted(() => {
@@ -994,98 +1026,218 @@ onMounted(() => {
 <template>
   <div class="shell-page">
     <div class="section-header">
-            <div class="section-header__title">
+      <div class="section-header__title">
         <h1>系统设置</h1>
         <div class="section-header__desc">任务模板、魔法重命名、搜索源与缓存策略集中配置。</div>
       </div>
     </div>
 
-    <el-tabs v-model="activeTab">
-      <el-tab-pane label="保存规则" name="magic_regex">
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>任务模板</div>
-              <el-button type="primary" size="small" :disabled="!canWrite" @click="openTemplateCreate">新增模板</el-button>
-            </div>
-          </template>
-          <el-table :data="templates.list" :loading="templates.loading" style="width: 100%">
-            <el-table-column prop="name" label="模板名称" />
-            <el-table-column label="操作" width="160" fixed="right">
-              <template #default="{ row }">
-                <el-button size="small" :disabled="!canWrite" @click="openTemplateEdit(row)">编辑</el-button>
-                <el-button size="small" type="danger" :disabled="!canWrite" @click="removeTemplate(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-
-        <div class="page__hint">
-          <div>新增的规则 key 需要以 $ 开头（例如：$MY_RULE）。在追剧任务里将 pattern 设置为该 key，即可使用系统保存规则。</div>
-          <div>replace 为默认模板；任务里 replace 留空时，会自动使用该默认值。</div>
+    <section class="metric-strip settings-metrics">
+      <div class="glass-panel metric-tile">
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">任务模板</div>
+          <span class="metric-tile__icon metric-tile__icon--brand" aria-hidden="true">
+            <el-icon><DocumentCopy /></el-icon>
+          </span>
         </div>
+        <div class="metric-tile__value">{{ templates.list.length }}</div>
+        <div class="metric-tile__hint">过滤词规则 {{ filterRules.rules.length }} 组</div>
+      </div>
 
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>内置规则</div>
+      <div class="glass-panel metric-tile">
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">魔法规则</div>
+          <span class="metric-tile__icon metric-tile__icon--violet" aria-hidden="true">
+            <el-icon><MagicStick /></el-icon>
+          </span>
+        </div>
+        <div class="metric-tile__value">{{ rules.length }}</div>
+        <div class="metric-tile__hint">内置 {{ builtinRules.length }} · 自定义 {{ customRules.length }}</div>
+      </div>
+
+      <div class="glass-panel metric-tile">
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">TMDB 元数据</div>
+          <span class="metric-tile__icon" :class="tmdb.hasApiKey ? 'metric-tile__icon--success' : 'metric-tile__icon--warn'" aria-hidden="true">
+            <el-icon><Film /></el-icon>
+          </span>
+        </div>
+        <div class="metric-tile__value metric-tile__value--tag">
+          <el-tag :type="tmdb.hasApiKey ? 'success' : 'warning'" effect="plain" round size="large">
+            {{ tmdb.hasApiKey ? '已配置' : '未配置' }}
+          </el-tag>
+        </div>
+        <div class="metric-tile__hint">语言 {{ tmdb.language }} · 海报 {{ tmdb.posterLanguage }}</div>
+      </div>
+
+      <div class="glass-panel metric-tile">
+        <div class="metric-tile__head">
+          <div class="metric-tile__label">引流文件</div>
+          <span class="metric-tile__icon metric-tile__icon--cyan" aria-hidden="true">
+            <el-icon><Collection /></el-icon>
+          </span>
+        </div>
+        <div class="metric-tile__value metric-tile__value--tag">
+          <el-tag :type="dramaLeadIn.enabled ? 'success' : 'info'" effect="plain" round size="large">
+            {{ dramaLeadIn.enabled ? '已启用' : '未启用' }}
+          </el-tag>
+        </div>
+        <div class="metric-tile__hint">已配网盘 {{ configuredLeadInCount }}/{{ dramaLeadIn.drives.length }}</div>
+      </div>
+    </section>
+
+    <section class="glass-panel settings-tabs-panel">
+      <el-tabs v-model="activeTab" class="settings-tabs">
+        <el-tab-pane label="保存规则" name="magic_regex">
+          <section class="glass-panel settings-card">
+            <header class="settings-card__header">
+              <div class="settings-card__title">
+                <span>任务模板</span>
+                <span class="status-pill">{{ templates.list.length }} 个</span>
+              </div>
+              <el-button type="primary" size="small" :disabled="!canWrite" @click="openTemplateCreate">新增模板</el-button>
+            </header>
+            <el-table :data="templates.list" border v-loading="templates.loading" style="width: 100%">
+              <template #empty>
+                <div class="empty-state empty-state--compact">
+                  <div class="empty-state__title">还没有任务模板</div>
+                  <div class="empty-state__desc">把常用的关键词筛选和重命名参数存为模板，新建追剧任务时可一键套用。</div>
+                </div>
+              </template>
+              <el-table-column prop="name" label="模板名称" min-width="200" />
+              <el-table-column label="已配字段" width="130">
+                <template #default="{ row }">
+                  <el-tag size="small" type="info" effect="plain" round>{{ templateConfigCount(row) }} 项</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="140" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" :disabled="!canWrite" @click="openTemplateEdit(row)">编辑</el-button>
+                  <el-button link type="danger" :disabled="!canWrite" @click="removeTemplate(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </section>
+
+          <div class="page__hint">
+            <div>新增的规则 key 需要以 <code>$</code> 开头（例如：<code>$MY_RULE</code>）。在追剧任务里将 pattern 设置为该 key，即可使用系统保存规则。</div>
+            <div>replace 为默认模板；任务里 replace 留空时，会自动使用该默认值。</div>
+          </div>
+
+          <section class="glass-panel settings-card">
+            <header class="settings-card__header">
+              <div class="settings-card__title">
+                <span>内置规则</span>
+                <span class="status-pill">{{ builtinRules.length }} 条</span>
+              </div>
               <el-button text :loading="loading" @click="refresh">刷新</el-button>
-            </div>
-          </template>
-          <el-table :data="builtinRules" :loading="loading" style="width: 100%">
-            <el-table-column prop="key" label="key" width="180" />
-            <el-table-column prop="label" label="名称" min-width="160" />
-            <el-table-column label="状态" width="140">
-              <template #default="{ row }">
-                <el-tag v-if="row.overridden" type="warning">已覆盖</el-tag>
-                <el-tag v-else type="info">默认</el-tag>
+            </header>
+            <el-table :data="builtinRules" border v-loading="loading" style="width: 100%">
+              <template #empty>
+                <div class="empty-state empty-state--compact">
+                  <div class="empty-state__title">暂无内置规则</div>
+                </div>
               </template>
-            </el-table-column>
-            <el-table-column label="操作" width="200">
-              <template #default="{ row }">
-                <el-button size="small" :disabled="!canWrite" @click="openEdit(row)">编辑</el-button>
-                <el-button size="small" :disabled="!canWrite || !row.overridden" @click="removeRule(row)">恢复默认</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
+              <el-table-column label="key" width="190">
+                <template #default="{ row }">
+                  <code class="mono-pill">{{ row.key }}</code>
+                </template>
+              </el-table-column>
+              <el-table-column prop="label" label="名称" min-width="180" />
+              <el-table-column label="状态" width="120">
+                <template #default="{ row }">
+                  <el-tag v-if="row.overridden" type="warning" effect="plain" round size="small">已覆盖</el-tag>
+                  <el-tag v-else type="info" effect="plain" round size="small">默认</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="170">
+                <template #default="{ row }">
+                  <el-button link type="primary" :disabled="!canWrite" @click="openEdit(row)">编辑</el-button>
+                  <el-button link :disabled="!canWrite || !row.overridden" @click="removeRule(row)">恢复默认</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </section>
 
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>自定义规则</div>
+          <section class="glass-panel settings-card">
+            <header class="settings-card__header">
+              <div class="settings-card__title">
+                <span>自定义规则</span>
+                <span class="status-pill">{{ customRules.length }} 条</span>
+              </div>
               <el-button type="primary" size="small" :disabled="!canWrite" @click="openCreate">新增规则</el-button>
-            </div>
-          </template>
-          <el-table :data="customRules" :loading="loading" style="width: 100%">
-            <el-table-column prop="key" label="key" width="180" />
-            <el-table-column prop="label" label="名称" min-width="160" />
-            <el-table-column label="操作" width="160">
-              <template #default="{ row }">
-                <el-button size="small" :disabled="!canWrite" @click="openEdit(row)">编辑</el-button>
-                <el-button size="small" type="danger" :disabled="!canWrite" @click="removeRule(row)">删除</el-button>
+            </header>
+            <el-table :data="customRules" border v-loading="loading" style="width: 100%">
+              <template #empty>
+                <div class="empty-state empty-state--compact">
+                  <div class="empty-state__title">还没有自定义规则</div>
+                  <div class="empty-state__desc">针对特殊命名规律添加 <code>$RULE</code> 正则规则。</div>
+                </div>
               </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
+              <el-table-column label="key" width="190">
+                <template #default="{ row }">
+                  <code class="mono-pill">{{ row.key }}</code>
+                </template>
+              </el-table-column>
+              <el-table-column prop="label" label="名称" min-width="180">
+                <template #default="{ row }">{{ row.label || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="140">
+                <template #default="{ row }">
+                  <el-button link type="primary" :disabled="!canWrite" @click="openEdit(row)">编辑</el-button>
+                  <el-button link type="danger" :disabled="!canWrite" @click="removeRule(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </section>
 
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>关键词过滤规则</div>
+          <section class="glass-panel settings-card">
+            <header class="settings-card__header">
+              <div class="settings-card__title">
+                <span>关键词过滤规则</span>
+                <span class="status-pill">{{ filterRules.rules.length }} 组</span>
+              </div>
               <el-button type="primary" size="small" :disabled="!canWrite" @click="openFilterRuleDialog(-1)">新增规则</el-button>
-            </div>
-          </template>
-          <el-table :data="filterRules.rules" :loading="filterRules.loading" style="width: 100%">
-            <el-table-column prop="name" label="名称" />
-            <el-table-column label="操作" width="160">
-              <template #default="{ $index }">
-                <el-button size="small" :disabled="!canWrite" @click="openFilterRuleDialog($index)">编辑</el-button>
-                <el-button size="small" type="danger" :disabled="!canWrite" @click="deleteFilterRule($index)">删除</el-button>
+            </header>
+            <el-table :data="filterRules.rules" border v-loading="filterRules.loading" style="width: 100%">
+              <template #empty>
+                <div class="empty-state empty-state--compact">
+                  <div class="empty-state__title">还没有过滤词规则</div>
+                  <div class="empty-state__desc">可将花絮、纯享版、预告等跳过词分组保存，供任务模板复用。</div>
+                </div>
               </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
+              <el-table-column prop="name" label="名称" width="160" />
+              <el-table-column label="过滤词预览" min-width="240">
+                <template #default="{ row }">
+                  <div class="keyword-tags">
+                    <el-tag
+                      v-for="word in filterKeywordList(row.keywords).slice(0, 5)"
+                      :key="word"
+                      size="small"
+                      type="info"
+                      effect="plain"
+                    >
+                      {{ word }}
+                    </el-tag>
+                    <el-tag
+                      v-if="filterKeywordList(row.keywords).length > 5"
+                      size="small"
+                      type="info"
+                    >
+                      +{{ filterKeywordList(row.keywords).length - 5 }}
+                    </el-tag>
+                    <span v-if="!filterKeywordList(row.keywords).length" class="muted">—</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="140">
+                <template #default="{ $index }">
+                  <el-button link type="primary" :disabled="!canWrite" @click="openFilterRuleDialog($index)">编辑</el-button>
+                  <el-button link type="danger" :disabled="!canWrite" @click="deleteFilterRule($index)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </section>
 
         <el-dialog v-model="filterRules.dialogVisible" :title="filterRules.editIndex >= 0 ? '编辑过滤词规则' : '新增过滤词规则'" width="480px" append-to-body>
           <el-form label-position="top">
@@ -1109,26 +1261,39 @@ onMounted(() => {
           <div>这里设置搜索结果的分享者过滤。API 和 Python 搜索源请到“搜索源管理”页面配置。</div>
         </div>
 
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>分享者过滤</div>
-              <el-button text :loading="sharerFilter.loading" @click="loadSharerFilter">刷新</el-button>
+        <section class="glass-panel settings-card">
+          <header class="settings-card__header">
+            <div class="settings-card__title">
+              <span>分享者过滤</span>
+              <span class="status-pill">优选 {{ sharerFilter.preferred.length }} · 屏蔽 {{ sharerFilter.blocked.length }}</span>
             </div>
-          </template>
-          <div style="margin-bottom: 12px; color: var(--el-text-color-secondary); font-size: 13px">
+            <el-button text :loading="sharerFilter.loading" @click="loadSharerFilter">刷新</el-button>
+          </header>
+          <div class="form-item-hint" style="margin-bottom: 14px">
             用于资源搜索结果的过滤和高亮显示。多个昵称用竖线 <code>|</code> 分隔。
           </div>
-          <el-form label-width="140px" label-position="left">
+          <el-form :label-width="isMobile ? undefined : '140px'" :label-position="isMobile ? 'top' : 'left'">
             <el-form-item label="优选分享者">
-              <el-button @click="sharerDialog.type = 'preferred'; sharerDialog.visible = true">
-                管理名单（{{ sharerFilter.preferred.length }} 人）
-              </el-button>
+              <div class="sharer-inline">
+                <el-button @click="sharerDialog.type = 'preferred'; sharerDialog.visible = true">
+                  管理名单（{{ sharerFilter.preferred.length }} 人）
+                </el-button>
+                <el-tag v-for="name in sharerFilter.preferred.slice(0, 4)" :key="`pref-${name}`" type="success" effect="plain" size="small">
+                  {{ name }}
+                </el-tag>
+                <el-tag v-if="sharerFilter.preferred.length > 4" type="info" size="small">+{{ sharerFilter.preferred.length - 4 }}</el-tag>
+              </div>
             </el-form-item>
             <el-form-item label="屏蔽分享者">
-              <el-button @click="sharerDialog.type = 'blocked'; sharerDialog.visible = true">
-                管理名单（{{ sharerFilter.blocked.length }} 人）
-              </el-button>
+              <div class="sharer-inline">
+                <el-button @click="sharerDialog.type = 'blocked'; sharerDialog.visible = true">
+                  管理名单（{{ sharerFilter.blocked.length }} 人）
+                </el-button>
+                <el-tag v-for="name in sharerFilter.blocked.slice(0, 4)" :key="`blk-${name}`" type="danger" effect="plain" size="small">
+                  {{ name }}
+                </el-tag>
+                <el-tag v-if="sharerFilter.blocked.length > 4" type="info" size="small">+{{ sharerFilter.blocked.length - 4 }}</el-tag>
+              </div>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="sharerFilter.saving" :disabled="!canWrite" @click="saveSharerFilter">保存配置</el-button>
@@ -1159,15 +1324,15 @@ onMounted(() => {
               </span>
             </div>
           </el-dialog>
-        </el-card>
+        </section>
 
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>验证与缓存</div>
+        <section class="glass-panel settings-card">
+          <header class="settings-card__header">
+            <div class="settings-card__title">
+              <span>验证与缓存</span>
             </div>
-          </template>
-          <el-form label-width="140px" label-position="left">
+          </header>
+          <el-form :label-width="isMobile ? undefined : '150px'" :label-position="isMobile ? 'top' : 'left'">
             <el-form-item label="验证并行数">
               <el-input-number v-model="sharerFilter.validate_batch_size" :min="1" :max="20" :disabled="!canWrite" />
               <div class="form-item-hint">每批同时验证的链接数量，默认 5。越大验证越快，但对网盘账号压力越大。</div>
@@ -1184,7 +1349,7 @@ onMounted(() => {
               <el-button type="primary" :loading="sharerFilter.saving" :disabled="!canWrite" @click="saveSharerFilter">保存配置</el-button>
             </el-form-item>
           </el-form>
-        </el-card>
+        </section>
 
       </el-tab-pane>
 
@@ -1194,35 +1359,40 @@ onMounted(() => {
           <div>API Key 不回显；留空保存表示不修改。</div>
         </div>
 
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>TMDB 配置</div>
-              <div>
-                <el-button text :loading="tmdb.loading" @click="refreshTMDB">刷新</el-button>
-                <el-button type="primary" :loading="tmdb.saving" :disabled="!canWrite" @click="saveTMDB">保存</el-button>
-              </div>
+        <section class="glass-panel settings-card">
+          <header class="settings-card__header">
+            <div class="settings-card__title">
+              <span>TMDB 配置</span>
+              <el-tag :type="tmdb.hasApiKey ? 'success' : 'warning'" effect="plain" round size="small">
+                {{ tmdb.hasApiKey ? 'API Key 已配置' : '未配置' }}
+              </el-tag>
             </div>
-          </template>
+            <div class="settings-card__actions">
+              <el-button text :loading="tmdb.loading" @click="refreshTMDB">刷新</el-button>
+              <el-button type="primary" :loading="tmdb.saving" :disabled="!canWrite" @click="saveTMDB">保存</el-button>
+            </div>
+          </header>
 
           <el-form label-position="top" :disabled="tmdb.loading">
             <el-form-item label="API Key（留空不修改）">
               <el-input v-model="tmdb.apiKeyInput" type="password" show-password :placeholder="tmdb.hasApiKey ? '已配置（留空不修改）' : '请输入 TMDB API Key'" />
             </el-form-item>
-            <el-form-item label="语言（language）">
-              <el-select v-model="tmdb.language" style="width: 260px">
-                <el-option label="中文（zh-CN）" value="zh-CN" />
-                <el-option label="英文（en-US）" value="en-US" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="海报语言（poster_language）">
-              <el-select v-model="tmdb.posterLanguage" style="width: 260px">
-                <el-option label="中文（zh-CN）" value="zh-CN" />
-                <el-option label="原始语言（original）" value="original" />
-              </el-select>
-            </el-form-item>
+            <div class="settings-row">
+              <el-form-item label="语言（language）">
+                <el-select v-model="tmdb.language" style="width: 100%">
+                  <el-option label="中文（zh-CN）" value="zh-CN" />
+                  <el-option label="英文（en-US）" value="en-US" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="海报语言（poster_language）">
+                <el-select v-model="tmdb.posterLanguage" style="width: 100%">
+                  <el-option label="中文（zh-CN）" value="zh-CN" />
+                  <el-option label="原始语言（original）" value="original" />
+                </el-select>
+              </el-form-item>
+            </div>
           </el-form>
-        </el-card>
+        </section>
       </el-tab-pane>
 
       <el-tab-pane label="引流文件" name="drama_lead_in">
@@ -1231,16 +1401,19 @@ onMounted(() => {
           <div>每个网盘可选择素材来源：分享链接或本账号文件（需填写素材账号与账号内完整路径）；每个网盘一个素材文件，分享内含多个文件时必须指定其中一个。开关与网盘配置使用同一个「保存」按钮，提取码留空表示保持原值。</div>
         </div>
 
-        <el-card class="page__card" shadow="never">
-          <template #header>
-            <div class="card__header">
-              <div>引流文件</div>
-              <div>
-                <el-button text :loading="dramaLeadIn.loading" @click="loadDramaLeadIn">刷新</el-button>
-                <el-button type="primary" :loading="dramaLeadIn.saving" :disabled="!canWrite" @click="saveDramaLeadIn">保存</el-button>
-              </div>
+        <section class="glass-panel settings-card">
+          <header class="settings-card__header">
+            <div class="settings-card__title">
+              <span>引流文件</span>
+              <el-tag :type="dramaLeadIn.enabled ? 'success' : 'info'" effect="plain" round size="small">
+                {{ dramaLeadIn.enabled ? '已启用' : '未启用' }}
+              </el-tag>
             </div>
-          </template>
+            <div class="settings-card__actions">
+              <el-button text :loading="dramaLeadIn.loading" @click="loadDramaLeadIn">刷新</el-button>
+              <el-button type="primary" :loading="dramaLeadIn.saving" :disabled="!canWrite" @click="saveDramaLeadIn">保存</el-button>
+            </div>
+          </header>
 
           <el-form label-position="top" :disabled="dramaLeadIn.loading">
             <el-form-item label="启用引流文件">
@@ -1252,7 +1425,9 @@ onMounted(() => {
           </el-form>
 
           <div v-loading="dramaLeadIn.loading">
-            <el-empty v-if="!dramaLeadIn.loading && !dramaLeadIn.drives.length" description="暂无网盘配置" :image-size="80" />
+            <div v-if="!dramaLeadIn.loading && !dramaLeadIn.drives.length" class="empty-state empty-state--compact">
+              <div class="empty-state__title">暂无网盘配置</div>
+            </div>
 
             <el-collapse v-model="dramaLeadIn.activeDrive" accordion class="lead-in-collapse">
               <el-collapse-item
@@ -1389,10 +1564,11 @@ onMounted(() => {
               </el-collapse-item>
             </el-collapse>
           </div>
-        </el-card>
+        </section>
       </el-tab-pane>
 
-    </el-tabs>
+      </el-tabs>
+    </section>
 
     <el-dialog v-model="dialog.visible" :title="dialog.isEdit ? '编辑规则' : '新增规则'" width="720px">
       <el-form label-position="top">
@@ -1500,25 +1676,134 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page__hint {
-  margin: 12px 0 16px;
-  color: var(--el-text-color-regular);
-  font-size: 14px;
-  line-height: 1.7;
+.settings-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
-.page__card {
+
+.metric-tile__value--tag {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+}
+
+.settings-tabs-panel {
+  padding: 18px 20px 22px;
+}
+
+.settings-tabs :deep(.el-tabs__header) {
+  margin-bottom: 18px;
+}
+
+.settings-card {
+  padding: 18px 20px;
   margin-bottom: 16px;
 }
-.card__header {
+
+.settings-card:last-child {
+  margin-bottom: 0;
+}
+
+.settings-card__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
 }
+
+.settings-card__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.settings-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.mono-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.keyword-tags,
+.sharer-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.muted {
+  color: var(--ink-muted);
+}
+
+.page__hint {
+  margin: 0 0 16px;
+  display: grid;
+  gap: 4px;
+  padding: 12px 16px;
+  border-radius: var(--control-radius);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.page__hint code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+
 .form-item-hint {
   margin-top: 4px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.5;
+}
+
+@media (max-width: 1024px) {
+  .settings-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .settings-tabs-panel {
+    padding: 14px;
+  }
+  .settings-card {
+    padding: 14px;
+  }
+  .settings-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
 }
 .sharer-tag-list {
   display: flex;
@@ -1646,17 +1931,5 @@ onMounted(() => {
 :deep(.el-form-item__label) {
   font-weight: 500;
   color: var(--el-text-color-primary);
-}
-
-.page__hint {
-  display: grid;
-  gap: 4px;
-  padding: 12px 16px;
-  border-radius: var(--control-radius);
-  background: var(--surface-muted);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-  font-size: 13px;
-  line-height: 1.6;
 }
 </style>

@@ -268,23 +268,25 @@ class MagicRename:
             self.magic_variable["{I}"] = start_index - 1
 
     def sort_file_list(self, file_list: list[dict[str, Any]], dir_filename_dict: dict[int, str] | None = None, start_index: int = 1) -> None:
-        filename_list = [f"{f['file_name_re']}_{f['updated_at']}" for f in file_list if f.get("file_name_re") and not f.get("dir")]
-        dir_filename_dict = dir_filename_dict or self.dir_filename_dict
-        filename_list = list(set(filename_list) | set(dir_filename_dict.values()))
-        filename_list = natsorted(filename_list, key=self._custom_sort_key)
+        dir_filename_dict = self.dir_filename_dict if dir_filename_dict is None else dir_filename_dict
+        entries: list[tuple[str, int, dict[str, Any] | None]] = [
+            (val, -1, None) for val in set(dir_filename_dict.values()) if val
+        ]
+        for pos, f in enumerate(file_list):
+            if f.get("file_name_re") and not f.get("dir"):
+                entries.append((f"{f['file_name_re']}_{f.get('updated_at', '')}", pos, f))
 
-        name_to_sorted_idx = {name: idx for idx, name in enumerate(filename_list)}
-        dir_values_set = set(dir_filename_dict.values())
+        entries = natsorted(entries, key=lambda entry: (self._custom_sort_key(entry[0]), entry[1]))
 
-        filename_index: dict[str, int] = {}
-        for name in filename_list:
-            if name in dir_values_set:
+        file_index: dict[int, int] = {}
+        for sorted_idx, (name, pos, file_ref) in enumerate(entries):
+            if file_ref is None:
                 continue
-            i = name_to_sorted_idx[name] + start_index
+            i = sorted_idx + start_index
             while i in dir_filename_dict:
                 i += 1
-            dir_filename_dict[i] = name
-            filename_index[name] = i
+            dir_filename_dict[i] = f"{name}#{pos}"
+            file_index[id(file_ref)] = i
 
         compiled_i_pattern = self._get_compiled(r"\{I+\}")
         for file in file_list:
@@ -293,8 +295,7 @@ class MagicRename:
             m = compiled_i_pattern.search(file["file_name_re"])
             if not m:
                 continue
-            key = f"{file['file_name_re']}_{file.get('updated_at')}"
-            i = filename_index.get(key, 0)
+            i = file_index.get(id(file), 0)
             if not i:
                 continue
             file["file_name_re"] = compiled_i_pattern.sub(str(i).zfill(m.group().count("I")), file["file_name_re"])

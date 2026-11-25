@@ -75,7 +75,12 @@ function resetFilters() {
 
 async function handleDeleteAll() {
   try {
-    await ElMessageBox.confirm('确定删除所有审计日志？此操作不可恢复。', '删除确认', { type: 'warning' })
+    await ElMessageBox.confirm('确定删除所有审计日志？此操作不可恢复。', '删除确认', {
+      type: 'warning',
+      confirmButtonText: '全部删除',
+      cancelButtonText: '取消',
+      confirmButtonClass: 'el-button--danger',
+    })
     await deleteAllAuditLogs()
     ElMessage.success('已删除所有审计日志')
     loadData()

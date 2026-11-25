@@ -14,7 +14,7 @@ import {
   setDriveAccountStatus,
 } from '@/api/extensions'
 import { fetchTMDBConfig, patchTMDBConfig } from '@/api/tmdb'
-import logoCat from '@/assets/logo-cat.png'
+import logoCat from '@/assets/logo-cat.webp'
 import DriveAccountDrawer from '@/components/extensions/DriveAccountDrawer.vue'
 import NotificationConfigView from '@/views/extensions/NotificationConfigView.vue'
 import { useAuthStore } from '@/stores/auth'

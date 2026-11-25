@@ -182,11 +182,18 @@ class RunTaskUseCase:
         tried: set[str] | None,
         policy: RunPolicyPort,
     ) -> bool:
+        from app.application.container import drama_transfer_recovery_repo
         from app.application.drama_share_autoupdate import (
             resolve_drama_shareurl_update,
             is_auto_update_task,
         )
         from app.application.shareurl_update_logs import append_shareurl_update_log
+
+        task_id = getattr(task, "id", None)
+        if task_id is not None and drama_transfer_recovery_repo().load_task_checkpoints(self.db, int(task_id)):
+            log.line("自动更新链接: 存在未完成转存断点，保持原链接")
+            self._release_read()
+            return False
 
         if not is_auto_update_task(self.db, task):
             self._release_read()

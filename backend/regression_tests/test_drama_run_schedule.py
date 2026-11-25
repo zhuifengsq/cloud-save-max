@@ -122,7 +122,7 @@ def empty_share_calls(monkeypatch):
         ("Asia/Shanghai", "Asia/Shanghai", "success", 1, False, True),
         ("UTC", "UTC", "skipped", 0, False, True),
         (None, "Asia/Shanghai", "success", 1, False, True),
-        ("UTC", "UTC", "success", 1, True, False),
+        ("UTC", "UTC", "success", 1, True, True),
     ],
 )
 def test_cron_weekday_uses_trigger_timezone(

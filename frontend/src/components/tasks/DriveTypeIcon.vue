@@ -9,7 +9,7 @@ import cloud115Logo from '@/assets/drives/115.ico'
 import ucLogo from '@/assets/drives/uc.png'
 import pan123Logo from '@/assets/drives/123pan.ico'
 import cloud189Logo from '@/assets/drives/cloud189.png'
-import aliyunLogo from '@/assets/drives/aliyun.png'
+import aliyunLogo from '@/assets/drives/aliyun.webp'
 import xunleiLogo from '@/assets/drives/xunlei.png'
 import guangyaLogo from '@/assets/drives/guangya.png'
 

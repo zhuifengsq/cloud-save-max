@@ -53,6 +53,8 @@ const showAllFailures = ref(false)
 const capacityLoading = ref(false)
 const capacityRefreshing = ref(false)
 const capacityOverview = ref<CapacityOverview | null>(null)
+const showDramaSkeleton = computed(() => dramaLoading.value && !dramaOverview.value)
+const showCapacitySkeleton = computed(() => capacityLoading.value && !capacityOverview.value)
 
 const accountGroups = computed(() => {
   const groups = new Map<string, CapacityOverview['accounts']>()
@@ -544,7 +546,17 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <section class="metric-strip dashboard-metrics" v-loading="dramaLoading">
+    <section v-if="showDramaSkeleton" class="metric-strip dashboard-metrics" aria-hidden="true">
+      <div v-for="i in 5" :key="`metric-sk-${i}`" class="glass-panel metric-tile metric-tile--skeleton">
+        <div class="metric-tile__head">
+          <span class="ui-skeleton" style="width: 68px; height: 14px"></span>
+          <span class="ui-skeleton ui-skeleton--circle" style="width: 28px; height: 28px"></span>
+        </div>
+        <span class="ui-skeleton" style="width: 72px; height: 30px; margin-top: 12px"></span>
+        <span class="ui-skeleton" style="width: 112px; height: 12px; margin-top: 10px"></span>
+      </div>
+    </section>
+    <section v-else class="metric-strip dashboard-metrics" v-loading="dramaLoading && Boolean(dramaOverview)">
       <div class="glass-panel metric-tile">
         <div class="metric-tile__head">
           <div class="metric-tile__label">活跃订阅</div>
@@ -629,16 +641,32 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <div class="dashboard-log-grid">
+    <div v-if="showDramaSkeleton" class="dashboard-log-grid" aria-hidden="true">
+      <article v-for="i in 2" :key="`log-sk-${i}`" class="glass-panel dashboard-log-skeleton">
+        <div class="dashboard-log-skeleton__head">
+          <span class="ui-skeleton" style="width: 108px; height: 20px"></span>
+          <span class="ui-skeleton" style="width: 64px; height: 16px"></span>
+        </div>
+        <div v-for="j in 2" :key="`log-entry-sk-${i}-${j}`" class="dashboard-log-skeleton__entry">
+          <div class="dashboard-log-skeleton__row">
+            <span class="ui-skeleton" style="width: 48%; height: 16px"></span>
+            <span class="ui-skeleton ui-skeleton--pill" style="width: 52px; height: 20px"></span>
+          </div>
+          <span class="ui-skeleton" style="width: 66%; height: 12px"></span>
+          <span class="ui-skeleton" style="width: 88%; height: 14px"></span>
+        </div>
+      </article>
+    </div>
+    <div v-else class="dashboard-log-grid">
       <ShareLinkHistory
-        v-loading="dramaLoading"
+        v-loading="dramaLoading && Boolean(dramaOverview)"
         :records="dramaOverview?.shareurl_update_logs ?? []"
         @cleared="onShareLogsCleared"
       />
 
       <DashboardLogList
         v-model:expanded="showAllFailures"
-        v-loading="dramaLoading"
+        v-loading="dramaLoading && Boolean(dramaOverview)"
         title="近期失败"
         :records="failures"
         :record-key="record => `${record.task_id}-${record.started_at}-${record.stage}`"
@@ -675,7 +703,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="updates-row">
-      <section class="glass-panel updates-card" v-loading="dramaLoading">
+      <section class="glass-panel updates-card" v-loading="dramaLoading && !showDramaSkeleton">
         <div class="section-header">
           <div class="section-header__title">
             <div class="section-header__eyebrow">Updates</div>
@@ -697,7 +725,18 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="!recentUpdates.length" class="empty-state empty-state--compact">
+        <div v-if="showDramaSkeleton" class="update-list" aria-hidden="true">
+          <div v-for="i in 4" :key="`upd-sk-${i}`" class="update-row">
+            <div style="flex: 1; display: grid; gap: 8px">
+              <div style="display: flex; align-items: center; gap: 10px">
+                <span class="ui-skeleton" style="width: 26px; height: 26px"></span>
+                <span class="ui-skeleton" style="width: 44%; height: 16px"></span>
+              </div>
+              <span class="ui-skeleton" style="width: 58%; height: 12px"></span>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="!recentUpdates.length" class="empty-state empty-state--compact">
           <div class="empty-state__title">暂无转存记录</div>
           <div class="empty-state__desc">暂无新文件转存记录。</div>
         </div>
@@ -725,7 +764,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="glass-panel upcoming-card" v-loading="dramaLoading">
+      <section class="glass-panel upcoming-card" v-loading="dramaLoading && !showDramaSkeleton">
         <div class="section-header">
           <div class="section-header__title">
             <div class="section-header__eyebrow">Upcoming</div>
@@ -738,7 +777,16 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-if="!upcomingAiring.length" class="empty-state empty-state--compact">
+        <div v-if="showDramaSkeleton" class="upcoming-list" aria-hidden="true">
+          <div v-for="i in 4" :key="`upc-sk-${i}`" class="upcoming-row">
+            <div class="upcoming-row__left" style="flex: 1">
+              <span class="ui-skeleton" style="width: 26px; height: 26px"></span>
+              <span class="ui-skeleton" style="width: 56%; height: 15px"></span>
+            </div>
+            <span class="ui-skeleton" style="width: 46px; height: 13px"></span>
+          </div>
+        </div>
+        <div v-else-if="!upcomingAiring.length" class="empty-state empty-state--compact">
           <div class="empty-state__title">暂无即将播出剧集</div>
           <div class="empty-state__desc">未来 7 天暂无已识别的更新日。</div>
         </div>
@@ -786,7 +834,28 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-loading="capacityLoading" class="capacity-body">
+      <div v-if="showCapacitySkeleton" class="capacity-body capacity-skeleton" aria-hidden="true">
+        <div class="metric-strip capacity-skeleton__metrics">
+          <div v-for="i in 4" :key="`cap-hero-sk-${i}`" class="glass-panel metric-tile">
+            <span class="ui-skeleton" style="width: 64px; height: 13px"></span>
+            <span class="ui-skeleton" style="width: 88px; height: 28px; margin-top: 10px"></span>
+            <span class="ui-skeleton" style="width: 110px; height: 12px; margin-top: 8px"></span>
+          </div>
+        </div>
+        <div class="glass-panel capacity-overview-card">
+          <span class="ui-skeleton" style="width: 120px; height: 18px"></span>
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 100%; height: 12px; margin-top: 16px"></span>
+        </div>
+        <div class="card-grid">
+          <div v-for="i in 3" :key="`cap-card-sk-${i}`" class="glass-panel dashboard-log-skeleton__entry">
+            <span class="ui-skeleton" style="width: 52%; height: 16px"></span>
+            <span class="ui-skeleton" style="width: 78%; height: 12px"></span>
+            <span class="ui-skeleton ui-skeleton--pill" style="width: 100%; height: 8px"></span>
+          </div>
+        </div>
+      </div>
+
+      <div v-else v-loading="capacityLoading && Boolean(capacityOverview)" class="capacity-body">
         <CapacityHero v-if="capacityOverview" :summary="capacityOverview.summary" />
 
         <section class="glass-panel capacity-overview-card">
@@ -1180,6 +1249,45 @@ onBeforeUnmount(() => {
   .dashboard-metrics .metric-tile__hint {
     margin-top: 6px;
     font-size: 11.5px;
+  }
+}
+
+.dashboard-log-skeleton {
+  padding: 22px;
+  display: grid;
+  gap: 14px;
+}
+
+.dashboard-log-skeleton__head,
+.dashboard-log-skeleton__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dashboard-log-skeleton__entry {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 14px;
+  background: var(--el-bg-color);
+}
+
+.capacity-skeleton__metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 1024px) {
+  .capacity-skeleton__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .capacity-skeleton__metrics {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

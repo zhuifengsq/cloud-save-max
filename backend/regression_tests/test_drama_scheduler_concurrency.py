@@ -124,8 +124,8 @@ def test_two_mock_drives_transfer_while_first_confirmation_waits(tmp_path, monke
     engine.dispose()
 
 
-@pytest.mark.parametrize("registered, should_probe", [(True, False), (False, True)])
-def test_scheduler_named_adapter_construction_failure_respects_reservation(tmp_path, monkeypatch, registered, should_probe):
+@pytest.mark.parametrize("registered", [True, False])
+def test_scheduler_named_adapter_construction_failure_respects_reservation(tmp_path, monkeypatch, registered):
     from app.infrastructure.drive.factory import AdapterFactory
 
     engine = create_engine("sqlite:///" + (tmp_path / "fallback.db").as_posix())
@@ -144,11 +144,12 @@ def test_scheduler_named_adapter_construction_failure_respects_reservation(tmp_p
     probed = []
     def probe(plan, manager, **kwargs):
         selected = manager.get_adapter_for_task({"account_name": "requested", "shareurl": "https://pan.quark.cn/s/test"})
-        probed.append(selected.account_name)
+        if selected is not None:
+            probed.append(selected.account_name)
         raise RuntimeError("stop at generated-share probe")
     monkeypatch.setattr(task_run_stages, "probe_generated_share_check", probe)
     task_scheduler.run_drama_tasks()
-    assert probed == (["available"] if should_probe else [])
+    assert probed == []
     engine.dispose()
 
 
@@ -240,10 +241,50 @@ def test_scheduler_runs_independent_account_during_transfer_confirmation(tmp_pat
     assert "task_id=2" in caplog.text
     caplog.set_level("INFO", logger=task_scheduler.__name__)
     caplog.clear()
+    monkeypatch.setattr(task_scheduler.settings, "drama_scheduler_capacity_wait_seconds", 0.0)
     with admission.reserve(None), admission.reserve(None):
         task_scheduler.run_drama_tasks()
     capacity_skips = [record.getMessage() for record in caplog.records if "TASK_CAPACITY_EXCEEDED" in record.getMessage()]
     assert all(any(f"task_id={i} " in message for message in capacity_skips) for i in range(1, 5))
     assert sorted(i for event, i in calls if event == "start") == [1, 2, 3, 4]
     assert len(delivered) == 1
+    engine.dispose()
+
+
+def test_scheduler_waits_for_capacity_when_slot_releases_within_timeout(tmp_path, monkeypatch):
+    import threading
+
+    engine = create_engine("sqlite:///" + (tmp_path / "wait_cap.db").as_posix())
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    with sessions.begin() as db:
+        db.add(DriveAccount(name="acc", drive_type="quark", enabled=True))
+        db.add(Task(id=1, task_uid="wait-1", taskname="wait-1", account_name="acc",
+                    shareurl="https://pan.quark.cn/s/wait1", savepath="/wait1", enabled=True, task_type="drama"))
+    admission = TaskAdmission(max_active=1)
+    executed: list[int] = []
+    monkeypatch.setattr(task_scheduler, "SessionLocal", sessions)
+    monkeypatch.setattr(task_scheduler, "task_admission", admission)
+    monkeypatch.setattr(task_scheduler.settings, "drama_scheduler_capacity_wait_seconds", 2.0)
+    monkeypatch.setattr(task_run_stages, "probe_generated_share_check", lambda *args, **kwargs: None)
+    monkeypatch.setattr(task_scheduler, "run_task_use_case", lambda: SimpleNamespace(
+        execute=lambda cmd, policy: executed.append(cmd.task_id) or SimpleNamespace(
+            status="success", message="ok", taskname="wait-1", tree_summary="", duration=0.1,
+            shareurl="", savepath="", task_id=cmd.task_id, notify_summary=None,
+        )
+    ))
+    monkeypatch.setattr(task_scheduler, "task_run_notification_batch", lambda: SimpleNamespace(
+        merge=lambda *args, **kwargs: None, flush=lambda: None,
+    ))
+    slot = admission.reserve(None)
+
+    def _release_later() -> None:
+        time.sleep(0.08)
+        slot.release()
+
+    t = threading.Thread(target=_release_later, daemon=True)
+    t.start()
+    task_scheduler.run_drama_tasks()
+    t.join(timeout=1.0)
+    assert executed == [1]
     engine.dispose()

@@ -45,6 +45,8 @@ def test_quark_classification(response, expected_kind):
         ({"code": -7, "message": "分享文件夹等待审核中"}, "pending"),
         ({"code": -62, "message": "需要输入验证码"}, "captcha"),
         ({"code": -6, "message": "认证失败，请检查Cookie是否有效"}, "auth"),
+        ({"code": -6, "message": "Cookie已失效"}, "auth"),
+        ({"message": "请重新登录，Cookie已失效"}, "auth"),
         ({"status": 500, "code": 1, "message": "百度网盘客户端未初始化"}, "auth"),
         ({"code": 4, "message": "分享提取码错误"}, "passcode"),
         ({"code": 200025}, "passcode"),

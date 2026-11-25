@@ -808,7 +808,7 @@ def test_quark_share_pagination_controls_once_completion(scope, monkeypatch):
         assert share_reads == [("0", 1)]
         assert first.status == "success"
         assert "无可转存文件" in first.tree_summary
-        assert not task.enabled
+        assert task.enabled
         return
 
     expected_pages = ([("0", 1)] if child else []) + [(share_dir, 1), (share_dir, 2)]

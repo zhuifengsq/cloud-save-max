@@ -18,7 +18,7 @@ import NavMenu from '@/layouts/NavMenu.vue'
 import { useTheme } from '@/composables/useTheme'
 import { resetDynamicRoutes } from '@/router'
 import { useAuthStore } from '@/stores/auth'
-import logoCat from '@/assets/logo-cat.png'
+import logoCat from '@/assets/logo-cat.webp'
 
 
 const route = useRoute()

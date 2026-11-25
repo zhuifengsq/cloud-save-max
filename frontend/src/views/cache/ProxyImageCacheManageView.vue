@@ -64,6 +64,7 @@ async function handleClear() {
     type: 'warning',
     confirmButtonText: '清空',
     cancelButtonText: '取消',
+    confirmButtonClass: 'el-button--danger',
   })
   const out = await clearProxyImageCache()
   ElMessage.success(`已清空 ${out.deleted_files || 0} 项（${formatBytes(out.deleted_bytes || 0)}）`)

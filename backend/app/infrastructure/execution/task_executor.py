@@ -16,8 +16,24 @@ from treelib.tree import Tree
 
 from app.core.errors import bad_request
 from app.infrastructure.drive.account_manager import DatabaseAccountManager
-from app.infrastructure.execution.drama_executor import DramaTaskExecutor, SkipTask
+from app.infrastructure.execution.drama_executor import (
+    DramaTaskExecutor,
+    ShareAccessError,
+    ShareSourceInvalidError,
+    SkipTask,
+)
 from app.infrastructure.execution.execution_log import ExecutionLog, bounded_text
+from app.infrastructure.execution.retry_utils import is_transient_error
+
+
+def _is_recoverable_share_failure(exc: Exception, stage: str) -> bool:
+    if isinstance(exc, ShareSourceInvalidError):
+        return True
+    if isinstance(exc, ShareAccessError):
+        return False
+    if stage == "share_parse":
+        return not is_transient_error(exc)
+    return False
 from app.core.settings import settings
 from app.domain.task_run import ExecutionLogPort, RecoveryCallback, TaskExecutionState
 from app.infrastructure.persistence.models.task_execution import TaskExecution
@@ -194,7 +210,13 @@ class TaskExecutor:
             stage = log.stage or "unknown"
             message = str(exc).strip() or type(exc).__name__
 
-            if recover is not None and status == 'failed' and stage in {"share_parse", "get_stoken", "fetch_share_items"} and _auto_update_depth < 5:
+            if (
+                recover is not None
+                and status == 'failed'
+                and stage in {"share_parse", "get_stoken", "fetch_share_items"}
+                and _is_recoverable_share_failure(exc, stage)
+                and _auto_update_depth < 5
+            ):
                 if _tried_shareurls is None:
                     _tried_shareurls = set()
                 if recover(task, log, _tried_shareurls):
@@ -308,6 +330,7 @@ class TaskExecutor:
         log.line(f"状态: {status}")
         log.line(f"运行时长: {duration_s:.2f}s")
         allow_once = bool((task_data.get("extra") or {}).get("allow_once"))
+        transfer_count = int(getattr(drama_executor, "transfer_count", 0) or 0) if drama_executor is not None else 0
         if (
             status == "success"
             and (persist_execution or prepared_data is not None)
@@ -316,10 +339,13 @@ class TaskExecutor:
             and allow_once
             and bool(getattr(task, "enabled", False))
         ):
-            task.enabled = False
-            if self.db is not None:
-                self.db.flush()
-            log.line("运行一次: 本次执行成功，已自动禁用任务")
+            if transfer_count > 0:
+                task.enabled = False
+                if self.db is not None:
+                    self.db.flush()
+                log.line("运行一次: 本次执行成功，已自动禁用任务")
+            else:
+                log.line("运行一次: 本次未转存新文件，保持启用以便后续追更")
         full_tree = str(tree)
         new_files = _new_files_from_tree(tree)
         display_tree, tree_truncated = bounded_text(full_tree, settings.execution_tree_max_bytes)
