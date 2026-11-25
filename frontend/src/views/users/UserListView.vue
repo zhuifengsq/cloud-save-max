@@ -162,7 +162,24 @@ onMounted(async () => {
     </section>
 
     <section class="glass-panel table-panel">
-      <el-table :data="users" border v-loading="loading" @selection-change="handleSelectionChange">
+      <div v-if="loading && !users.length" class="ui-skeleton-table" aria-hidden="true">
+        <div v-for="i in 5" :key="`user-sk-${i}`" class="ui-skeleton-table__row">
+          <span class="ui-skeleton" style="width: 24px; height: 24px; border-radius: 7px"></span>
+          <span class="ui-skeleton" style="width: 18%; height: 15px"></span>
+          <span class="ui-skeleton" style="width: 24%; height: 14px"></span>
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 64px; height: 22px"></span>
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 52px; height: 22px"></span>
+          <span class="ui-skeleton" style="margin-left: auto; width: 96px; height: 15px"></span>
+        </div>
+      </div>
+
+      <el-table v-else :data="users" border v-loading="loading && Boolean(users.length)" @selection-change="handleSelectionChange">
+        <template #empty>
+          <div class="empty-state empty-state--compact">
+            <div class="empty-state__title">暂无匹配用户</div>
+            <div class="empty-state__desc">尝试调整搜索关键词，或点击右上角新建用户。</div>
+          </div>
+        </template>
         <el-table-column type="selection" width="48" />
         <el-table-column label="用户名" min-width="160">
           <template #default="{ row }">

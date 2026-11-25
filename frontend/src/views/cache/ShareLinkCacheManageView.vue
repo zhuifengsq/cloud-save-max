@@ -227,7 +227,23 @@ onMounted(async () => {
             </div>
           </section>
 
-          <el-table :data="cache.items" border v-loading="cache.loading">
+          <div v-if="cache.loading && !cache.items.length" class="ui-skeleton-table" aria-hidden="true">
+            <div v-for="i in 6" :key="`share-cache-sk-${i}`" class="ui-skeleton-table__row">
+              <span class="ui-skeleton" style="flex: 1; height: 15px"></span>
+              <span class="ui-skeleton ui-skeleton--pill" style="width: 72px; height: 20px"></span>
+              <span class="ui-skeleton ui-skeleton--pill" style="width: 52px; height: 22px"></span>
+              <span class="ui-skeleton" style="width: 120px; height: 14px"></span>
+              <span class="ui-skeleton" style="width: 112px; height: 14px"></span>
+            </div>
+          </div>
+
+          <el-table v-else :data="cache.items" border v-loading="cache.loading && Boolean(cache.items.length)">
+            <template #empty>
+              <div class="empty-state empty-state--compact">
+                <div class="empty-state__title">暂无分享链接缓存</div>
+                <div class="empty-state__desc">搜索验证或解析分享链接后会自动写入缓存。</div>
+              </div>
+            </template>
             <el-table-column label="分享链接" min-width="240" show-overflow-tooltip>
               <template #default="{ row }">
                 <code class="share-url-cell">{{ row.shareurl }}</code>
@@ -318,7 +334,22 @@ onMounted(async () => {
             </div>
           </section>
 
-          <el-table :data="invalid.items" border v-loading="invalid.loading">
+          <div v-if="invalid.loading && !invalid.items.length" class="ui-skeleton-table" aria-hidden="true">
+            <div v-for="i in 6" :key="`share-invalid-sk-${i}`" class="ui-skeleton-table__row">
+              <span class="ui-skeleton" style="flex: 1; height: 15px"></span>
+              <span class="ui-skeleton ui-skeleton--pill" style="width: 72px; height: 20px"></span>
+              <span class="ui-skeleton" style="width: 150px; height: 14px"></span>
+              <span class="ui-skeleton" style="width: 112px; height: 14px"></span>
+            </div>
+          </div>
+
+          <el-table v-else :data="invalid.items" border v-loading="invalid.loading && Boolean(invalid.items.length)">
+            <template #empty>
+              <div class="empty-state empty-state--compact">
+                <div class="empty-state__title">暂无永久异常链接</div>
+                <div class="empty-state__desc">当前没有被标记为永久失效的分享链接。</div>
+              </div>
+            </template>
             <el-table-column label="分享链接" min-width="260" show-overflow-tooltip>
               <template #default="{ row }">
                 <code class="share-url-cell">{{ row.shareurl }}</code>

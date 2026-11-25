@@ -32,6 +32,8 @@ const canWrite = computed(() => auth.permissions.includes(DRIVE_ACCOUNT_WRITE))
 const router = useRouter()
 
 const loading = ref(false)
+const hasLoaded = ref(false)
+const showInitialSkeleton = computed(() => loading.value && !hasLoaded.value)
 const submitting = ref(false)
 const refreshing = ref(false)
 const togglingAccounts = reactive(new Set<number>())
@@ -160,6 +162,7 @@ async function loadData() {
     driveTypes.value = driveTypeData
   } finally {
     loading.value = false
+    hasLoaded.value = true
   }
 }
 
@@ -356,7 +359,7 @@ onMounted(loadProbeScheduler)
 </script>
 
 <template>
-  <div class="shell-page drive-accounts-page" v-loading="loading">
+  <div class="shell-page drive-accounts-page">
     <div class="section-header">
       <div class="section-header__title">
         <div class="section-header__eyebrow">DRIVE ACCOUNTS</div>
@@ -370,7 +373,17 @@ onMounted(loadProbeScheduler)
       </div>
     </div>
 
-    <section class="metric-strip">
+    <section v-if="showInitialSkeleton" class="metric-strip" aria-hidden="true">
+      <div v-for="i in 4" :key="`acc-metric-sk-${i}`" class="glass-panel metric-tile">
+        <div class="metric-tile__head">
+          <span class="ui-skeleton" style="width: 64px; height: 13px"></span>
+          <span class="ui-skeleton ui-skeleton--circle" style="width: 28px; height: 28px"></span>
+        </div>
+        <span class="ui-skeleton" style="width: 56px; height: 30px; margin-top: 12px"></span>
+        <span class="ui-skeleton" style="width: 112px; height: 12px; margin-top: 10px"></span>
+      </div>
+    </section>
+    <section v-else class="metric-strip" v-loading="loading">
       <div class="glass-panel metric-tile">
         <div class="metric-tile__head">
           <div class="metric-tile__label">账号总数</div>
@@ -462,7 +475,35 @@ onMounted(loadProbeScheduler)
       </div>
     </section>
 
-    <section v-if="filteredAccounts.length" class="card-grid account-list">
+    <section v-if="showInitialSkeleton" class="card-grid account-list" aria-hidden="true">
+      <div v-for="i in 3" :key="`acc-card-sk-${i}`" class="glass-panel ui-skeleton-card">
+        <div class="ui-skeleton-card__head">
+          <div style="display: flex; align-items: center; gap: 10px; flex: 1">
+            <span class="ui-skeleton ui-skeleton--circle" style="width: 34px; height: 34px"></span>
+            <div style="display: grid; gap: 6px; flex: 1">
+              <span class="ui-skeleton" style="width: 52%; height: 16px"></span>
+              <span class="ui-skeleton" style="width: 34%; height: 12px"></span>
+            </div>
+          </div>
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 40px; height: 20px"></span>
+        </div>
+        <div style="display: flex; gap: 6px">
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 52px; height: 22px"></span>
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 52px; height: 22px"></span>
+        </div>
+        <div style="display: grid; gap: 8px">
+          <span class="ui-skeleton" style="width: 68%; height: 13px"></span>
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 100%; height: 8px"></span>
+        </div>
+        <div class="ui-skeleton-card__foot">
+          <span class="ui-skeleton" style="width: 52px; height: 28px"></span>
+          <span class="ui-skeleton" style="width: 52px; height: 28px"></span>
+          <span class="ui-skeleton" style="width: 52px; height: 28px"></span>
+        </div>
+      </div>
+    </section>
+
+    <section v-else-if="filteredAccounts.length" class="card-grid account-list" v-loading="loading">
       <CapacityAccountCard v-for="item in filteredAccounts" :key="item.id" :account="item">
         <template #controls>
           <el-switch
@@ -484,7 +525,15 @@ onMounted(loadProbeScheduler)
     </section>
 
     <section v-else class="glass-panel dashboard-section">
-      <div class="empty-copy">当前筛选条件下没有账号，试试清空筛选，或新增一个网盘账号开始管理。</div>
+      <div class="empty-state">
+        <div class="empty-state__title">{{ accounts.length ? '没有符合筛选条件的账号' : '还没有网盘账号' }}</div>
+        <div class="empty-state__desc">
+          {{ accounts.length ? '试试调整关键词或切换状态筛选。' : '新增一个网盘账号后，即可在这里统一探测容量与自动签到。' }}
+        </div>
+        <div v-if="canWrite && !accounts.length" class="empty-state__actions">
+          <el-button type="primary" @click="openCreateDrawer">新增账号</el-button>
+        </div>
+      </div>
     </section>
 
     <DriveAccountDrawer

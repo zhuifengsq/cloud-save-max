@@ -180,7 +180,24 @@ onMounted(() => {
         </section>
 
         <section class="glass-panel table-panel">
-          <el-table :data="items" border v-loading="loading">
+          <div v-if="loading && !items.length" class="ui-skeleton-table" aria-hidden="true">
+            <div v-for="i in 6" :key="`audit-sk-${i}`" class="ui-skeleton-table__row">
+              <span class="ui-skeleton" style="width: 132px; height: 14px"></span>
+              <span class="ui-skeleton" style="width: 78px; height: 14px"></span>
+              <span class="ui-skeleton" style="width: 136px; height: 22px"></span>
+              <span class="ui-skeleton" style="width: 96px; height: 14px"></span>
+              <span class="ui-skeleton ui-skeleton--pill" style="width: 52px; height: 22px"></span>
+              <span class="ui-skeleton" style="flex: 1; height: 14px"></span>
+            </div>
+          </div>
+
+          <el-table v-else :data="items" border v-loading="loading && Boolean(items.length)">
+            <template #empty>
+              <div class="empty-state empty-state--compact">
+                <div class="empty-state__title">暂无审计日志</div>
+                <div class="empty-state__desc">当前筛选条件下没有记录，可清空筛选后再试。</div>
+              </div>
+            </template>
             <el-table-column label="时间" width="156">
               <template #default="{ row }">
                 <span class="audit-time">{{ formatDateTimeText(row.created_at) }}</span>

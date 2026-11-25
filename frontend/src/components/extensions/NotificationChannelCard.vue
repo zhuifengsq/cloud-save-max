@@ -77,15 +77,19 @@ const CHANNEL_BADGE_MAP: Record<string, { label: string; bg: string; fg: string 
   wecom: { label: '企', bg: 'rgba(16, 185, 129, 0.14)', fg: '#059669' },
   qywx: { label: '企', bg: 'rgba(16, 185, 129, 0.14)', fg: '#059669' },
   dingtalk: { label: '钉', bg: 'rgba(37, 99, 235, 0.14)', fg: '#2563eb' },
+  dingding: { label: '钉', bg: 'rgba(37, 99, 235, 0.14)', fg: '#2563eb' },
   feishu: { label: '飞', bg: 'rgba(14, 165, 233, 0.14)', fg: '#0284c7' },
   telegram: { label: 'TG', bg: 'rgba(56, 189, 248, 0.16)', fg: '#0284c7' },
   bark: { label: 'BK', bg: 'rgba(249, 115, 22, 0.14)', fg: '#ea580c' },
   email: { label: '邮', bg: 'rgba(139, 92, 246, 0.14)', fg: '#7c3aed' },
+  smtp: { label: '邮', bg: 'rgba(139, 92, 246, 0.14)', fg: '#7c3aed' },
   webhook: { label: 'WH', bg: 'rgba(99, 102, 241, 0.14)', fg: '#4f46e5' },
   gotify: { label: 'GF', bg: 'rgba(20, 184, 166, 0.14)', fg: '#0d9488' },
   ntfy: { label: 'NT', bg: 'rgba(6, 182, 212, 0.14)', fg: '#0891b2' },
   serverchan: { label: 'SC', bg: 'rgba(245, 158, 11, 0.14)', fg: '#d97706' },
+  serverj: { label: 'SC', bg: 'rgba(245, 158, 11, 0.14)', fg: '#d97706' },
   pushplus: { label: 'PP', bg: 'rgba(236, 72, 153, 0.14)', fg: '#db2777' },
+  wxpusher: { label: '微', bg: 'rgba(16, 185, 129, 0.14)', fg: '#059669' },
 }
 
 const channelBadge = computed(() => {

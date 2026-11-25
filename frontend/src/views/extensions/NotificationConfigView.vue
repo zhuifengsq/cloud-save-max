@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bell, CircleCheck, Setting, Warning } from '@element-plus/icons-vue'
+import { ArrowDown, Bell, CircleCheck, Search, Setting, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import { fetchNotificationConfig, sendNotificationTest, updateNotificationConfig } from '@/api/notifications'
@@ -14,6 +14,8 @@ const auth = useAuthStore()
 const canWrite = computed(() => auth.permissions.includes(NOTIFY_WRITE))
 
 const loading = ref(false)
+const hasLoaded = ref(false)
+const showInitialSkeleton = computed(() => loading.value && !hasLoaded.value)
 const saving = ref(false)
 const testing = ref(false)
 const isMobile = useIsMobile()
@@ -374,9 +376,110 @@ function channelConfiguredOverride(channel: NotifyChannel) {
   return undefined
 }
 
+function isChannelConfigured(channel: NotifyChannel): boolean {
+  return channelConfiguredOverride(channel) ?? channel.required_keys.every((k) => hasValue(configData.value[k]))
+}
+
+const CHANNEL_SEARCH_ALIASES: Record<string, string> = {
+  telegram: 'tg 电报',
+  wecom_app: '微信 企微 qywx',
+  wecom_bot: '微信 企微 qywx',
+  wxpusher: '微信',
+  pushplus: '微信',
+  dingding: 'dingtalk dd',
+  feishu: 'lark fs',
+  smtp: 'email mail 邮箱',
+  serverj: 'serverchan 微信',
+  gocqhttp: 'qq',
+  qmsg: 'qq',
+  chronocat: 'qq',
+  webhook: 'http api',
+}
+
+type ChannelStatusFilter = 'all' | 'enabled' | 'configured' | 'unconfigured'
+
+const filterExpanded = ref(false)
+const statusFilter = ref<ChannelStatusFilter>('all')
+const searchKeyword = ref('')
+const unconfiguredOpen = ref<boolean | null>(null)
+
+const statusFilterOptions: Array<{ label: string; value: ChannelStatusFilter }> = [
+  { label: '全部', value: 'all' },
+  { label: '已启用', value: 'enabled' },
+  { label: '已配置', value: 'configured' },
+  { label: '未配置', value: 'unconfigured' },
+]
+
+function parseKeywordsCount(arr: unknown, text: unknown): number {
+  if (Array.isArray(arr)) return arr.length
+  return String(text || '')
+    .split('|')
+    .map((s) => s.trim())
+    .filter(Boolean).length
+}
+
+const excludeKeywordsCount = computed(() =>
+  parseKeywordsCount(configData.value.__exclude_keywords, configData.value.__exclude_keywords_text),
+)
+const filterKeywordsCount = computed(() =>
+  parseKeywordsCount(configData.value.__filter_keywords, configData.value.__filter_keywords_text),
+)
+
+function channelSortTier(channel: NotifyChannel): number {
+  const configured = isChannelConfigured(channel)
+  const enabled = channelEnabled(channel.id)
+  if (enabled && configured) return 0
+  if (configured || enabled) return 1
+  return 2
+}
+
+const sortedChannels = computed(() => {
+  return channels.value
+    .map((channel, index) => ({ channel, index, tier: channelSortTier(channel) }))
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map((entry) => entry.channel)
+})
+
+const configuredChannels = computed(() =>
+  sortedChannels.value.filter((c) => isChannelConfigured(c) || channelEnabled(c.id)),
+)
+
+const unconfiguredChannels = computed(() =>
+  sortedChannels.value.filter((c) => !isChannelConfigured(c) && !channelEnabled(c.id)),
+)
+
+const showUnconfigured = computed(() => unconfiguredOpen.value ?? configuredChannels.value.length === 0)
+const hasActiveChannelFilter = computed(
+  () => Boolean(searchKeyword.value.trim()) || statusFilter.value !== 'all',
+)
+
+const filteredChannels = computed(() => {
+  const keyword = searchKeyword.value.trim().toLowerCase()
+  return sortedChannels.value.filter((channel) => {
+    const configured = isChannelConfigured(channel)
+    const enabled = channelEnabled(channel.id)
+    if (statusFilter.value === 'enabled' && !enabled) return false
+    if (statusFilter.value === 'configured' && !configured) return false
+    if (statusFilter.value === 'unconfigured' && (configured || enabled)) return false
+    if (!keyword) return true
+    const alias = CHANNEL_SEARCH_ALIASES[channel.id] || ''
+    const haystack = `${channel.title} ${channel.id} ${alias}`.toLowerCase()
+    return haystack.includes(keyword)
+  })
+})
+
+function toggleUnconfigured() {
+  unconfiguredOpen.value = !showUnconfigured.value
+}
+
+function resetChannelFilters() {
+  searchKeyword.value = ''
+  statusFilter.value = 'all'
+}
+
 const summary = computed(() => {
   const items = channels.value
-  const configuredCount = items.filter((c) => channelConfiguredOverride(c) ?? c.required_keys.every((k) => hasValue(configData.value[k]))).length
+  const configuredCount = items.filter((c) => isChannelConfigured(c)).length
   const enabledCount = items.filter((c) => channelEnabled(c.id)).length
   const lastFailed = Object.values(lastTests.value).filter((item) => item && item.ok === false).length
   return { total: items.length, configured: configuredCount, enabled: enabledCount, last_failed: lastFailed }
@@ -393,6 +496,7 @@ async function loadData() {
     ensureDefaultChannelEnabledMap(channels.value)
   } finally {
     loading.value = false
+    hasLoaded.value = true
   }
 }
 
@@ -519,7 +623,7 @@ onMounted(loadData)
 </script>
 
 <template>
-  <div class="shell-page" v-loading="loading">
+  <div class="shell-page">
     <div class="section-header">
       <div class="section-header__title">
         <h1>通知配置</h1>
@@ -532,7 +636,17 @@ onMounted(loadData)
       </div>
     </div>
 
-    <section class="metric-strip">
+    <section v-if="showInitialSkeleton" class="metric-strip" aria-hidden="true">
+      <div v-for="i in 4" :key="`notify-metric-sk-${i}`" class="glass-panel metric-tile">
+        <div class="metric-tile__head">
+          <span class="ui-skeleton" style="width: 64px; height: 13px"></span>
+          <span class="ui-skeleton ui-skeleton--circle" style="width: 28px; height: 28px"></span>
+        </div>
+        <span class="ui-skeleton" style="width: 48px; height: 30px; margin-top: 12px"></span>
+        <span class="ui-skeleton" style="width: 112px; height: 12px; margin-top: 10px"></span>
+      </div>
+    </section>
+    <section v-else class="metric-strip" v-loading="loading">
       <div class="glass-panel metric-tile">
         <div class="metric-tile__head">
           <div class="metric-tile__label">渠道总数</div>
@@ -583,11 +697,35 @@ onMounted(loadData)
     </section>
 
     <section class="glass-panel notify-filter-card">
-      <div class="notify-filter-card__header">
-        <h3>通知过滤</h3>
-        <div class="notify-filter-card__hint">基于通知标题和内容的关键词过滤，所有渠道统一生效</div>
-      </div>
-      <div class="notify-filter-card__body">
+      <button
+        type="button"
+        class="notify-filter-card__toggle"
+        :aria-expanded="filterExpanded"
+        @click="filterExpanded = !filterExpanded"
+      >
+        <div class="notify-filter-card__header">
+          <div class="notify-filter-card__title-row">
+            <h3>通知过滤</h3>
+            <div class="notify-filter-card__summary">
+              <el-tag v-if="excludeKeywordsCount" size="small" type="warning" effect="plain" round>
+                排除 {{ excludeKeywordsCount }} 词
+              </el-tag>
+              <el-tag v-if="filterKeywordsCount" size="small" type="primary" effect="plain" round>
+                包含 {{ filterKeywordsCount }} 词
+              </el-tag>
+              <el-tag v-if="!excludeKeywordsCount && !filterKeywordsCount" size="small" type="info" effect="plain" round>
+                未设置过滤词
+              </el-tag>
+            </div>
+          </div>
+          <div class="notify-filter-card__hint">基于通知标题和内容的关键词过滤，所有渠道统一生效</div>
+        </div>
+        <span class="notify-filter-card__chevron">
+          <span>{{ filterExpanded ? '收起' : '展开配置' }}</span>
+          <el-icon class="chevron-icon" :class="{ 'is-open': filterExpanded }"><ArrowDown /></el-icon>
+        </span>
+      </button>
+      <div v-show="filterExpanded" class="notify-filter-card__body">
         <el-form label-position="top">
           <el-form-item label="关键词排除">
             <el-input
@@ -626,20 +764,117 @@ onMounted(loadData)
       </div>
     </section>
 
-    <section class="channel-grid">
-      <NotificationChannelCard
-        v-for="channel in channels"
-        :key="channel.id"
-        :channel="channel"
-        :config="configData"
-        :enabled="channelEnabled(channel.id)"
-        :configured="channelConfiguredOverride(channel)"
-        :can-write="canWrite"
-        :last-result="lastTests[channel.id]"
-        @configure="openChannelDrawer"
-        @toggle="handleToggleChannel"
+    <section class="glass-panel filter-strip channel-toolbar" aria-label="渠道筛选">
+      <el-segmented v-model="statusFilter" :options="statusFilterOptions" class="channel-toolbar__segmented" />
+      <el-input
+        v-model="searchKeyword"
+        clearable
+        placeholder="搜索渠道（微信 / TG / 邮件）"
+        :prefix-icon="Search"
+        class="channel-toolbar__search"
       />
     </section>
+
+    <section v-if="showInitialSkeleton" class="channel-grid" aria-hidden="true">
+      <div v-for="i in 6" :key="`notify-card-sk-${i}`" class="glass-panel ui-skeleton-card">
+        <div class="ui-skeleton-card__head">
+          <div style="display: flex; align-items: center; gap: 10px; flex: 1">
+            <span class="ui-skeleton" style="width: 38px; height: 38px; border-radius: 11px"></span>
+            <div style="display: grid; gap: 6px; flex: 1">
+              <span class="ui-skeleton" style="width: 46%; height: 17px"></span>
+              <span class="ui-skeleton" style="width: 28%; height: 12px"></span>
+            </div>
+          </div>
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 40px; height: 20px"></span>
+        </div>
+        <span class="ui-skeleton ui-skeleton--pill" style="width: 58px; height: 22px"></span>
+        <span class="ui-skeleton" style="width: 100%; height: 42px"></span>
+        <div class="ui-skeleton-card__foot">
+          <span class="ui-skeleton" style="width: 54px; height: 30px"></span>
+        </div>
+      </div>
+    </section>
+
+    <div v-else class="channel-groups-wrap" v-loading="loading">
+      <template v-if="!hasActiveChannelFilter">
+        <section v-if="configuredChannels.length" class="channel-group">
+          <div class="channel-group__head">
+            <h2>已配置渠道</h2>
+            <span class="status-pill">{{ configuredChannels.length }} 个</span>
+          </div>
+          <div class="channel-grid">
+            <NotificationChannelCard
+              v-for="channel in configuredChannels"
+              :key="channel.id"
+              :channel="channel"
+              :config="configData"
+              :enabled="channelEnabled(channel.id)"
+              :configured="isChannelConfigured(channel)"
+              :can-write="canWrite"
+              :last-result="lastTests[channel.id]"
+              @configure="openChannelDrawer"
+              @toggle="handleToggleChannel"
+            />
+          </div>
+        </section>
+
+        <section v-if="unconfiguredChannels.length" class="channel-group">
+          <button
+            type="button"
+            class="glass-panel channel-group__toggle"
+            :aria-expanded="showUnconfigured"
+            @click="toggleUnconfigured"
+          >
+            <div class="channel-group__head-left">
+              <h2>更多可接入渠道</h2>
+              <span class="status-pill">{{ unconfiguredChannels.length }} 个未配置</span>
+            </div>
+            <span class="notify-filter-card__chevron">
+              <span>{{ showUnconfigured ? '收起' : '展开添加' }}</span>
+              <el-icon class="chevron-icon" :class="{ 'is-open': showUnconfigured }"><ArrowDown /></el-icon>
+            </span>
+          </button>
+          <div v-show="showUnconfigured" class="channel-grid">
+            <NotificationChannelCard
+              v-for="channel in unconfiguredChannels"
+              :key="channel.id"
+              :channel="channel"
+              :config="configData"
+              :enabled="channelEnabled(channel.id)"
+              :configured="isChannelConfigured(channel)"
+              :can-write="canWrite"
+              :last-result="lastTests[channel.id]"
+              @configure="openChannelDrawer"
+              @toggle="handleToggleChannel"
+            />
+          </div>
+        </section>
+      </template>
+
+      <section v-else class="channel-group">
+        <div v-if="filteredChannels.length" class="channel-grid">
+          <NotificationChannelCard
+            v-for="channel in filteredChannels"
+            :key="channel.id"
+            :channel="channel"
+            :config="configData"
+            :enabled="channelEnabled(channel.id)"
+            :configured="isChannelConfigured(channel)"
+            :can-write="canWrite"
+            :last-result="lastTests[channel.id]"
+            @configure="openChannelDrawer"
+            @toggle="handleToggleChannel"
+          />
+        </div>
+        <div v-else class="glass-panel empty-state">
+          <div class="empty-state__title">没有匹配的通知渠道</div>
+          <div class="empty-state__desc">尝试换个关键词（例如 微信、TG、邮件），或切回全部状态查看。</div>
+          <div class="empty-state__actions">
+            <el-button @click="resetChannelFilters">清空筛选</el-button>
+          </div>
+        </div>
+      </section>
+    </div>
 
     <el-dialog v-model="testDialogVisible" title="发送测试通知" width="720px">
       <div class="notify-card notify-card--dialog">
@@ -726,35 +961,149 @@ onMounted(loadData)
 }
 
 .notify-filter-card {
-  padding: 22px;
-  margin-bottom: 16px;
+  padding: 16px 20px;
+}
+
+.notify-filter-card__toggle {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
 }
 
 .notify-filter-card__header {
-  margin-bottom: 16px;
+  min-width: 0;
+  flex: 1;
+}
+
+.notify-filter-card__title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 4px;
 }
 
 .notify-filter-card__header h3 {
-  margin: 0 0 6px;
-  font-size: 18px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1.35;
+}
+
+.notify-filter-card__summary {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .notify-filter-card__hint {
   color: var(--el-text-color-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.notify-filter-card__chevron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
+  font-weight: 500;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+
+.chevron-icon {
+  transition: transform 0.2s ease;
+}
+
+.chevron-icon.is-open {
+  transform: rotate(180deg);
 }
 
 .notify-filter-card__body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
 }
 
 .notify-filter-card__actions {
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
+}
+
+.channel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.channel-toolbar__search {
+  width: 280px;
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.channel-groups-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.channel-group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.channel-group__head,
+.channel-group__head-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.channel-group__head h2,
+.channel-group__head-left h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.channel-group__toggle {
+  width: 100%;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.channel-group__toggle:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-hover);
 }
 
 .global-card {
@@ -878,8 +1227,34 @@ onMounted(loadData)
 }
 
 @media (max-width: 768px) {
+  .metric-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .channel-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .channel-toolbar__segmented {
+    width: 100%;
+  }
+
+  .channel-toolbar__search {
+    width: 100%;
+  }
+
   .channel-grid {
     grid-template-columns: 1fr;
+  }
+
+  .notify-filter-card {
+    padding: 14px 16px;
+  }
+
+  .channel-group__toggle {
+    padding: 12px 14px;
   }
 
   .global-card {

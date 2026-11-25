@@ -86,7 +86,25 @@ onMounted(loadData)
       </div>
     </div>
 
-    <template v-if="stats">
+    <template v-if="loading && !stats">
+      <section class="metric-strip proxy-metrics" aria-hidden="true">
+        <div v-for="i in 4" :key="`proxy-sk-${i}`" class="glass-panel metric-tile">
+          <span class="ui-skeleton" style="width: 64px; height: 13px"></span>
+          <span class="ui-skeleton" style="width: 78px; height: 32px; margin-top: 12px"></span>
+          <span class="ui-skeleton" style="width: 112px; height: 12px; margin-top: 10px"></span>
+        </div>
+      </section>
+      <section class="glass-panel table-panel" aria-hidden="true">
+        <div class="ui-skeleton-table">
+          <div v-for="i in 4" :key="`proxy-row-sk-${i}`" class="ui-skeleton-table__row">
+            <span class="ui-skeleton" style="width: 24%; height: 16px"></span>
+            <span class="ui-skeleton" style="flex: 1; height: 16px"></span>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <template v-else-if="stats">
       <section class="metric-strip proxy-metrics" v-loading="loading">
         <div class="glass-panel metric-tile">
           <div class="metric-tile__label">功能状态</div>

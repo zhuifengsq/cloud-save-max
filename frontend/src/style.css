@@ -1423,6 +1423,44 @@ html:root[data-theme='dark'] .el-message-box__btns .el-button--primary.el-button
   border-radius: 999px;
 }
 
+.ui-skeleton-table {
+  display: grid;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.ui-skeleton-table__row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.ui-skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+}
+
+.ui-skeleton-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ui-skeleton-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
 @keyframes ui-shimmer {
   0% {
     background-position: 100% 50%;

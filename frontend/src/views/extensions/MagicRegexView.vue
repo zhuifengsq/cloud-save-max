@@ -1097,7 +1097,14 @@ onMounted(() => {
               </div>
               <el-button type="primary" size="small" :disabled="!canWrite" @click="openTemplateCreate">新增模板</el-button>
             </header>
-            <el-table :data="templates.list" border v-loading="templates.loading" style="width: 100%">
+            <div v-if="templates.loading && !templates.list.length" class="ui-skeleton-table" aria-hidden="true">
+              <div v-for="i in 3" :key="`tpl-sk-${i}`" class="ui-skeleton-table__row">
+                <span class="ui-skeleton" style="flex: 1; height: 15px"></span>
+                <span class="ui-skeleton ui-skeleton--pill" style="width: 64px; height: 22px"></span>
+                <span class="ui-skeleton" style="width: 88px; height: 15px"></span>
+              </div>
+            </div>
+            <el-table v-else :data="templates.list" border v-loading="templates.loading && Boolean(templates.list.length)" style="width: 100%">
               <template #empty>
                 <div class="empty-state empty-state--compact">
                   <div class="empty-state__title">还没有任务模板</div>
@@ -1132,7 +1139,15 @@ onMounted(() => {
               </div>
               <el-button text :loading="loading" @click="refresh">刷新</el-button>
             </header>
-            <el-table :data="builtinRules" border v-loading="loading" style="width: 100%">
+            <div v-if="loading && !builtinRules.length" class="ui-skeleton-table" aria-hidden="true">
+              <div v-for="i in 3" :key="`builtin-sk-${i}`" class="ui-skeleton-table__row">
+                <span class="ui-skeleton" style="width: 120px; height: 22px"></span>
+                <span class="ui-skeleton" style="flex: 1; height: 15px"></span>
+                <span class="ui-skeleton ui-skeleton--pill" style="width: 56px; height: 22px"></span>
+                <span class="ui-skeleton" style="width: 112px; height: 15px"></span>
+              </div>
+            </div>
+            <el-table v-else :data="builtinRules" border v-loading="loading && Boolean(builtinRules.length)" style="width: 100%">
               <template #empty>
                 <div class="empty-state empty-state--compact">
                   <div class="empty-state__title">暂无内置规则</div>
@@ -1167,7 +1182,14 @@ onMounted(() => {
               </div>
               <el-button type="primary" size="small" :disabled="!canWrite" @click="openCreate">新增规则</el-button>
             </header>
-            <el-table :data="customRules" border v-loading="loading" style="width: 100%">
+            <div v-if="loading && !customRules.length" class="ui-skeleton-table" aria-hidden="true">
+              <div v-for="i in 3" :key="`custom-sk-${i}`" class="ui-skeleton-table__row">
+                <span class="ui-skeleton" style="width: 120px; height: 22px"></span>
+                <span class="ui-skeleton" style="flex: 1; height: 15px"></span>
+                <span class="ui-skeleton" style="width: 88px; height: 15px"></span>
+              </div>
+            </div>
+            <el-table v-else :data="customRules" border v-loading="loading && Boolean(customRules.length)" style="width: 100%">
               <template #empty>
                 <div class="empty-state empty-state--compact">
                   <div class="empty-state__title">还没有自定义规则</div>
@@ -1199,7 +1221,15 @@ onMounted(() => {
               </div>
               <el-button type="primary" size="small" :disabled="!canWrite" @click="openFilterRuleDialog(-1)">新增规则</el-button>
             </header>
-            <el-table :data="filterRules.rules" border v-loading="filterRules.loading" style="width: 100%">
+            <div v-if="filterRules.loading && !filterRules.rules.length" class="ui-skeleton-table" aria-hidden="true">
+              <div v-for="i in 3" :key="`filter-sk-${i}`" class="ui-skeleton-table__row">
+                <span class="ui-skeleton" style="width: 110px; height: 15px"></span>
+                <span class="ui-skeleton ui-skeleton--pill" style="width: 64px; height: 22px"></span>
+                <span class="ui-skeleton ui-skeleton--pill" style="width: 64px; height: 22px"></span>
+                <span class="ui-skeleton" style="margin-left: auto; width: 88px; height: 15px"></span>
+              </div>
+            </div>
+            <el-table v-else :data="filterRules.rules" border v-loading="filterRules.loading && Boolean(filterRules.rules.length)" style="width: 100%">
               <template #empty>
                 <div class="empty-state empty-state--compact">
                   <div class="empty-state__title">还没有过滤词规则</div>
@@ -1424,8 +1454,16 @@ onMounted(() => {
             </el-form-item>
           </el-form>
 
-          <div v-loading="dramaLeadIn.loading">
-            <div v-if="!dramaLeadIn.loading && !dramaLeadIn.drives.length" class="empty-state empty-state--compact">
+          <div v-if="dramaLeadIn.loading && !dramaLeadIn.drives.length" class="ui-skeleton-table" aria-hidden="true">
+            <div v-for="i in 4" :key="`leadin-sk-${i}`" class="ui-skeleton-table__row">
+              <span class="ui-skeleton ui-skeleton--circle" style="width: 20px; height: 20px"></span>
+              <span class="ui-skeleton" style="width: 88px; height: 15px"></span>
+              <span class="ui-skeleton ui-skeleton--pill" style="width: 56px; height: 22px"></span>
+              <span class="ui-skeleton" style="margin-left: auto; width: 120px; height: 13px"></span>
+            </div>
+          </div>
+          <div v-else v-loading="dramaLeadIn.loading && Boolean(dramaLeadIn.drives.length)">
+            <div v-if="!dramaLeadIn.drives.length" class="empty-state empty-state--compact">
               <div class="empty-state__title">暂无网盘配置</div>
             </div>
 
