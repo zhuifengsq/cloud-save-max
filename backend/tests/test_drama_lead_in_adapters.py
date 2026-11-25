@@ -493,7 +493,10 @@ class TestBaiduLeadIn(unittest.TestCase):
         }
         result = self.adapter.lead_in_resolve_dir("/我的剧集")
         self.assertEqual(result["code"], 0)
-        self.assertEqual(result["data"]["dir"], {"fid": "/我的剧集", "path": "/我的剧集", "name": "我的剧集"})
+        self.assertEqual(
+            result["data"]["dir"],
+            {"fid": "/我的剧集", "path": "/我的剧集", "name": "我的剧集", "stable_fid": "1"},
+        )
         self.assertEqual(result["data"]["entries"], [{"fid": "/我的剧集/旧文件.mp4", "name": "旧文件.mp4", "size": 5, "dir": False}])
 
     def test_resolve_dir_not_found(self):
@@ -532,7 +535,10 @@ class TestBaiduLeadIn(unittest.TestCase):
         }
         result = self.adapter.lead_in_resolve_dir(spaced)
         self.assertEqual(result["code"], 0, result.get("message"))
-        self.assertEqual(result["data"]["dir"], {"fid": spaced, "path": spaced, "name": " 走马 | 上任"})
+        self.assertEqual(
+            result["data"]["dir"],
+            {"fid": spaced, "path": spaced, "name": " 走马 | 上任", "stable_fid": "3"},
+        )
         self.assertEqual(result["data"]["entries"], [])
 
     def test_resolve_dir_tolerates_leading_space_in_dir_name(self):
@@ -571,6 +577,7 @@ class TestBaiduLeadIn(unittest.TestCase):
         result = self.adapter.lead_in_resolve_dir("/自动转存 /走马")
         self.assertEqual(result["code"], 0, result.get("message"))
         self.assertEqual(result["data"]["dir"]["path"], "/自动转存/走马")
+        self.assertEqual(result["data"]["dir"].get("stable_fid"), "2")
 
     # ---------- inspect ----------
     def _entries(self, items):

@@ -187,3 +187,41 @@ def test_web_and_telegram_share_the_same_preview_behavior(preview):
     assert telegram['drive_type'] == web['drive_type']
     assert {item['fid']: item['file_name_re'] for item in telegram['items']} == {
         item['fid']: item['file_name_re'] for item in web['items']}
+
+
+@pytest.mark.parametrize(("rules", "sources", "destinations", "expected"), [
+    ({"file_min_date": "2026-01-01"}, [
+        ("old.mp4", "2024-03-01"), ("day.mp4", "2026-01-01 09:00:00"),
+        ("seconds.mp4", 1767268800), ("millis.mp4", 1767268800000),
+        ("unknown.mp4", None),
+    ], [], ["day.mp4", "seconds.mp4", "millis.mp4", "unknown.mp4"]),
+    ({"pattern": "^Show", "replace": "Series"}, [
+        ("trailer.mp4", None), ("Show.mp4", None),
+    ], [], ["Series.mp4"]),
+    ({"ignore_extension": True}, [("Special.mkv", None)], ["Special.mp4"], []),
+    ({"ignore_extension": False}, [("Special.mkv", None)], ["Special.mp4"], ["Special.mkv"]),
+    ({"pattern": "^Raw", "replace": "Final"}, [("Raw.mkv", None)], ["Final.mkv"], []),
+    ({"pattern": "^Raw", "replace": "Final"}, [("Raw.mkv", None)], ["Raw.mkv"], []),
+    ({"ignore_extension": True}, [("Series.S01E05.mkv", None)], ["Series.S01E05.srt"], ["Series.S01E05.mkv"]),
+    ({}, [("Series.S01E05.mkv", None)], ["Other.S01E05.mp4"], []),
+    ({"pattern": r"^(?:Raw|Final)-(\d+)", "replace": r"Series.S01E\1"},
+     [("Raw-05.mkv", None)], ["Final-05.mkv"], []),
+    ({"pattern": "$TV_MAGIC", "taskname": "Series"}, [
+        ("Original.S01E05.mp4", None), ("Original.S01E05.srt", None),
+    ], [], ["Series-S01E05.mp4"]),
+])
+def test_normal_preview_and_execution_select_the_same_files(rules, sources, destinations, expected):
+    from app.application.share_preview_plan import PreviewPlanOptions, plan_preview_items
+    from app.infrastructure.execution.drama_executor import DramaTaskExecutor
+    from app.infrastructure.execution.magic_rename import MagicRename
+
+    raw = [{"fid": str(i), "file_name": name, "updated_at": date}
+           for i, (name, date) in enumerate(sources)]
+    dest = [{"fid": f"dest-{i}", "file_name": name} for i, name in enumerate(destinations)]
+    renamer = MagicRename()
+    renamer.set_taskname(rules.get("taskname", ""))
+    rows = plan_preview_items(PreviewPlanOptions(**rules), raw, destinations, renamer)
+    plan = DramaTaskExecutor(adapter=SimpleNamespace(), task_data={
+        **rules, "addition": {"file_min_date": rules.get("file_min_date")},
+    })._plan_transfer(share_files=raw, dest_file_list=dest)
+    assert ([row.name_re for row in rows if row.name_re], [item.target_name for item in plan]) == (expected, expected)

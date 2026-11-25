@@ -253,10 +253,11 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         *,
         first_page: bool = False,
     ) -> Dict:
-        """获取分享文件详情"""
-        list_merge = []
-        page = 1
-        while True:
+        """获取分享文件详情，完整遍历时报告分页是否读完。"""
+        from .complete_listing import Collector, failure, integer, mapping, rows, status
+
+        collector = Collector()
+        for page in range(1, self.COMPLETE_LISTING_MAX_PAGES + 1):
             url = f"{self.BASE_URL}/1/clouddrive/share/sharepage/detail"
             querystring = {
                 "pr": "ucpro",
@@ -275,16 +276,20 @@ class QuarkAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 "fetch_share_full_path": fetch_share_full_path,
             }
             response = self._send_request("GET", url, params=querystring).json()
-            if response["code"] != 0 or first_page:
+            if first_page or (isinstance(response, dict) and response.get("code", 0) not in (0, "0")):
                 return response
-            if response["data"]["list"]:
-                list_merge += response["data"]["list"]
-                page += 1
-            else:
+            try:
+                status(response, "code")
+                batch = rows(mapping(response.get("data")).get("list"))
+                total = integer(mapping(response.get("metadata")).get("_total"))
+                collector.add(batch, total)
+            except (KeyError, ValueError) as exc:
+                return failure(str(exc))
+
+            if not batch or len(collector.items) == collector.expected:
                 break
-            if len(list_merge) >= response["metadata"]["_total"]:
-                break
-        response["data"]["list"] = list_merge
+        response["data"]["list"] = collector.items
+        response["metadata"]["_listing_complete"] = len(collector.items) == collector.expected
         return response
 
     SUPPORTS_COMPLETE_LISTING = True

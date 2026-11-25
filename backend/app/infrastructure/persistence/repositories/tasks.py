@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session, noload
 
+from app.application.repository_records import TaskRecord
 from app.infrastructure.persistence.models.task import Task
 
 
@@ -110,6 +111,20 @@ def list_tasks_recent_executions(db: Session, *, limit: int = 3):
 
 def get_task_row(db: Session, task_id: int):
     return db.execute(select(Task).where(Task.id == task_id)).scalars().first()
+
+
+def guard_task_edit(db: Session, task: TaskRecord) -> bool:
+    # 检查选中的快照并取得写锁，随后在同一事务中合并配置与执行状态。
+    result = db.execute(
+        update(Task)
+        .where(
+            Task.id == task.id, Task.enabled == task.enabled, Task.extra_json == task.extra_json,
+            Task.shareurl == task.shareurl, Task.savepath == task.savepath, Task.account_name == task.account_name,
+        )
+        .values(updated_at=Task.updated_at)
+        .execution_options(synchronize_session=False),
+    )
+    return result.rowcount == 1
 
 
 def list_recent_executions(db: Session, task_id: int, *, limit: int = 3):

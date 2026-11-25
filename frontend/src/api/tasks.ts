@@ -62,6 +62,7 @@ export async function updateTask(
     tmdb_id: number | null
     tmdb_media_type: string | null
     enabled: boolean
+    expected_enabled: boolean
     addition: Record<string, any>
     extra: Record<string, any>
   }>,

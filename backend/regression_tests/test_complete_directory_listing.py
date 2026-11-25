@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
 from app.infrastructure.drive.adapters.base_adapter import BaseCloudDriveAdapter
+from app.infrastructure.drive.adapters.cloud139_adapter import Cloud139Adapter
 from app.infrastructure.drive.adapters.uc_adapter import UCAdapter
 
 
@@ -248,3 +249,145 @@ def test_repeated_cursor_with_distinct_items_fails(kind, key):
     assert result["code"] != 0
     assert "Repeated next-page cursor" in result["message"]
     assert result["data"]["list"] == []
+
+
+@pytest.mark.parametrize("outcome", ["next-entry", "terminal-empty", "empty", "error", "overlap", "limit"])
+def test_cloud139_share_listing_enumerates_ranges_without_silent_truncation(outcome):
+    drive = object.__new__(Cloud139Adapter)
+    drive._phone = ""
+    drive._debug_log_json = Mock()
+    if outcome == "limit":
+        drive.COMPLETE_LISTING_MAX_PAGES = 1
+    folders = [{"catalogID": "season", "catalogName": "Season"}]
+    files = [{"contentID": str(i), "contentName": f"episode-{i}.mp4"} for i in range(1, 201)]
+    first = {"caLst": folders, "coLst": files[:199]}
+    next_page = {"caLst": [], "coLst": files[199:]}
+    empty_page = {"caLst": [], "coLst": []}
+    drive._share_kd_post = Mock(side_effect={
+        "next-entry": [first, next_page],
+        "terminal-empty": [first, empty_page],
+        "empty": [empty_page],
+        "error": [first, TimeoutError("second range unavailable")],
+        "overlap": [first, {"caLst": folders, "coLst": []}],
+        "limit": [first],
+    }[outcome])
+
+    result = drive.get_detail("share", '{"passwd":"code"}', "source-dir")
+
+    requests = [call.args[1]["getOutLinkInfoReq"] for call in drive._share_kd_post.call_args_list]
+    expected = [(1, 200)] if outcome in {"empty", "limit"} else [(1, 200), (201, 400)]
+    assert [(req["bNum"], req["eNum"]) for req in requests] == expected
+    assert all((req["linkID"], req["passwd"], req["pCaID"]) == ("share", "code", "source-dir") for req in requests)
+    if outcome in {"error", "overlap", "limit"}:
+        assert result["code"] != 0
+        assert result["data"]["list"] == []
+        return
+    assert result["code"] == 0
+    actual = [entry["fid"] for entry in result["data"]["list"]]
+    expected_count = {"next-entry": 201, "terminal-empty": 200, "empty": 0}[outcome]
+    assert len(actual) == expected_count
+    if actual:
+        assert actual[0] == "season"
+        assert actual[-1] == str(expected_count - 1)
+
+
+@pytest.mark.parametrize("protocol", ["json", "xml", "legacy"])
+@pytest.mark.parametrize("outcome", ["next", "missing", "empty"])
+def test_cloud189_share_listing_verifies_declared_count(monkeypatch, protocol, outcome):
+    from app.infrastructure.drive.adapters.cloud189_adapter import Cloud189Adapter
+
+    drive = object.__new__(Cloud189Adapter)
+    monkeypatch.setattr("app.infrastructure.drive.adapters.cloud189_adapter.time.sleep", lambda _: None)
+    drive._get_share_info_by_code_v2 = Mock(
+        return_value=None if protocol == "legacy" else {"shareId": "share-id", "fileId": "root-dir"},
+    )
+    drive._fetch_share_page = Mock(return_value="")
+    drive._parse_share_page = Mock(return_value={"shareId": "share-id", "verifyCode": "verify"})
+    requested = []
+    total = 0 if outcome == "empty" else 2
+
+    def request(method, url, *, params, timeout):
+        page_num = params["pageNum"]
+        requested.append(page_num)
+        names = [] if outcome == "empty" or (outcome == "missing" and page_num == 2) else [str(page_num)]
+        if protocol == "legacy":
+            return {
+                "data": [{"fileId": n, "fileName": f"{n}.mkv"} for n in names],
+                "recordCount": total, "pageSize": 60, "pageNum": page_num,
+            }
+        if protocol == "xml":
+            files = "".join(f"<file><id>{n}</id><name>{n}.mkv</name></file>" for n in names)
+            text = f'<?xml version="1.0"?><response><fileList><count>{total}</count>{files}</fileList></response>'
+            return SimpleNamespace(json=Mock(side_effect=ValueError), text=text)
+        return SimpleNamespace(json=lambda: {"res_code": 0, "fileListAO": {
+            "count": total, "folderList": [], "fileList": [{"id": n, "name": f"{n}.mkv"} for n in names],
+        }}, text="")
+
+    drive._request = request
+    drive._request_json = request
+    result = drive.get_detail("share-code", "", "")
+
+    assert requested == ([1] if outcome == "empty" else [1, 2])
+    if outcome == "missing":
+        assert result["code"] != 0
+        assert result["data"]["list"] == []
+    else:
+        assert result["code"] == 0
+        assert [row["fid"] for row in result["data"]["list"]] == (["1", "2"] if outcome == "next" else [])
+
+
+def test_cloud189_selected_file_still_resolves_to_parent_directory():
+    from app.infrastructure.drive.adapters.cloud189_adapter import Cloud189Adapter
+
+    drive = object.__new__(Cloud189Adapter)
+    drive._get_share_info_by_code_v2 = Mock(return_value={"shareId": "share-id", "fileId": "root-dir"})
+    requested = []
+
+    def request(method, url, *, params, timeout):
+        identity = params["fileId"], params["isFolder"]
+        requested.append(identity)
+        data = {"res_code": 0}
+        if identity != ("file", "true"):
+            data["fileListAO"] = {"count": 1, "fileList": [
+                {"id": "file", "name": "episode.mkv", "parentId": "parent"},
+            ]}
+        return SimpleNamespace(json=lambda: data, text="")
+
+    drive._request = request
+
+    result = drive.get_detail("share-code", "", "file")
+
+    assert requested == [("file", "true"), ("file", "false"), ("parent", "true")]
+    assert result["code"] == 0
+    assert result["data"]["resolved_pdir_fid"] == "parent"
+    assert [row["fid"] for row in result["data"]["list"]] == ["file"]
+
+
+@pytest.mark.parametrize("outcome", ["next", "missing", "cap", "empty"])
+def test_guangya_share_listing_respects_continuation_and_cap(monkeypatch, outcome):
+    from app.infrastructure.drive.adapters.guangya_adapter import GuangyaAdapter
+
+    drive = object.__new__(GuangyaAdapter)
+    monkeypatch.setattr(drive, "SHARE_LISTING_MAX_PAGES", 1 if outcome == "cap" else 200, raising=False)
+    seen = []
+
+    def request(token, *, parent_id, page, page_size):
+        assert (token, parent_id, page_size) == ("access-token", "source-dir", 50)
+        seen.append(page)
+        if outcome == "cap":
+            return {"code": 0, "data": {"list": [item(n) for n in range(50)]}}
+        if outcome == "empty":
+            return {"code": 0, "data": {"list": [], "total": 0, "hasMore": False}}
+        rows = [] if outcome == "missing" and page == 2 else [item(page)]
+        return {"code": 0, "data": {"list": rows, "total": 2, "hasMore": page == 1}}
+
+    drive._client = SimpleNamespace(share_files_list=request)
+    result = drive.get_detail("share", '{"access_token":"access-token"}', "source-dir")
+
+    assert seen == ([1] if outcome in {"cap", "empty"} else [1, 2])
+    if outcome in {"cap", "missing"}:
+        assert result["code"] != 0
+        assert result["data"]["list"] == []
+    else:
+        assert result["code"] == 0
+        assert [row["fid"] for row in result["data"]["list"]] == (["1", "2"] if outcome == "next" else [])

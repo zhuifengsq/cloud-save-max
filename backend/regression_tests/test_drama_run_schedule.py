@@ -17,10 +17,19 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
+from apscheduler.schedulers.background import BackgroundScheduler
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
+from app.api.routes.tasks import get_tasks
+from app.api.routes.tasks_read import detail as get_task_detail, page as get_task_page
+from app.application import drama_schedule, drama_update_progress
+from app.application.container import run_task_use_case
 from app.application.drama_schedule import (
     REASON_ALLOW_ONCE,
     REASON_AUTO_NOT_TV,
@@ -38,10 +47,160 @@ from app.application.drama_schedule import (
     resolve_run_schedule,
     weekday_label,
 )
+from app.application.notifications.task_batch import TaskNotificationBatch
+from app.application.queries.task_views import task_detail_view
+from app.application.use_cases.run_task import RunPolicy
+from app.core.runtime.clock import SystemClock
+from app.domain.task_run import RunTaskCommand
+from app.infrastructure.execution import drama_executor, task_run_stages
+from app.infrastructure.persistence.base import Base
+from app.infrastructure.persistence.models.task import Task
+from app.infrastructure.persistence.models.task_execution import TaskExecution
+from app.infrastructure.persistence.models.task_scheduler_setting import TaskSchedulerSetting
+from app.infrastructure.persistence.models.tmdb_media_cache import TMDBMediaCache
+from app.infrastructure.scheduling import task_scheduler
+from app.schemas.task_reads import TaskSummaryOut
 
 # 2026-11-10 是周二（isoweekday()==2），用它固定「今天」避免测试随运行日漂移。
 TUESDAY = datetime(2026, 11, 10, 9, 0)
 WEDNESDAY_ONLY = datetime(2026, 11, 11, 9, 0)
+WEDNESDAY_IN_SHANGHAI = datetime(2026, 11, 24, 16, 5, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def schedule_sessions(monkeypatch, tmp_path):
+    class UtcHostDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return WEDNESDAY_IN_SHANGHAI.replace(tzinfo=None)
+            return WEDNESDAY_IN_SHANGHAI.astimezone(tz)
+
+    for module in (drama_schedule, drama_executor, drama_update_progress):
+        monkeypatch.setattr(module, "datetime", UtcHostDatetime)
+    monkeypatch.setattr(SystemClock, "now_utc", lambda self: WEDNESDAY_IN_SHANGHAI.replace(tzinfo=None))
+    engine = create_engine(f"sqlite:///{(tmp_path / 'schedule.db').as_posix()}")
+    Base.metadata.create_all(engine)
+    yield sessionmaker(bind=engine)
+    engine.dispose()
+
+
+def _wednesday_task(*, allow_once=False, **values):
+    return Task(
+        task_uid="wednesday-task", task_type="drama", taskname="Show", enabled=True,
+        shareurl="https://pan.quark.cn/s/example", savepath="/show",
+        extra_json=json.dumps({"runweek_mode": "manual", "runweek": [3], "allow_once": allow_once}),
+        **values,
+    )
+
+
+@pytest.fixture
+def empty_share_calls(monkeypatch):
+    calls = []
+
+    def fetch_share(pwd_id, stoken, fid):
+        calls.append((pwd_id, stoken, fid))
+        return {"code": 0, "data": {"list": []}}
+
+    adapter = SimpleNamespace(
+        is_active=True, DRIVE_TYPE="test", nickname="mock",
+        extract_url=lambda url: ("example", "", "", []),
+        get_stoken=lambda *args: {"data": {"stoken": "token"}},
+        get_fids=lambda paths: [{"file_path": paths[0], "fid": "dest"}],
+        get_detail=fetch_share,
+        ls_dir=lambda *args, **kwargs: {"code": 0, "data": {"list": []}},
+        close=lambda: None,
+    )
+    manager = SimpleNamespace(init_for_tasks=lambda tasks: None, get_adapter_for_task=lambda task: adapter)
+    monkeypatch.setattr(task_run_stages.DatabaseAccountManager, "from_payload", lambda *args: manager)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "zone_name, expected_zone, status, reads, allow_once, remains_enabled",
+    [
+        ("Asia/Shanghai", "Asia/Shanghai", "success", 1, False, True),
+        ("UTC", "UTC", "skipped", 0, False, True),
+        (None, "Asia/Shanghai", "success", 1, False, True),
+        ("UTC", "UTC", "success", 1, True, False),
+    ],
+)
+def test_cron_weekday_uses_trigger_timezone(
+    monkeypatch, schedule_sessions, empty_share_calls, zone_name, expected_zone,
+    status, reads, allow_once, remains_enabled,
+):
+    monkeypatch.setattr(task_scheduler, "SessionLocal", schedule_sessions)
+    notifier = SimpleNamespace(send=lambda *args, **kwargs: None)
+    monkeypatch.setattr(task_scheduler, "task_run_notification_batch", lambda: TaskNotificationBatch(notifier))
+    with schedule_sessions() as db:
+        task = _wednesday_task(allow_once=allow_once)
+        db.add(task)
+        db.commit()
+        task_id = task.id
+
+    manager = task_scheduler.TaskSchedulerManager()
+    manager.scheduler = BackgroundScheduler()
+    manager._apply_setting(SimpleNamespace(enabled=True, crontab="5 0 * * *", timezone=zone_name))
+    job = manager.scheduler.get_job("drama_tasks")
+    assert str(job.trigger.timezone) == expected_zone
+    job.func(*job.args, **job.kwargs)
+
+    with schedule_sessions() as db:
+        execution = db.scalars(select(TaskExecution).where(TaskExecution.task_id == task_id)).one()
+        assert execution.status == status, execution.run_log
+        assert db.get(Task, task_id).enabled is remains_enabled
+    assert empty_share_calls == [("example", "token", "")] * reads
+
+
+def test_manual_run_still_ignores_off_day(schedule_sessions, empty_share_calls):
+    with schedule_sessions() as db:
+        task = _wednesday_task()
+        db.add_all([task, TaskSchedulerSetting(id=1, timezone="UTC")])
+        db.commit()
+        result = run_task_use_case(db).execute(RunTaskCommand(task.id), RunPolicy.for_trigger("http"))
+        assert result.status == "success", result.run_log
+    assert empty_share_calls == [("example", "token", "")]
+
+
+def test_manual_run_still_blocks_missing_tmdb_binding(schedule_sessions, empty_share_calls):
+    with schedule_sessions() as db:
+        task = _wednesday_task()
+        task.extra_json = '{"runweek_mode":"auto"}'
+        db.add(task)
+        db.commit()
+        result = run_task_use_case(db).execute(RunTaskCommand(task.id), RunPolicy.for_trigger("http"))
+        assert result.status == "skipped", result.run_log
+        assert "未绑定 TMDB TV" in result.run_log
+    assert empty_share_calls == []
+
+
+@pytest.mark.parametrize("zone_name, reason, latest_episode", [
+    ("Asia/Shanghai", REASON_DUE, 10),
+    ("UTC", REASON_OFF_DAY, 9),
+    (None, REASON_DUE, 10),
+    ("Invalid/Legacy", REASON_DUE, 10),
+])
+def test_task_list_and_detail_use_scheduler_day(schedule_sessions, zone_name, reason, latest_episode):
+    with schedule_sessions() as db:
+        task = _wednesday_task(tmdb_id=99, tmdb_media_type="tv")
+        db.add_all([task, TMDBMediaCache(media_type="tv", tmdb_id=99, payload_json=json.dumps({
+            "last_episode_to_air": {"season_number": 1, "episode_number": 9, "air_date": "2026-11-24"},
+            "next_episode_to_air": {"season_number": 1, "episode_number": 10, "air_date": "2026-11-25"},
+        }))])
+        if zone_name is not None:
+            db.add(TaskSchedulerSetting(id=1, timezone=zone_name))
+        db.commit()
+        task_id = task.id
+
+    with schedule_sessions() as db:
+        current_page = get_task_page(page=1, page_size=20, conditions={"task_type": "drama"}, db=db)
+        listing = TaskSummaryOut.model_validate(current_page["items"][0])
+        detail = TaskSummaryOut.model_validate(get_task_detail(task_id, db))
+        legacy = get_tasks(db)[0]
+        edit_view = task_detail_view(db, db.get(Task, task_id))
+        for view in (listing, detail, legacy, edit_view):
+            assert (view.run_schedule.reason, view.drama_update_progress.tmdb_episode) == (reason, latest_episode)
+            assert view.run_schedule.message == listing.run_schedule.message
 
 
 def _manual(runweek, *, now=TUESDAY):

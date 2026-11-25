@@ -24,6 +24,7 @@ from app.application.media_category import categorize
 from app.application.drama_update_progress import build_drama_update_progress
 from app.application.drama_schedule import resolve_item_run_schedule, resolve_run_schedule
 from app.application.dto.task import DramaRunScheduleOut, DramaUpdateProgressOut
+from app.application.task_scheduler import configured_task_schedule_time
 from app.application.tasks import list_recent_executions, list_tasks_recent_executions
 from app.application.tmdb_settings import is_tmdb_configured
 from app.application.tmdb_view import (
@@ -128,6 +129,7 @@ def task_view(
     run_schedule: DramaRunScheduleOut | None = None,
     tmdb_weekday_map: dict[tuple[str, int], tuple[int, ...]] | None = None,
     tmdb_configured: bool | None = None,
+    schedule_now: datetime | None = None,
 ) -> TaskView:
     """单个任务 → 视图。
 
@@ -153,7 +155,9 @@ def task_view(
     extra = _load_json_dict(getattr(item, "extra_json", None))
     drama_update_progress: DramaUpdateProgressOut | None = None
     media_category: str | None = None
-    if str(getattr(item, "task_type", "") or "") == "drama":
+    task_type = str(getattr(item, "task_type", "") or "")
+    if task_type == "drama":
+        schedule_now = schedule_now or configured_task_schedule_time(db)
         if isinstance(tmdb_payload_map, dict) and key is not None:
             payload = tmdb_payload_map.get(key)
         if payload is None and key is not None and db is not None and not (isinstance(tmdb_payload_map, dict) and key in tmdb_payload_map):
@@ -163,9 +167,10 @@ def task_view(
         media_category = categorize(getattr(item, "tmdb_media_type", None), payload)
         saved_latest = extra.get("saved_latest") if isinstance(extra, dict) else None
         tmdb_details = payload if (key is not None and key[0] == "tv") else None
-        drama_update_progress = build_drama_update_progress(tmdb_details=tmdb_details, saved_latest=saved_latest)
+        drama_update_progress = build_drama_update_progress(
+            tmdb_details=tmdb_details, saved_latest=saved_latest, today=schedule_now.date(),
+        )
 
-    task_type = str(getattr(item, "task_type", "") or "")
     if run_schedule is not None:
         schedule = run_schedule
     elif task_type == "drama":
@@ -177,15 +182,18 @@ def task_view(
             schedule = resolve_run_schedule(
                 task_type=task_type,
                 extra=extra,
+                now=schedule_now,
                 tmdb_id=getattr(item, "tmdb_id", None),
                 tmdb_media_type=getattr(item, "tmdb_media_type", None),
                 tmdb_configured=bool(configured),
                 episode_weekdays=days,
             ).to_out()
         elif db is not None:
-            schedule = resolve_item_run_schedule(db, item, payload=(tmdb_payload_map or {}).get(key) if key else None)
+            schedule = resolve_item_run_schedule(
+                db, item, now=schedule_now, payload=(tmdb_payload_map or {}).get(key) if key else None,
+            )
         else:
-            schedule = resolve_run_schedule(task_type=task_type, extra=extra).to_out()
+            schedule = resolve_run_schedule(task_type=task_type, extra=extra, now=schedule_now).to_out()
     else:
         schedule = resolve_run_schedule(task_type=task_type, extra=extra).to_out()
 
@@ -230,6 +238,7 @@ def list_task_views(db: Session, *, executions_per_task: int = DEFAULT_EXECUTION
     tmdb_payload_map = load_tmdb_payload_map(db, items)
     tmdb_weekday_map = load_tmdb_weekday_map(db, items, payload_map=tmdb_payload_map)
     lead_in_map = load_lead_in_summary_map(db, [int(getattr(item, "id", 0) or 0) for item in items])
+    schedule_now = configured_task_schedule_time(db) if any(item.task_type == "drama" for item in items) else None
     return [
         task_view(
             db,
@@ -238,6 +247,7 @@ def list_task_views(db: Session, *, executions_per_task: int = DEFAULT_EXECUTION
             tmdb_payload_map=tmdb_payload_map,
             lead_in_map=lead_in_map,
             tmdb_weekday_map=tmdb_weekday_map,
+            schedule_now=schedule_now,
         )
         for item in items
     ]

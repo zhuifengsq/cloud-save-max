@@ -16,6 +16,10 @@ class TaskAdmission:
         self._active = 0
         self._task_ids: set[int] = set()
 
+    @property
+    def max_active(self) -> int:
+        return self._max_active
+
     def reserve(self, task_id: int | None) -> TaskSlot:
         with self._lock:
             if task_id is not None and task_id in self._task_ids:

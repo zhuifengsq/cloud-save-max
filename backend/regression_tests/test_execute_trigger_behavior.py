@@ -49,7 +49,11 @@ def test_execute_off_day_transfer_persistence_and_exact_notification(tmp_path, m
             get_stoken=lambda *args: {'code': 0, 'data': {'stoken': 'fake'}},
             get_fids=lambda paths: [{'file_path': paths[0], 'fid': 'dest'}],
             ls_dir=lambda *args, **kwargs: {'code': 0, 'data': {'list': []}},
-            get_detail=lambda *args: {'code': 0, 'data': {'list': [{'fid': 'file', 'file_name': 'episode.mkv', 'size': 100}]}})
+            get_detail=lambda *args: {
+                'code': 0,
+                'data': {'list': [{'fid': 'file', 'file_name': 'episode.mkv', 'size': 100}]},
+                'metadata': {'_total': 1},
+            })
         class Manager:
             @classmethod
             def from_payload(cls, payload):

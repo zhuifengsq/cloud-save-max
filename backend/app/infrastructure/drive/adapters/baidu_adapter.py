@@ -107,6 +107,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
     SUPPORTS_LEAD_IN_OWN_BROWSE = True
     # 目录列表接口单页条数（分页拉取全量时使用）
     _API_LIST_PAGE_SIZE = 200
+    _SHARE_LIST_PAGE_SIZE = 100
 
     CONFIG_FORMAT = "raw"
     default_config = {
@@ -712,7 +713,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         uk: int,
         share_id: int,
         page: int = 1,
-        size: int = 100,
+        size: int = _SHARE_LIST_PAGE_SIZE,
     ) -> Dict:
         """获取分享目录下的文件列表"""
         url = PanNode.url(PanNode.SHARED_PATH_LIST)
@@ -733,6 +734,38 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         }
         resp = self._request("GET", url, params=params)
         return self._check_response(resp.json())
+
+    def _list_complete_shared_directory(self, path: str, uk: int, share_id: int) -> List[Dict]:
+        from .complete_listing import Collector, rows, status, validate_entries
+
+        collected = Collector()
+        for page in range(1, self.COMPLETE_LISTING_MAX_PAGES + 1):
+            response = self._api_list_shared_paths(path, uk, share_id, page=page)
+            status(response, "errno")
+            batch = rows(response.get("list"))
+            validate_entries(batch)
+            collected.add([self._convert_shared_item(item) for item in batch], response.get("total"))
+
+            if "has_more" in response:
+                has_more = response["has_more"]
+                if has_more not in (True, False, 0, 1):
+                    raise ValueError("百度分享目录的分页标记无效")
+                if not has_more:
+                    break
+                if collected.expected == len(collected.items):
+                    raise ValueError("百度分享目录的总数与分页标记不一致")
+            elif collected.expected is not None:
+                if len(collected.items) == collected.expected:
+                    break
+            elif len(batch) < self._SHARE_LIST_PAGE_SIZE:
+                break
+
+            if not batch:
+                raise ValueError("百度分享目录尚未读完，网盘返回空页")
+        else:
+            raise ValueError("百度分享目录超过分页上限")
+
+        return collected.result()["data"]["list"]
 
     def _api_transfer_shared_paths(
         self,
@@ -803,43 +836,35 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             [{"fid": "...", "file_name": "..."}, ...]
             未找到时返回 ("", [])
         """
-        # 先检查根级条目
-        for item in file_list:
-            fs_id = str(item.get("fs_id", ""))
-            if fs_id == target_fid:
-                path = self._get_item_path(item)
-                filename = item.get("server_filename", path.split("/")[-1])
-                return path, [{"fid": fs_id, "file_name": filename}]
-
         # BFS 队列: [(目录路径, 累计面包屑)]
         queue: List[Tuple[str, List[Dict]]] = []
-        for item in file_list:
-            if item.get("isdir") == 1:
-                path = self._get_item_path(item)
-                fs_id = str(item.get("fs_id", ""))
-                filename = item.get("server_filename", path.split("/")[-1])
-                queue.append((path, [{"fid": fs_id, "file_name": filename}]))
+        for raw_item in file_list:
+            item = self._convert_shared_item(raw_item)
+            if not item["dir"]:
+                continue
+            path = item["path"]
+            breadcrumb = [{"fid": item["fid"], "file_name": item["file_name"]}]
+            if item["fid"] == target_fid:
+                return path, breadcrumb
+            queue.append((path, breadcrumb))
 
         for _ in range(max_depth):
             next_queue: List[Tuple[str, List[Dict]]] = []
             for current_path, current_breadcrumb in queue:
                 try:
-                    info = self._api_list_shared_paths(current_path, uk, share_id)
-                    items = info.get("list", [])
+                    items = self._list_complete_shared_directory(current_path, uk, share_id)
                 except Exception:
                     continue
 
                 for item in items:
-                    item_fid = str(item.get("fs_id", ""))
-                    item_name = item.get("server_filename", "")
-                    item_path = self._get_item_path(item)
+                    if not item["dir"]:
+                        continue
                     new_breadcrumb = current_breadcrumb + [
-                        {"fid": item_fid, "file_name": item_name}
+                        {"fid": item["fid"], "file_name": item["file_name"]}
                     ]
-                    if item_fid == target_fid:
-                        return item_path, new_breadcrumb
-                    if item.get("isdir") == 1:
-                        next_queue.append((item_path, new_breadcrumb))
+                    if item["fid"] == target_fid:
+                        return item["path"], new_breadcrumb
+                    next_queue.append((item["path"], new_breadcrumb))
 
             if not next_queue:
                 break
@@ -1010,66 +1035,34 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             share_id_num = shared_data.get("shareid")
             bdstoken = shared_data.get("bdstoken", "")
 
-            file_list = shared_data.get("file_list", [])
+            from .complete_listing import rows
+
+            file_list = shared_data.get("file_list")
             if isinstance(file_list, dict):
-                file_list = file_list.get("list", [])
+                file_list = file_list.get("list")
+            file_list = rows(file_list)
 
-            if not file_list:
-                return {
-                    "code": 0,
-                    "message": "success",
-                    "data": {"list": [], "full_path": []},
-                    "metadata": {"_total": 0},
-                }
-
-            # 解析 pdir_fid
             is_root = not pdir_fid or pdir_fid in ("0", "/")
-            remote_path = ""
             full_path = []
-
             if is_root:
-                # 根目录使用第一个文件的路径的父目录
-                first_item = file_list[0]
-                first_path = self._get_item_path(first_item)
-                remote_path = "/".join(first_path.split("/")[:-1]) or "/"
-            elif pdir_fid.startswith("/"):
-                remote_path = pdir_fid
-            elif pdir_fid.isdigit():
-                # 通过 BFS 一次性获取路径和面包屑
-                path_str, breadcrumb = self._bfs_share_tree(
-                    file_list, uk, share_id_num, bdstoken, pdir_fid
-                )
-                if path_str:
-                    remote_path = path_str
+                # 分享页根目录只包含分享者选中的条目。
+                result_list = [self._convert_shared_item(item) for item in file_list]
+            else:
+                if not file_list:
+                    raise ValueError("分享中未找到指定目录")
+                if pdir_fid.startswith("/"):
+                    remote_path = pdir_fid
+                elif pdir_fid.isdigit():
+                    remote_path, breadcrumb = self._bfs_share_tree(
+                        file_list, uk, share_id_num, bdstoken, pdir_fid
+                    )
+                    if not remote_path:
+                        raise ValueError("分享中未找到指定目录")
+                    if fetch_share_full_path:
+                        full_path = breadcrumb
                 else:
-                    first_item = file_list[0]
-                    remote_path = self._get_item_path(first_item)
-                if fetch_share_full_path:
-                    full_path = breadcrumb
-            else:
-                logger.warning(f"[Baidu] pdir_fid={pdir_fid} 格式无法识别，使用根目录")
-                first_item = file_list[0]
-                remote_path = self._get_item_path(first_item)
-
-            # 获取文件列表
-            if is_root:
-                # 根目录直接使用 file_list
-                folder_files = file_list
-            else:
-                # 子目录通过 API 获取
-                info = self._api_list_shared_paths(remote_path, uk, share_id_num)
-                folder_files = info.get("list", [])
-
-            if not folder_files:
-                return {
-                    "code": 0,
-                    "message": "success",
-                    "data": {"list": [], "full_path": full_path},
-                    "metadata": {"_total": 0},
-                }
-
-            # 转换文件列表
-            result_list = [self._convert_shared_item(item) for item in folder_files]
+                    raise ValueError("分享目录标识格式无效")
+                result_list = self._list_complete_shared_directory(remote_path, uk, share_id_num)
 
             return {
                 "code": 0,
@@ -1794,32 +1787,33 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
 
     def _lead_in_locate_dir_chain(
         self, path: str
-    ) -> Tuple[str, Optional[Dict[str, Any]]]:
-        """逐级定位目录并返回网盘真实路径（父目录列表读取失败时兜底）"""
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        """逐级定位目录，返回带真实路径的目录条目。"""
         segments = self._lead_in_path_segments(path)
         current = "/"
+        found: Dict[str, Any] = {}
         for index, segment in enumerate(segments):
             try:
                 info = self._api_list_all(current)
             except Exception as exc:
                 logger.error("[Baidu] 逐级定位引流目标目录失败: %s", type(exc).__name__)
-                return "", self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
+                return {}, self._lead_in_error("LEAD_IN_FAILED", f"读取保存目录失败：{exc}")
             errno = self._lead_in_list_errno(info)
             if errno:
-                return "", self._lead_in_dir_read_error(errno, path)
+                return {}, self._lead_in_dir_read_error(errno, path)
             found = self._lead_in_pick_dir_item(info.get("list"), current, segment)
             if found is None:
-                return "", self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
+                return {}, self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
             if str(found.get("isdir")) != "1":
                 if index == len(segments) - 1:
-                    return "", self._lead_in_error("LEAD_IN_DIR_INVALID", f"保存路径不是文件夹：{path}")
-                return "", self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
+                    return {}, self._lead_in_error("LEAD_IN_DIR_INVALID", f"保存路径不是文件夹：{path}")
+                return {}, self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
             item_path = str(found.get("path") or "").rstrip("/")
             if not item_path:
                 item_name = self._lead_in_item_dir_name(found)
                 item_path = f"{current.rstrip('/')}/{item_name}" if current != "/" else f"/{item_name}"
             current = item_path
-        return current or "/", None
+        return {**found, "path": current}, None
 
     def lead_in_resolve_dir(self, dir_path: str) -> Dict[str, Any]:
         """按任务保存目录定位百度目标文件夹
@@ -1836,7 +1830,6 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             return self._lead_in_error("LEAD_IN_FAILED", "百度网盘客户端未初始化，请先保存有效账号")
         parent = path.rsplit("/", 1)[0] or "/"
         name = path.rsplit("/", 1)[-1]
-        folder_path = path
         try:
             info = self._api_list_all(parent)
         except Exception as exc:
@@ -1847,7 +1840,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             if errno not in (-9, 31066):
                 return self._lead_in_dir_read_error(errno, path)
             # 父目录本身也读不到时，按目录名（容忍首尾空白）逐级定位真实路径
-            folder_path, chain_error = self._lead_in_locate_dir_chain(path)
+            folder, chain_error = self._lead_in_locate_dir_chain(path)
             if chain_error:
                 return chain_error
         else:
@@ -1856,7 +1849,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 return self._lead_in_error("LEAD_IN_DIR_NOT_FOUND", f"保存目录不存在：{path}")
             if str(folder.get("isdir")) != "1":
                 return self._lead_in_error("LEAD_IN_DIR_INVALID", f"保存路径不是文件夹：{path}")
-            folder_path = str(folder.get("path") or "").rstrip("/") or path
+        folder_path = str(folder.get("path") or "").rstrip("/") or path
         try:
             listing = self.ls_dir(folder_path, max_items=0)
         except Exception as exc:
@@ -1881,7 +1874,12 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         dir_name = folder_path.rsplit("/", 1)[-1]
         return self._lead_in_ok(
             {
-                "dir": {"fid": folder_path, "path": folder_path, "name": dir_name},
+                "dir": {
+                    "fid": folder_path,
+                    "path": folder_path,
+                    "name": dir_name,
+                    "stable_fid": str(folder.get("fs_id") or "").strip(),
+                },
                 "entries": entries,
             }
         )

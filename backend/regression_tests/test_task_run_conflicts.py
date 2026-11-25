@@ -100,3 +100,40 @@ def test_unrelated_extra_edits_merge_with_execution_progress(tmp_path):
     with Session(engine) as verify:
         assert json.loads(verify.get(Task,task_id).extra_json)=={'note':'new','custom':42,'saved_latest':{'episode':9}}
     engine.dispose()
+
+
+def test_task_edit_compares_extra_at_write_time(tmp_path, monkeypatch):
+    from app.application import tasks
+
+    engine = create_engine('sqlite:///' + str(tmp_path / 'edit-race.db'))
+    Base.metadata.create_all(engine)
+    with Session(engine) as setup:
+        setup.add(Task(
+            id=1, task_uid='edit-race', task_type='drama', taskname='show',
+            shareurl='https://pan.quark.cn/s/show', savepath='/show', enabled=True,
+            extra_json='{"saved_latest":{"episode":8}}',
+        ))
+        setup.commit()
+
+    get_task = tasks.get_task
+
+    def get_after_execution(db, task_id):
+        loaded = get_task(db, task_id)
+        with Session(engine) as run:
+            current = run.get(Task, task_id)
+            current.extra_json = '{"saved_latest":{"episode":10}}'
+            current.enabled = False
+            run.commit()
+        return loaded
+
+    monkeypatch.setattr(tasks, 'get_task', get_after_execution)
+    with Session(engine) as db:
+        with pytest.raises(ApiError) as failure:
+            tasks.update_task(db, 1, extra={'runweek': [3]})
+        assert failure.value.http_status == 409
+        db.rollback()
+    with Session(engine) as db:
+        current = db.get(Task, 1)
+        assert not current.enabled
+        assert json.loads(current.extra_json) == {'saved_latest': {'episode': 10}}
+    engine.dispose()

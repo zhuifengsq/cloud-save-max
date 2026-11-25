@@ -38,6 +38,7 @@ class SavedFile:
     source_id: str
     id: str
     name: str
+    stable_id: str | None = None  # Some drives address writes by mutable path.
 
 @dataclass(frozen=True)
 class TransferResult:

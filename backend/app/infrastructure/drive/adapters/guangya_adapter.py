@@ -474,6 +474,7 @@ from app.infrastructure.drive.transfer import NamedTransferStrategy
 
 class GuangyaAdapter(BaseCloudDriveAdapter):
     TRANSFER_STRATEGY = NamedTransferStrategy()
+    SHARE_LISTING_MAX_PAGES = 200
 
     DRIVE_TYPE = "guangya"
     DRIVE_NAME = "光鸭云盘"
@@ -677,23 +678,36 @@ class GuangyaAdapter(BaseCloudDriveAdapter):
         return items
 
     def _list_share_items(self, access_token: str, parent_id: str = "") -> list[dict[str, Any]]:
+        from .complete_listing import Collector
+
         items: list[dict[str, Any]] = []
-        page = 1
+        collector = Collector()
         page_size = 50
-        while True:
+        for page in range(1, self.SHARE_LISTING_MAX_PAGES + 1):
             payload = self._client.share_files_list(access_token, parent_id=parent_id, page=page, page_size=page_size)
             if not _is_success(payload):
                 raise RuntimeError(_extract_message(payload, "获取分享文件列表失败"))
             batch = _extract_items(payload)
-            if not batch:
-                break
+            data = _extract_data(payload)
+            pagination = data if isinstance(data, dict) else {}
+            has_more = pagination.get("hasMore", payload.get("hasMore"))
+            if has_more is not None and not isinstance(has_more, bool):
+                raise ValueError("分享目录分页标记无效")
+            collector.add(
+                [{"fid": self._pick_item_id(item), "file_name": self._pick_name(item)} for item in batch],
+                pagination.get("total", payload.get("total")),
+            )
             items.extend(batch)
-            if len(batch) < page_size:
-                break
-            page += 1
-            if page > 200:
-                break
-        return items
+            expected = collector.expected
+            if has_more is True:
+                if not batch or len(items) == expected:
+                    raise ValueError("分享目录分页标记与结果不一致")
+            elif has_more is False or not batch or (
+                len(items) == expected if expected is not None else len(batch) < page_size
+            ):
+                collector.result()
+                return items
+        raise RuntimeError("分享目录达到分页上限")
 
     def _ensure_login(self) -> None:
         if self.is_active and self._client.token:

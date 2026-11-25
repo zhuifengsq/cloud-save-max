@@ -19,7 +19,7 @@ class UnrecognizedEpisodeFiles(ValueError):
         self.total = total
 
 
-def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints: list[int], *, at: str, preserve_previous: bool = True, require_all_recognized: bool = False) -> dict | None:
+def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints: list[int], *, at: str, preserve_previous: bool = True, require_all_recognized: bool = False, renamed_from: dict[str, str] | None = None) -> dict | None:
     """记录保存后目标目录里实际存在的最大集数（写到任务的 extra.saved_latest）。
 
     名字来源：目标目录已存在的文件 ∪ 本次转存成功的文件；整包直转时补充目标目录列表。
@@ -63,15 +63,46 @@ def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints:
     else:
         mr = None
 
-    best_episode = prev_episode
-    best_season = prev.get("season")
-    best_name = str(prev.get("name") or "")
+    previous_name = str(prev.get("name") or "")
+    try:
+        previous_season = int(prev["season"]) if prev.get("season") is not None else None
+    except (TypeError, ValueError, OverflowError):
+        previous_season = None
+    if previous_season is None and prev_episode > 0:
+        name_season, name_episode = extract_episode(previous_name)
+        if name_episode == prev_episode:
+            previous_season = name_season
+
+    known_seasons: set[int] = set()
+    seasonal: tuple[int, int, str] | None = None
+    unseasoned = (0, "")
+
+    def consider(season: int | None, episode: int, name: str) -> None:
+        nonlocal seasonal, unseasoned
+        if episode <= 0:
+            return
+        renamed_origin = (renamed_from or {}).get(name)
+        if season is None:
+            if episode > unseasoned[0] or (episode == unseasoned[0] and renamed_origin == unseasoned[1]):
+                unseasoned = (episode, name)
+            return
+        known_seasons.add(season)
+        if seasonal is None or (season, episode) > seasonal[:2] or (
+            (season, episode) == seasonal[:2] and renamed_origin == seasonal[2]
+        ):
+            seasonal = (season, episode, name)
+
+    consider(previous_season, prev_episode, previous_name)
     unrecognized_indices = []
     unrecognized_count = 0
     for index, name in enumerate(names):
         if require_all_recognized and _RE_SUPPLEMENTAL_FILE.search(name.strip()):
             continue
-        season, episode = extract_episode(name, mr=mr)
+        season, episode = extract_episode(name)
+        if season is None and mr is not None:
+            resolved_season, resolved_episode = extract_episode(name, mr=mr)
+            if resolved_episode is not None:
+                season, episode = resolved_season, resolved_episode
         if episode is None:
             episode = guess_episode(name)
         if require_all_recognized and episode is None and _RE_DATED_TITLE.match(name.strip()):
@@ -82,10 +113,7 @@ def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints:
                 if len(unrecognized_indices) < UnrecognizedEpisodeFiles.SAMPLE_LIMIT:
                     unrecognized_indices.append(index)
             continue
-        if int(episode) > int(best_episode or 0):
-            best_episode = int(episode)
-            best_season = season
-            best_name = name
+        consider(season, int(episode), name)
     if unrecognized_count:
         raise UnrecognizedEpisodeFiles(unrecognized_indices, unrecognized_count)
     for hint in hints:
@@ -93,10 +121,13 @@ def calculate_saved_latest(task_data: dict, file_names: list[str], folder_hints:
             hint_value = int(hint)
         except (TypeError, ValueError):
             continue
-        if hint_value > int(best_episode or 0):
-            best_episode = hint_value
-            best_season = None
-            best_name = f"{hint_value}集"
+        consider(None, hint_value, f"{hint_value}集")
+    # 已明确跨季时，以季号为准。单季和无季号的旧数据仍可按集号推进。
+    if seasonal is not None and (len(known_seasons) > 1 or seasonal[1] >= unseasoned[0]):
+        best_season, best_episode, best_name = seasonal
+    else:
+        best_season = None
+        best_episode, best_name = unseasoned
     if not best_episode:
         if prev_year_like:
             return {"episode": 0, "season": None, "name": "", "at": at}

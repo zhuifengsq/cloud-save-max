@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy.orm import Session
 
 from app.application.container import drive_accounts_repo
 from app.application.container import adapter_registry as _acc_AdapterRegistry; AdapterRegistry = _acc_AdapterRegistry()
-from app.application.episode_number import extract_episode, guess_episode, parse_size
 from app.application.resource_search import fetch_task_suggestions
 
 logger = logging.getLogger(__name__)
@@ -76,24 +76,41 @@ def _rewrite_shareurl_with_fid(shareurl: str, fid: str | None) -> str:
     """把分享链接定位到某个子目录（fid）；fid 为空时去掉链接里的目录定位。"""
     url = str(shareurl or "").strip()
     f = str(fid or "").strip()
-    if "yun.139.com" in url or "caiyun.139.com" in url:
-        parsed = urlsplit(url)
-        if parsed.fragment:
-            frag_path, frag_query = (parsed.fragment.split("?", 1) + [""])[:2]
-            frag_pairs = [(k, v) for k, v in parse_qsl(frag_query, keep_blank_values=True) if str(k).lower() != "fid"]
-            if f and f not in ("0", "root"):
-                frag_pairs.append(("fid", f))
-            rebuilt_fragment = frag_path if not frag_pairs else f"{frag_path}?{urlencode(frag_pairs)}"
-            return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, rebuilt_fragment)).strip()
-        query_pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if str(k).lower() != "fid"]
-        if f and f not in ("0", "root"):
+    if f in ("0", "root", "/"):
+        f = ""
+    parsed = urlsplit(url)
+    host = (parsed.hostname or parsed.path.split("/", 1)[0]).lower()
+    fragment_path, _, fragment_query = parsed.fragment.partition("?")
+    if host in ("yun.139.com", "caiyun.139.com"):
+        bare_share_id = re.fullmatch(r"[a-zA-Z0-9_-]{4,64}", parsed.query)
+        query_pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != "fid"]
+        frag_pairs = [(k, v) for k, v in parse_qsl(fragment_query, keep_blank_values=True) if k.lower() != "fid"]
+        if re.match(r"^/?list/share/", fragment_path):
+            fragment_path = ""
+        if f and (parsed.fragment or bare_share_id):
+            frag_pairs.append(("fid", f))
+        elif f:
             query_pairs.append(("fid", f))
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query_pairs), parsed.fragment)).strip()
-    if not f or f == "0":
-        return url.split("#")[0].strip()
-    if f in url:
+        fragment = f"{fragment_path}?{urlencode(frag_pairs)}" if frag_pairs else fragment_path
+        query = parsed.query if bare_share_id else urlencode(query_pairs)
+        return urlunsplit(parsed._replace(query=query, fragment=fragment))
+
+    if host == "pan.baidu.com":
+        query = parsed.query
+        # Move a legacy hash code or a hash-route code into the query so the
+        # fragment can carry the selected directory.
+        if not re.search(r"(?:pwd|password)=[a-zA-Z0-9]+", query):
+            code = re.search(r"(?:pwd|password)=([a-zA-Z0-9]+)", parsed.fragment)
+            code = code or re.match(r"([a-zA-Z0-9]{4})\b", parsed.fragment)
+            if code:
+                query = "&".join(filter(None, (query, urlencode({"pwd": code.group(1)}))))
+        fragment = f"/list/share/{f}" if f else ""
+        return urlunsplit(parsed._replace(query=query, fragment=fragment))
+
+    final_segment = fragment_path.rsplit("/", 1)[-1]
+    if f and "/" in fragment_path and (final_segment == f or final_segment.startswith(f"{f}-")):
         return url
-    return f"{url.split('#')[0].strip()}#/list/share/{f}"
+    return urlunsplit(parsed._replace(fragment=f"/list/share/{f}" if f else ""))
 
 
 def _search_candidates(
@@ -210,14 +227,14 @@ def _prepare_candidates(db: Session, *, suggestions: list[dict], addition: dict,
 
 
 def _pick_fid_for_normal_mode(groups: list) -> str | None:
-    """普通模式：挑一个最值得定位的子目录（文件最多，其次文件时间最新）。"""
+    """普通模式按目录优先级、文件数和文件更新时间选组。"""
     best_fid: str | None = None
-    best_score: tuple[int, int] = (-1, -1)
+    best_score: tuple[bool, int, int] = (False, -1, -1)
     for group in groups:
         if not isinstance(group, (tuple, list)) or len(group) < 4:
             continue
-        file_list, fid, _dir_ts, _dir_name = group[0], group[1], group[2], group[3]
-        if not file_list or not fid:
+        file_list, fid = group[:2]
+        if not file_list or fid is None:
             continue
         latest_ts = 0
         for item in file_list:
@@ -226,11 +243,21 @@ def _pick_fid_for_normal_mode(groups: list) -> str | None:
             except (TypeError, ValueError):
                 ts = 0
             latest_ts = max(latest_ts, ts)
-        score = (len(file_list), latest_ts)
+        score = (bool(getattr(group, "priority", False)), len(file_list), latest_ts)
         if score > best_score:
             best_score = score
             best_fid = str(fid)
     return best_fid
+
+
+def _pick_fid_for_folder_diff(groups: list, taskname: str) -> str:
+    branches = []
+    for group in groups:
+        branch = getattr(group, "branch", None)
+        if branch is None:
+            return str(getattr(group, "fid", "") or "")
+        branches.append(branch)
+    return max(branches, key=lambda branch: taskname.lower() in branch[1].lower())[0]
 
 
 def resolve_drama_shareurl_update(
@@ -334,31 +361,14 @@ def resolve_drama_shareurl_update(
             continue
 
         if folder_mode == "folder_diff":
-            # 文件夹对比模式：进入分享根目录下的第一层文件夹，保住原有目录结构
-            target_fid: str | None = None
-            try:
-                from app.application.share_preview_batch import fetch_share_root_dirs
-
-                root_dirs = fetch_share_root_dirs(db, shareurl, **({"release_read": release_read} if release_read else {}))
-            except Exception:
-                if release_read:
-                    raise
-                root_dirs = []
-            if root_dirs:
-                lowered_taskname = taskname.lower()
-
-                def _dir_score(entry: tuple[str, str]) -> int:
-                    name = str(entry[1] or "").lower()
-                    if lowered_taskname in name:
-                        return 1
-                    return 0
-
-                ranked = sorted(root_dirs, key=_dir_score, reverse=True)
-                target_fid = str(ranked[0][0] or "").strip() or None
+            # 使用合格文件组记录的第一层分支，保留其目录结构。
+            target_fid = _pick_fid_for_folder_diff(groups, taskname)
             new_shareurl = _rewrite_shareurl_with_fid(shareurl, target_fid)
             logger.info("自动换链：文件夹对比定位目录 fid=%s", target_fid or "(根目录)")
         else:
             best_fid = _pick_fid_for_normal_mode(groups)
+            if best_fid is None:
+                continue
             new_shareurl = _rewrite_shareurl_with_fid(shareurl, best_fid)
 
         if not new_shareurl or new_shareurl == old_shareurl:

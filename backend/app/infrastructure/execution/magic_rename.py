@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -116,12 +117,8 @@ class MagicRename:
     ]
 
     def __init__(self, magic_regex: dict[str, dict[str, str]] | None = None, magic_variable: dict[str, Any] | None = None):
-        if magic_regex:
-            self.magic_regex = dict(self.magic_regex)
-            self.magic_regex.update(magic_regex)
-        if magic_variable:
-            self.magic_variable = dict(self.magic_variable)
-            self.magic_variable.update(magic_variable)
+        self.magic_regex = deepcopy({**self.magic_regex, **(magic_regex or {})})
+        self.magic_variable = deepcopy({**self.magic_variable, **(magic_variable or {})})
         self.dir_filename_dict: dict[int, str] = {}
         self._compiled_cache: dict[str, re.Pattern[str]] = {}
         self._last_prep_key: tuple[str | None, str] | None = None

@@ -217,7 +217,8 @@ def test_drama_recovers_original_quark_batch(tmp_path, monkeypatch, scenario):
     adapter.get_fids = lambda paths: [{"file_path": paths[0], "fid": "dest"}]
     adapter.ls_dir = listing
     adapter.get_detail = lambda *args: {"code": 0, "data": {"list": [
-        {"fid": "source-fid", "fid_token": "source-token", "file_name": "Episode 01.mkv", "size": 100}]}}
+        {"fid": "source-fid", "fid_token": "source-token", "file_name": "Episode 01.mkv", "size": 100}],
+    }, "metadata": {"_total": 1}}
     adapter.save_file = save
     adapter.query_task = query
     adapter.rename = rename
@@ -303,7 +304,7 @@ def test_normal_drama_submits_all_batches_before_renaming(pause_last_batch):
         db.commit()
         task_id = task.id
 
-    names = ["prefix-prefix-B.mkv", *(f"extra-{i}.mkv" for i in range(99)), "prefix-B.mkv"]
+    names = ["prefix-prefix-B.mkv", *(f"other-extra-{i}.mkv" for i in range(99)), "prefix-B.mkv"]
     source = {str(i): name for i, name in enumerate(names)}
     destination = {}
     jobs = {}
@@ -339,7 +340,7 @@ def test_normal_drama_submits_all_batches_before_renaming(pause_last_batch):
     adapter.get_fids = lambda paths: [{"file_path": paths[0], "fid": "target-dir"}]
     adapter.get_detail = lambda *args: {"code": 0, "data": {"list": [
         {"fid": fid, "fid_token": "token", "file_name": name} for fid, name in source.items()
-    ]}}
+    ]}, "metadata": {"_total": len(source)}}
     adapter.ls_dir = lambda *args, **kwargs: {"code": 0, "data": {"list": [
         {"fid": fid, "file_name": name} for fid, name in destination.items()
     ]}}
@@ -585,7 +586,7 @@ def test_missing_fallback_resumes_when_directory_reappears(range_change, monkeyp
         assert describe_checkpoint(db, db.query(Task.id).scalar())["reason"] == "有目录等待继续同步"
     executor.execute()
     assert store.load().fallback_missing == {}
-    assert executor.incomplete_directories == ["Missing"]
+    assert executor.incomplete_directories == ["/", "Missing"]
 
     total = 2
     for attempts in [*range(1, limit + 1), limit]:
@@ -725,3 +726,134 @@ def test_explicit_path_mismatch_does_not_select_another_directory():
 
     with pytest.raises(RuntimeError, match="目标目录路径无法核实"):
         executor._try_get_dir_fid("/show")
+
+
+@pytest.mark.parametrize("scope", ["normal", "incremental-root", "incremental-child", "empty", "read-error"])
+def test_quark_share_pagination_controls_once_completion(scope, monkeypatch):
+    from app.core.settings import settings
+    from app.domain.task_run import TaskRunState
+    from app.infrastructure.execution.task_executor import TaskExecutor
+
+    monkeypatch.setattr(settings, "drama_runtime_retry_max_attempts", 1)
+    episodes = [
+        {"fid": "source-1", "file_name": "Series.S01E01.mkv", "share_fid_token": "file-token-1"},
+        {"fid": "source-2", "file_name": "Series.S01E02.mkv", "share_fid_token": "file-token-2"},
+    ]
+    child = scope == "incremental-child"
+    share_dir, dest_dir = ("season-src", "season-dest") if child else ("0", "root-dest")
+    destination = {
+        "root-dest": [{"fid": "season-dest", "file_name": "Season", "dir": True}] if child else [],
+        "season-dest": [],
+    }
+    if scope != "empty":
+        destination[dest_dir].append({"fid": "existing", "file_name": episodes[0]["file_name"]})
+    share_reads, target_reads, writes = [], [], []
+    repaired = False
+
+    def send(method, url, *, params):
+        assert method == "GET" and url.endswith("/sharepage/detail")
+        fid, page = params["pdir_fid"], params["_page"]
+        share_reads.append((fid, page))
+        if child and fid == "0":
+            assert page == 1
+            items, total = [{"fid": "season-src", "file_name": "Season", "dir": True}], 1
+        elif scope == "empty":
+            assert fid == share_dir and page == 1
+            items, total = [], 0
+        else:
+            assert fid == share_dir and page in (1, 2)
+            if scope == "read-error" and page == 2 and not repaired:
+                return SimpleNamespace(json=lambda: {"code": 1, "message": "share read failed"})
+            items = episodes[page - 1:page] if page == 1 or repaired else []
+            total = 2
+        return SimpleNamespace(json=lambda: {
+            "code": 0, "status": 200, "data": {"list": items}, "metadata": {"_total": total},
+        })
+
+    def save(fids, tokens, target, share, stoken):
+        writes.append((tuple(fids), tuple(tokens), target))
+        assert fids == ["source-2"]
+        destination[target].append({"fid": "saved-2", "file_name": episodes[1]["file_name"]})
+        return {"code": 0, "data": {"_sync": True, "save_as_top_fids": ["saved-2"]}}
+
+    def listing(fid, **kwargs):
+        target_reads.append(fid)
+        return {"code": 0, "data": {"list": destination[fid]}}
+
+    adapter = object.__new__(QuarkAdapter)
+    adapter.is_active = True
+    adapter.savepath_fid = {}
+    adapter.extract_url = lambda _: ("share", "", "0", [])
+    adapter.get_stoken = lambda *args: {"code": 0, "data": {"stoken": "token"}}
+    adapter.get_fids = lambda paths: [{"file_path": paths[0], "fid": "root-dest"}]
+    adapter.ls_dir = listing
+    adapter.ls_dir_complete = listing
+    adapter.save_file = save
+    monkeypatch.setattr(adapter, "_send_request", send)
+
+    addition = '{"folder_mode":"folder_diff"}' if scope.startswith("incremental") else "{}"
+    task = TaskRunState(id=1, task_uid="paged", taskname="Series", task_type="drama", shareurl="share",
+                        savepath="/show", addition_json=addition, extra_json='{"allow_once":true}')
+    executor = TaskExecutor(None)
+
+    def run():
+        return executor.run_task(task, persist_execution=False, init_account_for_task=False, manual_run=True,
+                                 prepared_data=executor._task_to_dict(task),
+                                 account_manager=SimpleNamespace(get_adapter_for_task=lambda _: adapter))
+
+    first = run()
+    assert writes == []
+    assert target_reads == ["root-dest"]
+    if scope == "empty":
+        assert share_reads == [("0", 1)]
+        assert first.status == "success"
+        assert "无可转存文件" in first.tree_summary
+        assert not task.enabled
+        return
+
+    expected_pages = ([("0", 1)] if child else []) + [(share_dir, 1), (share_dir, 2)]
+    assert share_reads == expected_pages
+    assert first.status == "failed", first.run_log
+    assert ("share read failed" if scope == "read-error" else "分享目录列表不完整") in first.run_log
+    assert "无可转存文件" not in (first.tree_summary or "")
+    assert task.enabled
+
+    repaired = True
+    second = run()
+    assert share_reads == expected_pages * 2
+    expected_targets = ["root-dest", "root-dest", dest_dir, dest_dir] if child else ["root-dest"] * 3
+    assert target_reads == expected_targets
+    assert writes == [(("source-2",), ("file-token-2",), dest_dir)]
+    assert second.status == "success", second.run_log
+    assert "Series.S01E02.mkv" in second.tree_summary
+    assert not task.enabled
+
+
+@pytest.mark.parametrize("first_page", [False, True])
+def test_quark_partial_listing_preserves_explicit_first_page_contract(monkeypatch, first_page):
+    adapter = object.__new__(QuarkAdapter)
+    reads = []
+    entry = {"fid": "source-1", "file_name": "Series.S01E01.mkv"}
+    initial = {"code": 0, "data": {"list": [entry]}, "metadata": {"_total": 2}}
+
+    def send(method, url, *, params):
+        page = params["_page"]
+        reads.append(page)
+        response = initial if page == 1 else {
+            "code": 0, "data": {"list": []}, "metadata": {"_total": 2},
+        }
+        return SimpleNamespace(json=lambda: response)
+
+    monkeypatch.setattr(adapter, "_send_request", send)
+
+    result = adapter.get_detail("share", "token", "0", first_page=first_page)
+
+    if first_page:
+        assert reads == [1]
+        assert result is initial
+        assert result["metadata"] == {"_total": 2}
+    else:
+        assert reads == [1, 2]
+        assert result["data"]["list"] == [entry]
+        assert result["metadata"]["_total"] == 2
+        assert result["metadata"]["_listing_complete"] is False

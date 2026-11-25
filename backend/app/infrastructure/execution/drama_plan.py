@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-import os
 from dataclasses import dataclass
 from typing import Any, Callable
+from app.application.drama_file_rules import ExistingDramaFiles, conflict_winners, rename_candidate
 from app.infrastructure.execution.magic_rename import MagicRename
 
 def _parse_size(size_str: str) -> int | None:
@@ -91,10 +91,6 @@ class DramaPlanItem:
     origin_name: str
     target_name: str
 
-def transfer_target_key(name: str, ignore_extension: bool) -> str:
-    return os.path.splitext(name)[0] if ignore_extension else name
-
-
 def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, share_files: list[dict[str, Any]], dest_file_list: list[dict[str, Any]]) -> list[DramaPlanItem]:
     taskname = str(task_data.get("taskname") or "")
     pattern = str(task_data.get("pattern") or "")
@@ -104,32 +100,11 @@ def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, sh
     mr = MagicRename(magic_regex=(task_data.get("magic_regex") if isinstance(task_data.get("magic_regex"), dict) else None))
     mr.set_taskname(taskname)
     pattern, replace = mr.magic_regex_conv(pattern, replace)
-    if pattern:
-        re.compile(pattern, re.IGNORECASE)
-
-    def _to_ts(v):
-        try:
-            return float(v)
-        except Exception:
-            return None
-
-    dest_filenames: set[str] = set()
-    dest_episode_set: set[tuple[int, int]] = set()
-    from app.application.episode_number import extract_episode
-    mr._resolved_pattern = pattern
-    mr._resolved_replace = replace
-    for raw in dest_file_list:
-        if _is_dir(raw):
-            continue
-        name = _get_name(raw)
-        if name:
-            dest_filenames.add(name)
-            try:
-                s, e = extract_episode(name, mr=mr)
-                if s is not None and e is not None:
-                    dest_episode_set.add((int(s), int(e)))
-            except Exception:
-                pass
+    compiled = re.compile(pattern, re.IGNORECASE) if pattern else None
+    existing = ExistingDramaFiles(
+        [_get_name(raw) for raw in dest_file_list if not _is_dir(raw)],
+        ignore_extension=ignore_extension, search=compiled, replace=replace, renamer=mr,
+    )
 
     candidates: list[dict[str, Any]] = []
     for raw in share_files:
@@ -139,19 +114,9 @@ def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, sh
         updated_at = _get_updated_at(raw)
         if not fid or not origin_name:
             continue
-        if not _is_dir(raw):
-            # 基于原始文件名去重：文件名已存在则跳过
-            if origin_name in dest_filenames:
-                continue
-            # 基于集数去重：重命名后文件名变了但集数相同
-            if dest_episode_set:
-                try:
-                    s, e = extract_episode(origin_name, mr=mr)
-                    if s is not None and e is not None and (int(s), int(e)) in dest_episode_set:
-                        continue
-                except Exception:
-                    pass
-        file_name_re = mr.sub(pattern, replace, origin_name) if (pattern or replace) else origin_name
+        file_name_re = rename_candidate(origin_name, match=compiled, replace=replace, renamer=mr)
+        if not file_name_re or (not _is_dir(raw) and existing.match(origin_name, file_name_re)):
+            continue
         candidates.append(
             {
                 "fid": fid,
@@ -166,24 +131,15 @@ def build_transfer_plan(task_data: dict[str, Any], *, filter_files: Callable, sh
 
     candidates = filter_files(candidates)
 
-    # 过滤完成后再判断重命名冲突，避免已排除的文件抢占目标名称。
-    best: dict[str, tuple[tuple[float, float], int]] = {}
-    for idx, f in enumerate(candidates):
-        target = str(f.get("file_name_re") or "")
-        if not target:
-            continue
-        key = transfer_target_key(target, ignore_extension)
-        sz = _to_size(f.get("size"))
-        ts = _to_ts(f.get("updated_at"))
-        score = (float(sz) if sz is not None else float("-inf"), ts if ts is not None else float("-inf"))
-        prev = best.get(key)
-        if prev is None or score > prev[0] or (score == prev[0] and idx > prev[1]):
-            best[key] = (score, idx)
-    keep_idx = set(v[1] for v in best.values())
-    candidates = [f for idx, f in enumerate(candidates) if idx in keep_idx]
+    keep_idx = conflict_winners(
+        ((f.get("file_name_re"), _to_size(f.get("size")), f.get("updated_at")) for f in candidates),
+        ignore_extension,
+    )
 
     plan: list[DramaPlanItem] = []
-    for f in candidates:
+    for idx, f in enumerate(candidates):
+        if idx not in keep_idx:
+            continue
         plan.append(
             DramaPlanItem(
                 fid=str(f["fid"]),

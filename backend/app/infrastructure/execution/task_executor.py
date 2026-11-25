@@ -290,7 +290,11 @@ class TaskExecutor:
         deferred = getattr(drama_executor, "deferred_directories", None) if drama_executor is not None else None
         status = "failed" if incomplete else "success"
         message = "执行完成"
-        if incomplete and drama_executor is not None:
+        rename_problem = getattr(drama_executor, "rename_problem", None)
+        if rename_problem:
+            status, message = rename_problem
+            log.line(message)
+        elif incomplete and drama_executor is not None:
             message = f"执行不完整，{len(incomplete)} 个目录未处理完"
             log.line(f"{message}，已确认转存 {drama_executor.transfer_count} 项")
         elif deferred and drama_executor is not None:

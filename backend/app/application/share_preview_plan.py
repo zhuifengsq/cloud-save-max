@@ -1,12 +1,13 @@
 """Pure in-memory preview planning. No database or drive adapter dependencies."""
 from __future__ import annotations
-import os
 import re
 import logging
 from dataclasses import dataclass
-from typing import Mapping, Sequence, TypedDict, NotRequired, SupportsFloat, SupportsIndex
+from typing import Mapping, Sequence, TypedDict, NotRequired
 from app.application.dto.task_browse import SharePreviewItemOut
 from app.application.drive_payload import bool_is_dir, pick_children_count, pick_fid, pick_fid_token, pick_name, pick_size, pick_updated_at
+from app.application.drama_file_rules import ExistingDramaFiles, FileFilters, conflict_winners, rename_candidate, split_words
+from app.application.episode_number import parse_size
 from app.core.errors import bad_request
 from app.domain.ports.share_preview import PreviewRenamerPort
 
@@ -65,15 +66,6 @@ def plan_preview_items(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[
     _apply_filters(preview_list, payload, min_bytes)
     _mark_conflicts(preview_list, ignore_ext)
     return _present_rows(preview_list)
-
-def _to_ts(v: object) -> float | None:
-    if not isinstance(v, (SupportsFloat, SupportsIndex, str, bytes, bytearray)):
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError, OverflowError):
-        return None
-
 
 def _mark_folder(item: PreviewRow, payload: PreviewPlanOptions) -> None:
     file_name = item["file_name"]
@@ -135,7 +127,9 @@ def _collect_rows(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[str, 
                   destination_names: Sequence[str], mr: PreviewRenamerPort, pattern: str, replace: str,
                   compiled_search: re.Pattern[str] | None) -> list[PreviewRow]:
     ignore_ext = bool(payload.ignore_extension)
-    dir_filename_list = list(destination_names)
+    existing = ExistingDramaFiles(
+        destination_names, ignore_extension=ignore_ext, search=compiled_search, replace=replace, renamer=mr,
+    )
     preview_list: list[PreviewRow] = []
     for raw in raw_items[: payload.max_items]:
         fid = pick_fid(raw)
@@ -164,117 +158,52 @@ def _collect_rows(payload: PreviewPlanOptions, raw_items: Sequence[Mapping[str, 
             preview_list.append(item)
             continue
 
-        search_re = compiled_search
-        matched = (not search_re) or bool(search_re.search(file_name))
-        if matched:
-            file_name_re = file_name
-            if not is_dir:
-                file_name_re = mr.sub(pattern, replace, file_name)
-            saved = mr.is_exists(file_name_re, dir_filename_list, ignore_ext and not is_dir) if dir_filename_list else None
-            if saved:
-                item["file_name_saved"] = saved
-            else:
-                item["file_name_re"] = file_name_re
+        target = rename_candidate(file_name, match=compiled_search, replace=replace, renamer=mr)
+        if target is None:
+            item["filtered_by_search"] = True
+        elif saved := existing.match(file_name, target):
+            item["file_name_saved"] = saved
         else:
-            if search_re:
-                item["filtered_by_search"] = True
+            item["file_name_re"] = target
         preview_list.append(item)
 
     return preview_list
 
 def _apply_filters(preview_list: list[PreviewRow], payload: PreviewPlanOptions, min_bytes: int | None) -> None:
-    # 最小文件大小过滤标记
-    min_size_str = str(payload.min_size or "").strip()
-    if min_size_str:
-        if min_bytes is not None and min_bytes > 0:
-            for f in preview_list:
-                if f.get("dir"):
-                    continue
-                file_size = pick_size(f)
-                if file_size is not None and file_size < min_bytes:
-                    f["file_name_re"] = None
-                    f["file_name_saved"] = None
-                    f["filtered_by_size"] = True
-
-    # 关键词过滤标记
-    filter_words_str = str(payload.filter_words or "").strip()
-    if filter_words_str:
-        filter_words = [w.strip().lower() for w in filter_words_str.split("|") if w.strip()]
-        if filter_words:
-            for f in preview_list:
-                if f.get("dir") or f.get("filtered_by_size"):
-                    continue
-                fname = str(f.get("file_name") or "").lower()
-                if any(w in fname for w in filter_words):
-                    f["file_name_re"] = None
-                    f["file_name_saved"] = None
-                    f["filtered_by_keyword"] = True
-
-    # 文件筛选标记
-    file_filter_str = str(payload.file_filter or "").strip()
-    if file_filter_str:
-        file_filter_words = [w.strip().lower() for w in file_filter_str.split("|") if w.strip()]
-        if file_filter_words:
-            file_filter_is_any = str(payload.file_filter_mode or "all").strip().lower() == "any"
-            for f in preview_list:
-                if f.get("dir") or f.get("filtered_by_size") or f.get("filtered_by_keyword"):
-                    continue
-                fname = str(f.get("file_name") or "").lower()
-                if file_filter_is_any:
-                    matched = any(w in fname for w in file_filter_words)
-                else:
-                    matched = all(w in fname for w in file_filter_words)
-                if not matched:
-                    f["file_name_re"] = None
-                    f["file_name_saved"] = None
-                    f["filtered_by_file_filter"] = True
-
-    # 文件时间过滤标记
-    file_min_date_str = str(payload.file_min_date or "").strip()
-    if file_min_date_str:
-        from datetime import datetime as _dt
-        for f in preview_list:
-            if f.get("dir") or f.get("filtered_by_size") or f.get("filtered_by_keyword") or f.get("filtered_by_file_filter"):
-                continue
-            file_ts = f.get("updated_at")
-            if file_ts is not None:
-                try:
-                    if isinstance(file_ts, (int, float)) and file_ts > 0:
-                        file_date = _dt.fromtimestamp(file_ts / 1000 if file_ts > 1e12 else file_ts).strftime("%Y-%m-%d")
-                    else:
-                        file_date = str(file_ts)[:10]
-                    if file_date < file_min_date_str:
-                        f["file_name_re"] = None
-                        f["file_name_saved"] = None
-                        f["filtered_by_file_date"] = True
-                except (TypeError, ValueError, OverflowError, OSError):
-                    logger.warning("Preview file date could not be interpreted")
+    rules = FileFilters(
+        min_bytes=parse_size(payload.min_size or "") if min_bytes is None else min_bytes,
+        blocked=split_words(payload.filter_words),
+        required=split_words(payload.file_filter),
+        match_any=str(payload.file_filter_mode or "").strip().lower() == "any",
+        min_date=str(payload.file_min_date or "").strip(),
+    )
+    for item in preview_list:
+        if item["dir"]:
+            continue
+        reason = rules.rejection(item["file_name"], item["size"], item["updated_at"])
+        if reason is None:
+            continue
+        item["file_name_re"] = None
+        item["file_name_saved"] = None
+        if reason == "size":
+            item["filtered_by_size"] = True
+        elif reason == "keyword":
+            item["filtered_by_keyword"] = True
+        elif reason == "file_filter":
+            item["filtered_by_file_filter"] = True
+        elif reason == "file_date":
+            item["filtered_by_file_date"] = True
 
 
 def _mark_conflicts(preview_list: list[PreviewRow], ignore_ext: bool) -> None:
-    # 过滤完成后再判断重命名冲突，避免已被关键词/文件规则排除的文件参与冲突。
-    best: dict[str, tuple[tuple[float, float], int]] = {}
-    for idx, f in enumerate(preview_list):
-        if f.get("file_name_saved") or f.get("dir"):
-            continue
-        target = f.get("file_name_re")
-        if not target:
-            continue
-        key = os.path.splitext(target)[0] if ignore_ext else target
-        sz = pick_size(f)
-        ts = _to_ts(f.get("updated_at"))
-        score = (float(sz) if sz is not None else float("-inf"), ts if ts is not None else float("-inf"))
-        prev = best.get(key)
-        if prev is None or score > prev[0] or (score == prev[0] and idx > prev[1]):
-            best[key] = (score, idx)
-    if best:
-        keep_idx = set(v[1] for v in best.values())
-        for idx, f in enumerate(preview_list):
-            if idx in keep_idx or f.get("file_name_saved") or f.get("dir"):
-                continue
-            if f.get("file_name_re"):
-                f["file_name_saved"] = "重命名冲突（保留最大）"
-                f["file_name_re"] = None
+    keep = conflict_winners(
+        ((item["file_name_re"], item["size"], item["updated_at"]) for item in preview_list),
+        ignore_ext,
+    )
+    for idx, item in enumerate(preview_list):
+        if item["file_name_re"] and idx not in keep:
+            item["file_name_saved"] = "重命名冲突（保留最大）"
+            item["file_name_re"] = None
 
 
 def _present_rows(preview_list: list[PreviewRow]) -> list[SharePreviewItemOut]:

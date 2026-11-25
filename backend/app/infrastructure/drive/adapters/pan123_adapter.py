@@ -562,10 +562,12 @@ class Pan123Adapter(BaseCloudDriveAdapter):
         return {"status": 403, "message": chk.get("info", {}).get("message", "提取码错误"), "data": {}}
 
     def _share_list(self, share_key: str, share_pwd: str, parent_file_id: int) -> List[Dict]:
+        from .complete_listing import Collector, mapping, rows
+
         list_merge: List[Dict] = []
+        pagination = Collector()
         next_val: Any = 0
-        page = 1
-        while True:
+        for page in range(1, self.COMPLETE_LISTING_MAX_PAGES + 1):
             params = {
                 "limit": 100,
                 "next": next_val or 0,
@@ -582,16 +584,23 @@ class Pan123Adapter(BaseCloudDriveAdapter):
             resp = self._request("GET", "/b/api/share/get", params=params, base_url=self._share_base, timeout=30)
             if resp.get("code") != 0:
                 raise RuntimeError(resp.get("message", "获取分享列表失败"))
-            data = resp.get("data") or {}
-            info_list = data.get("InfoList") or []
+            data = mapping(resp.get("data"))
+            info_list = rows(data.get("InfoList"))
+            pagination.add(
+                [{"fid": item.get("FileId"), "file_name": item.get("FileName")} for item in info_list],
+                data.get("Total"),
+            )
             list_merge.extend(info_list)
-            next_val = data.get("Next")
+            if "Next" not in data:
+                raise ValueError("123pan share is missing its Next cursor")
+            next_val = data["Next"]
             if next_val in ("-1", -1, None):
-                break
-            page += 1
-        if self._debug:
-            pass
-        return list_merge
+                pagination.result()
+                return list_merge
+            if not info_list:
+                raise ValueError("Empty 123pan share page before completion")
+            pagination.cursor(next_val)
+        raise ValueError("123pan share pagination limit reached")
 
     def _get_share_full_path(self, share_key: str, share_pwd: str, target_dir_fid: int) -> List[Dict[str, str]]:
         cache_key = f"{self._share_base}|{share_key}|{share_pwd}|{target_dir_fid}"

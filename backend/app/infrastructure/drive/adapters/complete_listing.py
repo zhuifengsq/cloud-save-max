@@ -204,7 +204,7 @@ def _enumerate(a, parent):
             status(raw, "errno")
             source = rows(raw.get("list"))
             validate_entries(source)
-            batch = [{"fid": i["path"], "file_name": i["path"].rsplit("/", 1)[-1], "dir": i.get("isdir") == 1, "size": i.get("size", 0), "updated_at": i.get("server_mtime", 0)} for i in source]
+            batch = [{"fid": i["path"], "fs_id": i.get("fs_id"), "file_name": i["path"].rsplit("/", 1)[-1], "dir": i.get("isdir") == 1, "size": i.get("size", 0), "updated_at": i.get("server_mtime", 0)} for i in source]
             total = raw.get("total")
             terminal = len(source) < a._API_LIST_PAGE_SIZE
             if "has_more" in raw:

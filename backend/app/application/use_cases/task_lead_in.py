@@ -24,6 +24,7 @@ import app.application.lead_in.materials as lead_materials
 import app.application.lead_in.records as lead_records
 import app.application.lead_in.settings as lead_settings
 import app.application.lead_in.tokens as lead_tokens
+from app.application.task_share_links import normalize_savepath
 
 _LEAD_IN_LOCK_GUARD = threading.Lock()
 
@@ -34,13 +35,35 @@ _LEAD_IN_LOCKS: dict[tuple[str, str, str, str], threading.Lock] = {}
 _LEAD_IN_KEYED_LOCKS = LRUKeyedLocks(maxsize=1024)
 
 
+def _resolved_directory_fid(target: dict[str, Any]) -> str:
+    directory = target.get("dir")
+    if not isinstance(directory, dict):
+        return ""
+    return str(directory.get("stable_fid", directory.get("fid")) or "").strip()
+
+
+def _material_matches_preview(material: dict[str, Any], preview: dict[str, Any]) -> bool:
+    if material.get("dir") or str(material.get("fid") or "") != preview["material_fid"]:
+        return False
+    name = preview.get("material_resolved_name", preview.get("material_name"))
+    if str(material.get("name") or "") != name:
+        return False
+    path = preview.get("material_resolved_path", preview.get("material_path"))
+    if path and material.get("path") != path:
+        return False
+    size = preview.get("material_size")
+    if size is not None and material.get("size") != size:
+        return False
+    md5 = preview.get("material_md5")
+    return not md5 or str(material.get("md5") or "").strip().lower() == md5
+
+
 def _run_confirm_flow(
     adapter,
     *,
     dir_path: str,
     material_config: dict[str, Any],
-    material_fid: str,
-    material_name: str,
+    preview: dict[str, Any],
     material_mode: str,
     finish: Callable[[str, str], dict[str, Any]],
 ) -> dict[str, Any]:
@@ -52,6 +75,8 @@ def _run_confirm_flow(
         return finish("failed", lead_materials._directory_failure_reason(dir_response))
     target = dir_response.get("data") or {}
     target = target if isinstance(target, dict) else {}
+    if _resolved_directory_fid(target) != preview["dir_fid"]:
+        raise _stale_preview()
 
     material: dict[str, Any]
     if material_mode == lead_materials.MATERIAL_MODE_OWN_FILE:
@@ -60,31 +85,30 @@ def _run_confirm_flow(
         if resolver is None:
             return finish("failed", "该网盘暂不支持本账号文件引流")
         own_response = lead_materials._safe_call(resolver, file_path)
+        if lead_materials._error_code(own_response) == "LEAD_IN_MATERIAL_UNAVAILABLE":
+            raise _stale_preview()
         if not lead_materials._call_ok(own_response):
             return finish(
                 "failed",
                 str(own_response.get("message") or "素材文件不存在，请检查路径"),
             )
         file_info = lead_materials._own_file_data(own_response)
-        if file_info is None or not file_info["name"]:
-            return finish("failed", "素材文件不存在，请检查路径")
+        if file_info is None:
+            raise _stale_preview()
         material = {
+            **file_info,
             "source": lead_materials.MATERIAL_MODE_OWN_FILE,
-            "fid": str(file_info.get("fid") or material_fid),
-            "name": str(file_info.get("name") or material_name),
-            "path": str(file_info.get("path") or file_path),
-            "size": file_info.get("size"),
-            "md5": str(file_info.get("md5") or ""),
             "account_name": str(material_config.get("account_name") or ""),
-            "dir": False,
         }
     else:
         material_response = lead_materials._safe_call(
             adapter.lead_in_resolve_material,
             str(material_config.get("shareurl") or ""),
             str(material_config.get("passcode") or ""),
-            material_fid,
+            preview["material_fid"],
         )
+        if lead_materials._error_code(material_response) == "LEAD_IN_MATERIAL_UNAVAILABLE":
+            raise _stale_preview()
         if not lead_materials._call_ok(material_response):
             return finish(
                 "failed", str(material_response.get("message") or "引流素材不可用")
@@ -98,9 +122,10 @@ def _run_confirm_flow(
         material = (
             dict(resolved_material) if isinstance(resolved_material, dict) else {}
         )
-        material.setdefault("fid", material_fid)
-        material.setdefault("name", material_name)
         material["source"] = lead_materials.MATERIAL_MODE_SHARE
+
+    if not _material_matches_preview(material, preview):
+        raise _stale_preview()
 
     inspect_response = lead_materials._safe_call(
         adapter.lead_in_inspect, material, target
@@ -246,17 +271,20 @@ class _PreviewMaterial:
 
 
 def _preview_token_payload(plan: _PreviewReadPlan, material: _PreviewMaterial,
-                           directory: dict[str, Any], expires_at: datetime) -> dict[str, Any]:
+                           target: dict[str, Any], expires_at: datetime) -> dict[str, Any]:
     """Pure token plan from detached inputs; never opens DB or drive IO."""
     return {
         "task_id": plan.task_id, "drive_type": plan.drive_type,
         "account_name": plan.account_name, "dir_path": plan.dir_path,
-        "dir_fid": str(directory.get("fid") or ""),
+        "dir_fid": _resolved_directory_fid(target),
         "material_fid": str(material.value["fid"]), "material_name": material.token_name,
         "material_mode": plan.mode,
         "material_account": str(plan.config.get("account_name") or "")
             if plan.mode == lead_materials.MATERIAL_MODE_OWN_FILE else "",
         "material_path": material.token_path, "material_size": material.token_size,
+        "material_resolved_name": material.value["name"],
+        "material_resolved_path": str(material.value.get("path") or ""),
+        "material_md5": str(material.value.get("md5") or "").strip().lower(),
         "config_version": int(plan.config.get("config_version") or 0),
         "exp": int(expires_at.timestamp()),
     }
@@ -326,7 +354,7 @@ class TaskLeadInUseCase:
         self._sync_preview_record(db, plan, result)
         expires_at = datetime.now(BEIJING_TZ) + timedelta(seconds=lead_tokens.preview_token_ttl_seconds())
         result["preview_token"] = lead_tokens.create_preview_token(
-            _preview_token_payload(plan, material, result["directory"], expires_at))
+            _preview_token_payload(plan, material, target, expires_at))
         result["expires_at"] = expires_at
         result["available"] = True
         return result
@@ -393,7 +421,7 @@ class TaskLeadInUseCase:
             "account_name": account_name,
             "nickname": str(profile.get("nickname") or ""),
         }
-        dir_path = lead_materials.normalize_savepath(task_savepath)
+        dir_path = normalize_savepath(task_savepath)
         account = lead_materials.account_snapshot(account)
         return result, _PreviewReadPlan(task_id, drive_type, capability, material_config, mode,
                                         account_name, account, dir_path)
@@ -405,8 +433,10 @@ class TaskLeadInUseCase:
             return None
         payload = response.get("data") or {}
         target = payload if isinstance(payload, dict) else {}
+        if not _resolved_directory_fid(target):
+            result["reason"] = "保存目录无法精确定位"
+            return None
         directory = target.get("dir")
-        directory = directory if isinstance(directory, dict) else {}
         result["directory"] = {"path": str(directory.get("path") or plan.dir_path),
                                "fid": str(directory.get("fid") or ""), "exists": True}
         return target
@@ -428,11 +458,11 @@ class TaskLeadInUseCase:
             result["reason"] = str(response.get("message") or "素材文件不存在，请检查路径")
             return None
         file_info = lead_materials._own_file_data(response)
-        if file_info is None or not file_info["name"]:
+        if file_info is None or not file_info["name"] or file_info["dir"]:
             result["reason"] = "素材文件不存在，请检查路径"
             return None
-        fid = str(file_info.get("fid") or config.get("file_fid") or "")
-        name = str(file_info.get("name") or config.get("file_name") or "")
+        fid = file_info["fid"]
+        name = file_info["name"]
         if not fid:
             result["reason"] = "引流素材不可用"
             return None
@@ -453,9 +483,9 @@ class TaskLeadInUseCase:
         payload = response.get("data") or {}
         resolved = payload.get("material") if isinstance(payload, dict) else None
         material = dict(resolved) if isinstance(resolved, dict) else {}
-        fid = str(material.get("fid") or config.get("file_fid") or "")
-        name = str(material.get("name") or config.get("file_name") or "")
-        if not fid:
+        fid = str(material.get("fid") or "")
+        name = str(material.get("name") or "")
+        if not fid or not name or material.get("dir"):
             result["reason"] = "引流素材不可用"
             return None
         material.update(source=lead_materials.MATERIAL_MODE_SHARE, fid=fid, name=name)
@@ -510,7 +540,7 @@ class TaskLeadInUseCase:
         material_account = str(payload.get("material_account") or "")
         material_path = str(payload.get("material_path") or "")
         config_version = int(payload.get("config_version") or 0)
-        if not drive_type or not account_name or not dir_path or not material_fid:
+        if not drive_type or not account_name or not dir_path or not payload.get("dir_fid") or not material_fid:
             raise _stale_preview()
         if selected_mode not in lead_materials.MATERIAL_MODES:
             raise _stale_preview()
@@ -529,7 +559,7 @@ class TaskLeadInUseCase:
             raise _stale_preview()
         if not lead_settings.get_drama_lead_in_enabled(db):
             raise _stale_preview()
-        if lead_materials.normalize_savepath(task_savepath) != dir_path:
+        if normalize_savepath(task_savepath) != dir_path:
             raise _stale_preview()
         material_config = lead_settings.get_drama_lead_in_material(db, drive_type)
         if material_config is None:
@@ -627,8 +657,7 @@ class TaskLeadInUseCase:
                 adapter,
                 dir_path=dir_path,
                 material_config=material_config,
-                material_fid=material_fid,
-                material_name=material_name,
+                preview=payload,
                 material_mode=selected_mode,
                 finish=finish,
             )

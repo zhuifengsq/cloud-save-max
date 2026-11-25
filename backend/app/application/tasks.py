@@ -8,8 +8,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.application.container import adapter_registry, tasks_repo
-from app.core.errors import bad_request, not_found
-from app.application.task_share_links import SHARE_LINK_KEY, drop_task_share_link, merge_task_extra
+from app.core.errors import ApiError, bad_request, not_found
+from app.application.task_share_links import (
+    SHARE_LINK_KEY, _load_extra, _store_extra, drop_task_share_link, merge_task_extra, normalize_savepath,
+)
 from app.application.shareurl_update_logs import append_shareurl_update_log
 
 logger = logging.getLogger(__name__)
@@ -39,10 +41,20 @@ def list_recent_executions(db: Session, task_id: int, *, limit: int = 3) -> list
     return tasks_repo().list_recent_executions(db, task_id, limit=limit)
 
 
-def create_task(db: Session, **payload) -> Any:
-    drive_type = adapter_registry().detect_drive_type(payload['shareurl'])
-    if drive_type is None:
+def _validate_shareurl(shareurl: str) -> None:
+    if not shareurl or adapter_registry().detect_drive_type(shareurl) is None:
         raise bad_request('TASK_SHAREURL_INVALID', '无法识别的网盘分享链接')
+
+
+def _save_target(task: Any) -> tuple[str, str, str | None]:
+    account = str(getattr(task, "account_name", "") or "").strip()
+    shareurl = str(getattr(task, "shareurl", "") or "").strip()
+    implicit_drive = adapter_registry().detect_drive_type(shareurl) if not account else None
+    return normalize_savepath(getattr(task, "savepath", None)), account, implicit_drive
+
+
+def create_task(db: Session, **payload) -> Any:
+    _validate_shareurl(payload['shareurl'])
     tmdb_media_type = payload.get("tmdb_media_type")
     if tmdb_media_type is not None:
         tmdb_media_type = str(tmdb_media_type).strip().lower() or None
@@ -78,8 +90,30 @@ def create_task(db: Session, **payload) -> Any:
 def update_task(db: Session, task_id: int, **payload) -> Any:
     task = get_task(db, task_id)
     previous_shareurl = str(getattr(task, "shareurl", "") or "").strip()
-    previous_savepath = str(getattr(task, "savepath", "") or "").strip()
-    previous_account_name = str(getattr(task, "account_name", "") or "").strip()
+    if payload.get("shareurl") is not None:
+        shareurl = str(payload["shareurl"]).strip()
+        if not shareurl or shareurl != previous_shareurl:
+            _validate_shareurl(shareurl)
+        payload["shareurl"] = shareurl
+    previous_target = _save_target(task) if {"savepath", "account_name", "shareurl"} & payload.keys() else None
+    requested_enabled = payload.get("enabled")
+    expected_enabled = payload.get("expected_enabled")
+    if getattr(task, "task_type", None) == "drama" and requested_enabled is not None:
+        status_changed = requested_enabled != task.enabled
+        mixed_edit = any(key not in {"enabled", "expected_enabled"} for key in payload)
+        if (expected_enabled is not None and expected_enabled != task.enabled) or (
+            expected_enabled is None and status_changed and mixed_edit
+        ):
+            raise ApiError("TASK_STATUS_CHANGED", "任务启用状态可能已变更，请刷新后重新操作", 409)
+    editable_extra = {
+        key: value for key, value in (payload.get("extra") or {}).items()
+        if key not in {SHARE_LINK_KEY, "shareurl_update_logs", "saved_latest"}
+    }
+    if getattr(task, "task_type", None) == "drama" and (
+        editable_extra or any(key in payload for key in ("enabled", "shareurl", "savepath", "account_name"))
+    ):
+        if not tasks_repo().guard_task_edit(db, task):
+            raise ApiError("TASK_CHANGED", "任务已变更，请刷新后重新保存", 409)
     clearable_fields = {'pattern', 'replace', 'account_name', 'tmdb_id', 'tmdb_media_type'}
     for key in [
         'task_type',
@@ -123,18 +157,16 @@ def update_task(db: Session, task_id: int, **payload) -> Any:
             setattr(task, key, payload[key])
     if payload.get('addition') is not None:
         task.addition_json = json.dumps(payload['addition'], ensure_ascii=False)
-    if payload.get('extra') is not None:
-        # 对外分享记录和换源日志由服务端维护，不能被旧编辑表单覆盖。
-        merge_task_extra(task, {key: value for key, value in payload['extra'].items()
-                                if key not in {'share_link', 'shareurl_update_logs'}})
-    if any(key in payload for key in ('savepath', 'account_name')):
-        link_target_changed = (
-            str(getattr(task, "savepath", "") or "").strip() != previous_savepath
-            or str(getattr(task, "account_name", "") or "").strip() != previous_account_name
-        )
-        if link_target_changed:
-            # 对外分享指向保存目录，仅改变源链接不会改变它的目标。
-            drop_task_share_link(task)
+    if editable_extra:
+        # 运行进度、对外分享和换源日志由服务端维护。
+        merge_task_extra(task, editable_extra)
+    if previous_target is not None and _save_target(task) != previous_target:
+        drop_task_share_link(task)
+        if getattr(task, "task_type", None) == "drama":
+            extra = _load_extra(task)
+            if "saved_latest" in extra:
+                del extra["saved_latest"]
+                _store_extra(task, extra)
     if "shareurl" in payload:
         new_shareurl = str(getattr(task, "shareurl", "") or "").strip()
         if new_shareurl != previous_shareurl:

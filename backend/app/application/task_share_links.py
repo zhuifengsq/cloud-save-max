@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Any
 
 SHARE_LINK_KEY = "share_link"
+
+
+def normalize_savepath(value: str | None) -> str:
+    """将任务保存路径规范化为适配器使用的绝对路径。"""
+    raw = str(value or "").strip()
+    if not raw or raw == "/":
+        return "/"
+    return re.sub(r"/{2,}", "/", "/" + raw.lstrip("/")).rstrip("/") or "/"
 
 
 def _load_extra(task: Any) -> dict[str, Any]:

@@ -536,13 +536,15 @@ class AliyunAdapter(BaseCloudDriveAdapter):
         fetch_share_full_path: int = 0,
     ) -> Dict:
         """获取分享文件详情列表"""
+        from .complete_listing import Collector, rows
+
         try:
             parent_file_id = pdir_fid if pdir_fid and pdir_fid != "0" else "root"
 
             # 获取文件列表
-            file_list = []
+            listing = Collector()
             marker = ""
-            while True:
+            for _ in range(self.COMPLETE_LISTING_MAX_PAGES):
                 body = {
                     "share_id": pwd_id,
                     "parent_file_id": parent_file_id,
@@ -563,26 +565,26 @@ class AliyunAdapter(BaseCloudDriveAdapter):
                         "data": {"list": []},
                     }
                 
-                items = data.get("items", [])
-                for item in items:
-                    file_info = self._convert_share_item(item)
-                    file_list.append(file_info)
+                items = rows(data.get("items"))
+                listing.add([self._convert_share_item(item) for item in items])
                 
                 marker = data.get("next_marker", "")
                 if not marker:
                     break
+                if not items:
+                    raise ValueError("Empty Aliyun share page before completion")
+                listing.cursor(marker)
+            else:
+                raise ValueError("Aliyun share pagination limit reached")
             
             # 获取面包屑路径
             full_path = []
             if fetch_share_full_path and parent_file_id != "root":
                 full_path = self._get_share_path(pwd_id, stoken, parent_file_id)
 
-            return {
-                "code": 0,
-                "message": "success",
-                "data": {"list": file_list, "full_path": full_path},
-                "metadata": {"_total": len(file_list)},
-            }
+            result = listing.result()
+            result["data"]["full_path"] = full_path
+            return result
         except Exception as e:
             logger.error(f"[Aliyun] 获取分享详情失败: {type(e).__name__}")
             return {"code": 1, "message": str(e), "data": {"list": []}}

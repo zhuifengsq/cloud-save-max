@@ -22,3 +22,7 @@ class TaskNotificationBatch:
             self.notifier.send(title, '\n\n'.join(item[1] for item in pending), level=level, meta=meta)
         except Exception as exc:
             logger.warning('Scheduled task notification failed count=%s error_type=%s', len(pending), type(exc).__name__)
+
+    def merge(self, other):
+        self.messages.extend(other.messages)
+        other.messages.clear()

@@ -559,6 +559,100 @@ class DramaLeadInOwnFileE2ETests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "LEAD_IN_STALE_PREVIEW")
         self.assertEqual(ctx.exception.http_status, 409)
 
+    def _assert_stale_without_adding(self, token: str, *, resolves_material: bool) -> None:
+        self.adapter.reset_mock()
+        error = None
+        try:
+            self._confirm(self.task, token)
+        except ApiError as exc:
+            error = exc
+
+        self.adapter.lead_in_resolve_dir.assert_called_once_with(OWN_DIR)
+        self.adapter.lead_in_add.assert_not_called()
+        self.adapter.lead_in_add_own_file.assert_not_called()
+        material_reads = (
+            self.adapter.lead_in_resolve_own_file.call_count
+            + self.adapter.lead_in_resolve_material.call_count
+        )
+        self.assertEqual(material_reads, int(resolves_material))
+        self.adapter.lead_in_inspect.assert_not_called()
+        self.adapter.lead_in_verify.assert_not_called()
+        self.assertIsNotNone(error)
+        self.assertEqual(error.code, "LEAD_IN_STALE_PREVIEW")
+        self.assertEqual(error.http_status, 409)
+        self.assertEqual(self._records(self.task), [])
+
+    def test_own_file_confirm_rejects_same_path_replacement(self) -> None:
+        self._configure_own_file()
+        token = self._preview_token(self.task)
+        self.adapter.lead_in_resolve_own_file.side_effect = None
+        self.adapter.lead_in_resolve_own_file.return_value = {
+            "code": 0, "data": {"file": dict(OWN_FILE, fid="replacement-file", dir=False)}
+        }
+
+        self._assert_stale_without_adding(token, resolves_material=True)
+
+    def test_confirm_rejects_same_path_directory_recreation(self) -> None:
+        self._configure_own_file()
+        token = self._preview_token(self.task)
+        resolve_original_dir = self.adapter.lead_in_resolve_dir.side_effect
+
+        def resolve_recreated_dir(path):
+            result = resolve_original_dir(path)
+            result["data"]["dir"]["fid"] = "replacement-dir"
+            return result
+
+        self.adapter.lead_in_resolve_dir.side_effect = resolve_recreated_dir
+
+        self._assert_stale_without_adding(token, resolves_material=False)
+
+    def test_share_confirm_rejects_directory_recreation_with_path_locator(self) -> None:
+        self._save_settings([self._share_material_payload()])
+        resolve_original_dir = self.adapter.lead_in_resolve_dir.side_effect
+
+        def directory_with_stable_id(stable_fid):
+            result = resolve_original_dir(OWN_DIR)
+            result["data"]["dir"].update(fid=OWN_DIR, stable_fid=stable_fid)
+            return result
+
+        self.adapter.lead_in_resolve_dir.side_effect = [
+            directory_with_stable_id("1"), directory_with_stable_id("2")
+        ]
+        token = self._preview_token(self.task)
+
+        self._assert_stale_without_adding(token, resolves_material=False)
+
+    def test_share_confirm_rejects_size_change_with_same_file_id(self) -> None:
+        self._save_settings([self._share_material_payload()])
+        token = self._preview_token(self.task)
+        changed = dict(SHARE_MATERIAL, size=4096)
+        self.adapter.lead_in_resolve_material.return_value = {
+            "code": 0, "data": {"files": [changed], "material": changed}
+        }
+
+        self._assert_stale_without_adding(token, resolves_material=True)
+
+    def test_share_confirm_rejects_missing_selected_file_id(self) -> None:
+        self._save_settings([self._share_material_payload()])
+        token = self._preview_token(self.task)
+        self.adapter.lead_in_resolve_material.return_value = {
+            "code": "LEAD_IN_MATERIAL_UNAVAILABLE",
+            "message": "选中的素材文件已不在分享内，请重新读取分享文件列表",
+            "data": None,
+        }
+
+        self._assert_stale_without_adding(token, resolves_material=True)
+
+    def test_own_file_confirm_rejects_checksum_change_with_same_file_id(self) -> None:
+        self._configure_own_file()
+        token = self._preview_token(self.task)
+        self.adapter.lead_in_resolve_own_file.side_effect = None
+        self.adapter.lead_in_resolve_own_file.return_value = {
+            "code": 0, "data": {"file": dict(OWN_FILE, md5="replacement-md5", dir=False)}
+        }
+
+        self._assert_stale_without_adding(token, resolves_material=True)
+
     # ------------------------------------------------------------------
     # 4. 查重 / 冲突 / 超时（own_file 模式分派正确）
     # ------------------------------------------------------------------
@@ -578,6 +672,25 @@ class DramaLeadInOwnFileE2ETests(unittest.TestCase):
         self.adapter.lead_in_add_own_file.assert_not_called()
         self.adapter.lead_in_add.assert_not_called()
         self.assertEqual(self._records(self.task)[0].status, "exists")
+
+    def test_own_file_repeat_confirm_rechecks_duplicates(self) -> None:
+        self._configure_own_file()
+        token = self._preview_token(self.task)
+        self.adapter.reset_mock()
+
+        self.assertEqual(self._confirm(self.task, token).status, "added")
+        self.adapter.lead_in_inspect.return_value = {
+            "code": 0, "data": {"state": "exists", "existing": {"fid": "added-1"}}
+        }
+        self.assertEqual(self._confirm(self.task, token).status, "exists")
+
+        self.assertEqual(self.adapter.lead_in_resolve_dir.call_count, 2)
+        self.assertEqual(self.adapter.lead_in_resolve_own_file.call_count, 2)
+        self.assertEqual(self.adapter.lead_in_inspect.call_count, 2)
+        self.adapter.lead_in_add_own_file.assert_called_once()
+        self.adapter.lead_in_add.assert_not_called()
+        self.adapter.lead_in_verify.assert_called_once()
+        self.assertEqual(len(self._records(self.task)), 1)
 
     def test_own_file_conflict_skips_copy(self) -> None:
         self._configure_own_file()

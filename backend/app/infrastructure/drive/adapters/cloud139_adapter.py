@@ -512,24 +512,39 @@ class Cloud139Adapter(BaseCloudDriveAdapter):
         _fetch_share: int = 0,
         fetch_share_full_path: int = 0,
     ) -> Dict:
+        from .complete_listing import Collector, failure
+
         if not pwd_id:
             return {"code": 1, "message": "分享链接无效", "data": {"list": []}}
         token = self._parse_share_token(stoken)
         passwd = str(token.get("passwd") or "")
         pdir = str(pdir_fid or "root")
+        page_size = 200
+        collector = Collector()
         try:
-            info = self._get_share_info(pwd_id, passwd, pdir, 1, 200)
+            for page in range(self.COMPLETE_LISTING_MAX_PAGES):
+                start = page * page_size + 1
+                info = self._get_share_info(pwd_id, passwd, pdir, start, start + page_size - 1)
+                if not info:
+                    return failure("获取分享目录失败")
+                batch = self._convert_shared_page(info, pdir)
+                collector.add(batch)
+                if len(batch) < page_size:
+                    result = collector.result()
+                    result["data"]["full_path"] = []
+                    return result
         except Exception as exc:
-            return {"code": 1, "message": str(exc), "data": {"list": []}}
-        if not info:
-            return {"code": 1, "message": "获取分享目录失败", "data": {"list": []}}
+            return failure(str(exc))
+        return failure("分享目录达到分页上限")
+
+    def _convert_shared_page(self, info: dict[str, Any], pdir: str) -> list[dict[str, Any]]:
+        from .complete_listing import rows
 
         data_list: list[dict[str, Any]] = []
-        for folder in info.get("caLst") or []:
+        folders = info.get("caLst")
+        for folder in rows([] if folders is None else folders):
             fid = str(folder.get("catalogID") or folder.get("caID") or "")
             name = str(folder.get("catalogName") or folder.get("caName") or "")
-            if not fid or not name:
-                continue
             share_token = json.dumps(
                 {
                     "path": str(folder.get("path") or ""),
@@ -551,11 +566,10 @@ class Cloud139Adapter(BaseCloudDriveAdapter):
                     "share_fid_token": share_token,
                 }
             )
-        for file_item in info.get("coLst") or []:
+        files = info.get("coLst")
+        for file_item in rows([] if files is None else files):
             fid = str(file_item.get("contentID") or file_item.get("coID") or "")
             name = str(file_item.get("contentName") or file_item.get("coName") or "")
-            if not fid or not name:
-                continue
             share_token = json.dumps(
                 {
                     "path": str(file_item.get("path") or ""),
@@ -582,7 +596,7 @@ class Cloud139Adapter(BaseCloudDriveAdapter):
                     "share_fid_token": share_token,
                 }
             )
-        return {"code": 0, "message": "success", "data": {"list": data_list, "full_path": []}}
+        return data_list
 
     def _list_disk_dir(self, parent_file_id: str = "/", *, cursor: str | None = None) -> dict[str, Any]:
         body = {

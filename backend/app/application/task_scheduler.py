@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
-from app.application.container import task_scheduler_setting_repo
-from app.application.scheduler_validation import validate_scheduler_setting
+from app.application.container import clock, task_scheduler_setting_repo
+from app.application.scheduler_validation import normalize_timezone, validate_scheduler_setting
 
 
 DEFAULT_TASK_SCHEDULER_SETTING_ID = 1
@@ -13,6 +15,20 @@ DEFAULT_TASK_SCHEDULER_SETTING_ID = 1
 
 def load_task_scheduler_setting(db: Session) -> Any:
     return task_scheduler_setting_repo().get_setting(db)
+
+
+def task_schedule_time(timezone_name: str | None = None) -> datetime:
+    schedule_zone = ZoneInfo(normalize_timezone(timezone_name))
+    current_utc = clock().now_utc().replace(tzinfo=timezone.utc)
+    return current_utc.astimezone(schedule_zone)
+
+
+def configured_task_schedule_time(db: Session | None) -> datetime:
+    setting = load_task_scheduler_setting(db) if db is not None else None
+    try:
+        return task_schedule_time(getattr(setting, "timezone", None))
+    except (ZoneInfoNotFoundError, ValueError):
+        return task_schedule_time()
 
 
 def get_or_create_task_scheduler_setting(db: Session) -> Any:

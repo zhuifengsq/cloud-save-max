@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -446,15 +445,6 @@ def _lead_in_error(response: Any, default_code: str, default_message: str) -> Ap
     if not code.startswith("LEAD_IN_"):
         code = default_code
     return bad_request(code, message)
-
-
-def normalize_savepath(value: str | None) -> str:
-    """任务 savepath 无前导 /，适配器目录路径统一带前导 /。"""
-    raw = str(value or "").strip()
-    if not raw or raw == "/":
-        return "/"
-    path = re.sub(r"/{2,}", "/", "/" + raw.lstrip("/"))
-    return path.rstrip("/") or "/"
 
 
 def _resolve_task_drive(db: Session, task: Any) -> tuple[str, Any]:

@@ -2,11 +2,43 @@ from __future__ import annotations
 
 import unittest
 
+import pytest
+
+from app.application.drama_update_progress import build_drama_update_progress
 from app.infrastructure.execution.drama_executor import DramaTaskExecutor
 
 
 def _executor(extra: dict | None = None, name: str = "测试任务") -> DramaTaskExecutor:
     return DramaTaskExecutor(adapter=object(), task_data={"taskname": name, "extra": extra or {}})
+
+
+@pytest.mark.parametrize("names", [
+    ["Show.S01E24.mp4", "Show.S02E01.mp4"],
+    ["Show.S02E01.mp4", "Show.S01E24.mp4"],
+])
+@pytest.mark.parametrize("previous", [None, {"season": 1, "episode": 24, "name": "Show.S01E24.mp4"}])
+def test_saved_latest_advances_to_next_season(names, previous):
+    executor = _executor({"saved_latest": previous})
+    executor._record_saved_latest(names)
+    assert executor.saved_latest is not None
+    assert (executor.saved_latest["season"], executor.saved_latest["episode"], executor.saved_latest["name"]) == (
+        2, 1, "Show.S02E01.mp4",
+    )
+    view = build_drama_update_progress(
+        tmdb_details={"last_episode_to_air": {"season_number": 2, "episode_number": 3}},
+        saved_latest=executor.saved_latest,
+    )
+    assert (view.saved_season, view.saved_episode, view.behind_episodes) == (2, 1, 2)
+
+
+def test_saved_latest_respects_explicit_season_in_stored_name():
+    executor = DramaTaskExecutor(
+        adapter=object(), task_data={"pattern": r"S\d+E", "replace": "E"},
+    )
+    executor._folder_episode_hints.append(30)
+    executor._record_saved_latest(["Show.S02E01.mp4", "Show.S01E24.mp4"])
+    assert executor.saved_latest is not None
+    assert (executor.saved_latest["season"], executor.saved_latest["episode"]) == (2, 1)
 
 
 class SavedLatestTests(unittest.TestCase):

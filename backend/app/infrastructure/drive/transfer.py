@@ -177,8 +177,9 @@ class BaiduTransferStrategy(NamedTransferStrategy):
         files, unmatched = super().associate(request, items, ids)
         if len(ids) != len(request.files) or any(not fid for fid in ids) or len(set(ids)) != len(ids):
             return None, unmatched or [f.name for f in request.files]
+        stable_ids = {item.get("fid"): str(item.get("fs_id") or "") or None for item in items}
         if files is not None:
-            return files, []
+            return tuple(SavedFile(f.source_id, f.id, f.name, stable_ids.get(f.id)) for f in files), []
         # Baidu may strip punctuation. Require a one-to-one mapping across the
         # whole batch and destination, backed by the adapter's new-file IDs.
         counts = Counter(baidu_file_key(f.name) for f in request.files)
@@ -195,7 +196,7 @@ class BaiduTransferStrategy(NamedTransferStrategy):
                 unmatched.append(source.name)
             else:
                 fid, name = candidates[0]
-                matched.append(SavedFile(source.id, fid, name))
+                matched.append(SavedFile(source.id, fid, name, stable_ids.get(fid)))
         return (None, unmatched) if unmatched else (tuple(matched), [])
 
 

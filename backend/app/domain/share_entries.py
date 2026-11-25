@@ -96,6 +96,11 @@ def _is_video_name(name: str) -> bool:
     return bool(_ext) and _ext.lower() in video_exts
 
 
+def is_episode_file_name(name: str) -> bool:
+    # The built-in drama rename rules also accept ZIP episode archives.
+    return _is_video_name(name) or name.lower().endswith(".zip")
+
+
 def _to_ts(v: Any) -> float | None:
     try:
         return float(v)

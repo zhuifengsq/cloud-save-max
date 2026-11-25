@@ -66,7 +66,7 @@ def test_sse_disconnect_keeps_shared_slot_and_blocks_other_entries(monkeypatch):
         def commit(self): pass
         def refresh(self, row): pass
         def execute(self, stmt):
-            return SimpleNamespace(all=lambda: [(17, "uid", "", "")])
+            return SimpleNamespace(all=lambda: [(17, "uid", None, None, "", "/")])
 
     class UseCase:
         def __init__(self, db): pass
@@ -124,7 +124,7 @@ def test_scheduler_does_not_repeat_cloud_effect_after_a_database_lock(monkeypatc
 
     class FakeDB:
         def execute(self, stmt):
-            return SimpleNamespace(all=lambda: [(17, "uid", "", "")])
+            return SimpleNamespace(all=lambda: [(17, "uid", None, None, "", "/")])
 
         def get(self, model, task_id):
             return task

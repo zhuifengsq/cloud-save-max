@@ -101,6 +101,17 @@ def test_recurses_actual_files_and_does_not_use_folder_episode_hint(db, monkeypa
     assert result.scanned_directories == 2
 
 
+def test_correction_uses_cross_season_order(db, monkeypatch):
+    adapter = adapter_for(db, {
+        '0': [folder('shows', 'Shows')],
+        'shows': [folder('show', 'Show')],
+        'show': [video('new', 'Show.S02E01.mkv'), video('old', 'Show.S01E24.mkv')],
+    })
+    result = run_correction(db, adapter, monkeypatch)
+    assert (result.saved_latest.season, result.saved_latest.episode) == (2, 1)
+    assert json.loads(db.get(Task, 1).extra_json)['saved_latest']['name'] == 'Show.S02E01.mkv'
+
+
 def test_partly_unrecognized_episode_files_do_not_allow_lowering_the_watermark(db, monkeypatch):
     from app.core.errors import ApiError
     adapter = adapter_for(db, {'0': [folder('shows', 'Shows')], 'shows': [folder('show', 'Show')],

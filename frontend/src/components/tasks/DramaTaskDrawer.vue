@@ -46,6 +46,9 @@ type TaskFormPayload = {
   extra: Record<string, any>
 }
 
+type TaskEditPayload = Partial<TaskFormPayload> & { expected_enabled?: boolean }
+let initialPayload: TaskFormPayload | null = null
+
 const props = withDefaults(
   defineProps<{
     modelValue: boolean
@@ -70,7 +73,7 @@ const showDialog = computed(() => router.currentRoute.value.name !== 'TaskCopywr
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  save: [payload: TaskFormPayload]
+  save: [payload: TaskFormPayload | TaskEditPayload]
 }>()
 
 function clone<T>(value: T): T {
@@ -1394,6 +1397,7 @@ function syncState() {
   }
   state.addition.folder_mode = state.addition.folder_mode === 'folder_diff' ? 'folder_diff' : 'normal'
   state.addition.whitelist_mode = state.addition.whitelist_mode === 'all' ? 'all' : 'any'
+  initialPayload = props.task ? buildTaskPayload() : null
 }
 
 watch(
@@ -1427,7 +1431,7 @@ watch(
       tmdbLink.configured = false
     }
 
-    if (!tmdbLink.configured && state.runweek_mode === 'auto') {
+    if (!isEditing.value && !tmdbLink.configured && state.runweek_mode === 'auto') {
       state.runweek_mode = 'manual'
     }
 
@@ -1520,27 +1524,48 @@ function validateBeforeSubmit() {
   return true
 }
 
-async function submit() {
-  if (!validateBeforeSubmit()) return
-
-  const account_name = state.account_choice || null
-  const shareurl = state.shareurl.trim()
-
-  emit('save', {
+function buildTaskPayload(): TaskFormPayload {
+  return {
     task_type: 'drama',
     taskname: state.taskname.trim(),
-    shareurl,
+    shareurl: state.shareurl.trim(),
     savepath: state.savepath.trim(),
     pattern: state.pattern ? String(state.pattern).trim() : null,
     replace: state.replace ? String(state.replace).trim() : null,
     ignore_extension: Boolean(state.ignore_extension),
-    account_name,
+    account_name: state.account_choice || null,
     tmdb_id: state.tmdb_id ?? null,
     tmdb_media_type: state.tmdb_media_type ?? null,
     enabled: Boolean(state.enabled),
     addition: clone(state.addition || {}),
     extra: buildExtraPayload(),
-  })
+  }
+}
+
+async function submit() {
+  if (!validateBeforeSubmit()) return
+  const payload = buildTaskPayload()
+  if (!initialPayload) {
+    emit('save', payload)
+    return
+  }
+
+  const { extra, ...editable } = payload
+  const { extra: previousExtra, ...previous } = initialPayload
+  const hasChanged = (current: unknown, original: unknown) =>
+    JSON.stringify(current) !== JSON.stringify(original)
+  const patch: TaskEditPayload = Object.fromEntries(
+    Object.entries(editable).filter(([key, value]) =>
+      hasChanged(value, previous[key as keyof typeof previous])),
+  )
+  const extraKeys = new Set([...Object.keys(extra), ...Object.keys(previousExtra)])
+  const extraPatch = Object.fromEntries(
+    [...extraKeys].filter(key => hasChanged(extra[key], previousExtra[key]))
+      .map(key => [key, extra[key] ?? null]),
+  )
+  if (Object.keys(extraPatch).length) patch.extra = extraPatch
+  if (patch.enabled !== undefined) patch.expected_enabled = previous.enabled
+  emit('save', patch)
 }
 
 async function createSaveDir() {

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
@@ -45,6 +47,141 @@ def test_execution_detail_utf8_and_task_scope(db):
     assert execution_detail(db,2,1) is None
     end=execution_detail(db,1,1,log_offset=9999)
     assert end['run_log']=='' and end['log_complete']
+
+
+@pytest.fixture
+def task_patch_client(db):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.deps import get_current_user
+    from app.api.routes import tasks, tasks_read
+    from app.application.container import get_db
+    from app.core.errors import ApiError
+    from app.core.exception_handlers import api_error_handler
+    from app.core.permissions import TASK_READ, TASK_WRITE
+
+    app = FastAPI()
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(tasks.router, prefix="/tasks")
+    app.include_router(tasks_read.router, prefix="/tasks")
+
+    def session():
+        with Session(db.bind) as request_db:
+            yield request_db
+
+    app.dependency_overrides[get_db] = session
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        user=SimpleNamespace(id=1), permissions={TASK_READ, TASK_WRITE}
+    )
+    with TestClient(app) as client:
+        yield client
+
+
+def test_drama_patch_preserves_progress_and_rejects_stale_legacy_enabled(db, task_patch_client):
+    client = task_patch_client
+    # State copied by a drawer before an execution advances and disables the task.
+    old_extra = {"allow_once": True, "saved_latest": {"episode": 8}}
+    row = db.get(Task, 1)
+    row.shareurl = "https://pan.quark.cn/s/show"
+    row.enabled = False
+    row.extra_json = json.dumps({**old_extra, "saved_latest": {"episode": 10}})
+    db.commit()
+
+    url = "/tasks/1"
+    renamed = client.patch(url, json={"taskname": "新标题"})
+    assert renamed.status_code == 200
+    assert renamed.json()["extra"]["saved_latest"]["episode"] == 10
+    assert renamed.json()["enabled"] is False
+
+    stale = client.patch(url, json={
+        "task_type": "drama", "taskname": "旧客户端标题", "enabled": True,
+        "shareurl": row.shareurl, "savepath": row.savepath, "extra": old_extra,
+    })
+    assert stale.status_code == 409
+    db.refresh(row)
+    assert row.taskname == "新标题"
+    assert row.enabled is False
+    assert json.loads(row.extra_json)["saved_latest"]["episode"] == 10
+
+    compatible = client.patch(url, json={"enabled": False, "extra": old_extra})
+    assert compatible.status_code == 200
+    assert compatible.json()["extra"]["saved_latest"]["episode"] == 10
+    enabled = client.patch(url, json={"enabled": True, "expected_enabled": False, "taskname": "手动启用"})
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+    assert client.patch(url + "/status", json={"enabled": False}).json()["enabled"] is False
+
+
+@pytest.mark.parametrize("target_change", [{"savepath": "/other"}, {"account_name": "other-account"}])
+def test_drama_patch_resets_progress_and_next_scan_uses_new_target(db, task_patch_client, monkeypatch, target_change):
+    from types import SimpleNamespace
+
+    from app.application.container import run_task_use_case
+    from app.application.use_cases.run_task import RunPolicy
+    from app.domain.task_run import RunTaskCommand
+    from app.infrastructure.execution.task_run_stages import DatabaseAccountManager
+
+    row = db.get(Task, 1)
+    row.shareurl = "https://pan.quark.cn/s/show"
+    row.account_name = "original"
+    old_progress = {"season": 1, "episode": 8}
+    row.extra_json = json.dumps({
+        "saved_latest": old_progress, "share_link": {"share_url": "https://pan.quark.cn/s/old-save"},
+    })
+    db.commit()
+    client = task_patch_client
+    same_target = client.patch("/tasks/1", json={"taskname": "新标题", "savepath": "/x/"})
+    assert same_target.status_code == 200
+    assert same_target.json()["extra"]["saved_latest"] == old_progress
+    changed = client.patch("/tasks/1", json={**target_change, "extra": {"saved_latest": old_progress}})
+    assert changed.status_code == 200
+    extra = changed.json()["extra"]
+    assert "saved_latest" not in extra and "share_link" not in extra
+    assert changed.json()["drama_update_progress"]["saved_episode"] is None
+
+    scans = []
+
+    def destination_for(paths):
+        scans.extend(paths)
+        return [{"file_path": paths[0], "fid": "new-target"}]
+
+    adapter = SimpleNamespace(
+        DRIVE_TYPE="test", is_active=True, extract_url=lambda _: ("share", "", "", []),
+        get_stoken=lambda *_: {"data": {"stoken": "token"}}, get_detail=lambda *_: {"data": {"list": []}},
+        get_fids=destination_for,
+        ls_dir=lambda *_args, **_kwargs: {"data": {"list": [{"fid": "ep2", "file_name": "Show.S01E02.mp4"}]}},
+    )
+    def read_account(task):
+        assert task["account_name"] == target_change.get("account_name", "original")
+        return adapter
+
+    manager = SimpleNamespace(init_for_tasks=lambda _: None, get_adapter_for_task=read_account)
+    monkeypatch.setattr(DatabaseAccountManager, "from_payload", lambda *_: manager)
+    with Session(db.bind) as run_db:
+        result = run_task_use_case(run_db).execute(RunTaskCommand(1), RunPolicy.for_trigger("http"))
+    assert result.status == "success", result.run_log
+    assert scans == [target_change.get("savepath", "/x")]
+    assert client.get("/tasks/1").json()["drama_update_progress"]["saved_episode"] == 2
+
+
+def test_drama_patch_rejects_invalid_source_before_writing_task_or_logs(db, task_patch_client):
+    row = db.get(Task, 1)
+    # The current row intentionally has a legacy URL that would fail creation.
+    original_url = row.shareurl
+    assert task_patch_client.patch("/tasks/1", json={"taskname": "标题"}).status_code == 200
+    for invalid in ("", "incorrect-link"):
+        result = task_patch_client.patch("/tasks/1", json={"shareurl": invalid})
+        assert result.status_code == 400
+        db.refresh(row)
+        assert row.shareurl == original_url
+        assert json.loads(row.extra_json or "{}").get("shareurl_update_logs", []) == []
+    result = task_patch_client.patch("/tasks/1", json={"shareurl": "https://pan.quark.cn/s/new"})
+    assert result.status_code == 200
+    assert result.json()["shareurl"] == "https://pan.quark.cn/s/new"
+    assert len(result.json()["extra"]["shareurl_update_logs"]) == 1
 
 
 def test_drama_pins_are_shared_and_applied_before_filter_pagination(db):

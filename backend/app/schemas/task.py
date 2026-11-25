@@ -40,6 +40,7 @@ class TaskUpdateIn(BaseModel):
     tmdb_id: int | None = None
     tmdb_media_type: str | None = Field(default=None, max_length=8)
     enabled: bool | None = None
+    expected_enabled: bool | None = None
     addition: dict[str, Any] | None = None
     extra: dict[str, Any] | None = None
 

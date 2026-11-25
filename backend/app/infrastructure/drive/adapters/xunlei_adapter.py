@@ -573,11 +573,13 @@ class XunleiAdapter(BaseCloudDriveAdapter):
         fetch_share_full_path: int = 0,
     ) -> Dict:
         """获取分享文件详情列表"""
+        from .complete_listing import Collector, rows
+
         try:
-            file_list = []
+            listing = Collector()
             page_token = ""
 
-            while True:
+            for _ in range(self.COMPLETE_LISTING_MAX_PAGES):
                 params = {
                     "share_id": pwd_id,
                     "pass_code_token": stoken,
@@ -599,20 +601,16 @@ class XunleiAdapter(BaseCloudDriveAdapter):
                     msg = self._get_error_message(result)
                     return {"code": 1, "message": msg, "data": {"list": []}}
 
-                files = result.get("files", [])
-                for item in files:
-                    file_list.append(self._convert_xunlei_item(item))
+                files = rows(result.get("files"))
+                listing.add([self._convert_xunlei_item(item) for item in files])
 
                 page_token = result.get("next_page_token", "")
                 if not page_token:
-                    break
-
-            return {
-                "code": 0,
-                "message": "success",
-                "data": {"list": file_list},
-                "metadata": {"_total": len(file_list)},
-            }
+                    return listing.result()
+                if not files:
+                    raise ValueError("Empty Xunlei share page before completion")
+                listing.cursor(page_token)
+            raise ValueError("Xunlei share pagination limit reached")
 
         except Exception as e:
             logger.error(f"[Xunlei] 获取分享详情失败: {type(e).__name__}")

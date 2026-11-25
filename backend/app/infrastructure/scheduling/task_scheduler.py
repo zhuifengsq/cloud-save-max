@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from app.application.dto.task_run import RunTaskCommand
+from app.domain.task_run import ScheduledTaskIdentity
 from app.application.container import run_task_use_case, task_run_notification_batch
 
 import os
 import time
 import logging
+import heapq
+import posixpath
+from collections import defaultdict
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from graphlib import TopologicalSorter
 from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -20,7 +26,8 @@ from app.infrastructure.persistence.session import SessionLocal
 from app.infrastructure.persistence.models.task import Task
 from app.application.notifications.sender import send_runtime
 from app.application.notifications.task_notify import DRAMA_NOTIFY_TITLE, build_task_section
-from app.application.task_scheduler import get_or_create_task_scheduler_setting
+from app.application.scheduler_validation import DEFAULT_SCHEDULER_TIMEZONE, normalize_timezone
+from app.application.task_scheduler import get_or_create_task_scheduler_setting, task_schedule_time
 from app.application.tmdb_cache import purge_cold_cache, refresh_expired_cache, refresh_linked_tasks
 from app.application.tmdb_cache_scheduler import get_or_create_tmdb_cache_scheduler_setting
 from app.application.drive_account_probe_scheduler import get_or_create_drive_account_probe_scheduler_setting
@@ -28,6 +35,7 @@ from app.application.drive_accounts import probe_drive_account, sign_in_drive_ac
 from app.application.audit_log_scheduler import get_or_create_audit_log_scheduler_setting, purge_old_audit_logs
 from app.infrastructure.persistence.models.drive_account import DriveAccount
 from app.infrastructure.drive.account_manager import DatabaseAccountManager
+from app.infrastructure.drive.factory import AdapterFactory
 from app.infrastructure.scheduling.task_admission import task_admission
 from app.core.errors import ApiError
 from app.core.account_privacy import SAFE_ACCOUNT_ERROR
@@ -45,7 +53,7 @@ class TaskSchedulerManager:
             return
         if self.scheduler is not None:
             return
-        self.scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+        self.scheduler = BackgroundScheduler(timezone=DEFAULT_SCHEDULER_TIMEZONE)
         self.scheduler.start()
         self.reload()
 
@@ -112,10 +120,12 @@ class TaskSchedulerManager:
                 self.scheduler.remove_job(job_id)
             return
         try:
-            trigger = CronTrigger.from_crontab(str(setting.crontab), timezone=str(setting.timezone or "Asia/Shanghai"))
+            timezone_name = normalize_timezone(setting.timezone)
+            trigger = CronTrigger.from_crontab(str(setting.crontab), timezone=timezone_name)
             self.scheduler.add_job(
                 run_drama_tasks,
                 trigger=trigger,
+                kwargs={"timezone_name": timezone_name},
                 id=job_id,
                 replace_existing=True,
                 max_instances=1,
@@ -206,54 +216,106 @@ class TaskSchedulerManager:
             return
 
 
-def run_drama_tasks() -> None:
-    task_ids: list[int] = []
-    task_payloads: list[dict[str, Any]] = []
+def _scheduled_drama_order() -> tuple[TopologicalSorter, dict[int, ScheduledTaskIdentity]]:
     with SessionLocal() as db:
-        rows = (
-            db.execute(select(Task.id, Task.task_uid, Task.account_name, Task.shareurl).where(Task.enabled.is_(True), Task.task_type == "drama").order_by(Task.id.asc()))
-            .all()
-        )
-        for tid, uid, account_name, shareurl in rows:
-            if tid is None:
-                continue
-            task_ids.append(int(tid))
-            task_payloads.append({"task_uid": uid, "account_name": account_name, "shareurl": shareurl})
+        rows = db.execute(
+            select(Task.id, Task.task_uid, Task.account_name, DriveAccount.drive_type, Task.shareurl, Task.savepath)
+            .outerjoin(DriveAccount, (DriveAccount.name == Task.account_name) & DriveAccount.enabled.is_(True))
+            .where(Task.enabled.is_(True), Task.task_type == "drama").order_by(Task.id)
+        ).all()
+
+    # Auto selection can fall back to any active account of the inferred drive.
+    # Only account identities used in this round need ordering dependencies.
+    accounts = defaultdict(set)
+    tasks = []
+    identities = {}
+    for tid, uid, configured_name, drive_type, shareurl, path in rows:
+        identities[tid] = ScheduledTaskIdentity(uid, configured_name, shareurl, path, bool(drive_type))
+        name = configured_name if drive_type else None
+        drive = drive_type or AdapterFactory.get_drive_type_by_url(shareurl or "")
+        account = ("account", name) if name else ("auto", drive)
+        accounts[drive].add(account)
+        tasks.append((tid, name, drive, account, posixpath.normpath("/" + (path or "").strip("/"))))
+    all_accounts = set().union(*accounts.values())
+    previous = {}
+    order = TopologicalSorter()
+    for tid, name, drive, account, path in tasks:
+        candidates = {account} if name else (accounts[drive] if drive else all_accounts)
+        resources = candidates | {("path", path)}
+        order.add(tid, *(previous[key] for key in resources if key in previous))
+        for key in resources:
+            previous[key] = tid
+    order.prepare()
+    return order, identities
+
+
+def _run_scheduled_drama(task_id, identity, schedule_now, slot):
+    with slot:
+        notifications = task_run_notification_batch()
+        for attempt in range(1, 4):
+            with SessionLocal() as db:
+                execution_started = False
+                try:
+                    if db.get(Task, task_id) is None:
+                        break
+                    execution_started = True
+                    run_task_use_case(db, notifier=notifications).execute(
+                        RunTaskCommand(task_id, schedule_now=schedule_now, scheduled_identity=identity),
+                        RunPolicy.for_trigger('scheduler'),
+                    )
+                    break
+                except OperationalError as exc:
+                    db.rollback()
+                    # After execution starts, cloud writes may already have succeeded.
+                    if not execution_started and attempt < 3 and "database is locked" in str(exc).lower():
+                        time.sleep(0.2 * attempt)
+                        continue
+                    logger.warning("追剧任务调度执行异常 task_id=%s err=%s", task_id, exc)
+                    break
+                except Exception as exc:
+                    db.rollback()
+                    logger.warning("追剧任务调度执行失败 task_id=%s err=%s", task_id, exc)
+                    break
+        return notifications
+
+
+def run_drama_tasks(timezone_name: str | None = None) -> None:
+    schedule_now = task_schedule_time(timezone_name)
+    order, identities = _scheduled_drama_order()
+    ready, running, finished = [], {}, {}
+    with ThreadPoolExecutor(max_workers=task_admission.max_active, thread_name_prefix="drama") as pool:
+        while order.is_active():
+            for tid in order.get_ready():
+                heapq.heappush(ready, tid)
+            while ready and len(running) < task_admission.max_active:
+                tid = heapq.heappop(ready)
+                try:
+                    slot = task_admission.reserve(tid)
+                except ApiError as exc:
+                    if exc.code == "TASK_CAPACITY_EXCEEDED" and running:
+                        heapq.heappush(ready, tid)
+                        break
+                    logger.info("跳过本轮追剧任务 task_id=%s code=%s", tid, exc.code)
+                    order.done(tid)
+                    continue
+                try:
+                    running[pool.submit(_run_scheduled_drama, tid, identities[tid], schedule_now, slot)] = tid
+                except BaseException:
+                    slot.release()
+                    raise
+            if running:
+                completed, _ = wait(running, return_when=FIRST_COMPLETED)
+                for future in completed:
+                    tid = running.pop(future)
+                    try:
+                        finished[tid] = future.result()
+                    except Exception:
+                        logger.exception("追剧任务工作线程异常 task_id=%s", tid)
+                    order.done(tid)
 
     notifications = task_run_notification_batch()
-    for task_id in task_ids:
-        try:
-            slot = task_admission.reserve(task_id)
-        except ApiError as exc:
-            logger.info("跳过本轮追剧任务 task_id=%s code=%s", task_id, exc.code)
-            continue
-        with slot:
-            max_attempts = 3
-            for attempt in range(1, max_attempts + 1):
-                with SessionLocal() as db:
-                    execution_started = False
-                    try:
-                        task = db.get(Task, int(task_id))
-                        if task is None:
-                            break
-                        execution_started = True
-                        # 执行槽仍由上面 reserve 持有；用例只收敛执行参数（见 application/use_cases/run_task.py）。
-                        run_task_use_case(db, notifier=notifications).execute(RunTaskCommand(int(task_id)),
-                            RunPolicy.for_trigger('scheduler'))
-                        break
-                    except OperationalError as exc:
-                        db.rollback()
-                        # After the executor starts, its cloud writes may already have succeeded.
-                        if not execution_started and attempt < max_attempts and "database is locked" in str(exc).lower():
-                            time.sleep(0.2 * attempt)
-                            continue
-                        logger.warning("追剧任务调度执行异常 task_id=%s err=%s", task_id, str(exc))
-                        break
-                    except Exception as exc:
-                        db.rollback()
-                        logger.warning("追剧任务调度执行失败 task_id=%s err=%s", task_id, str(exc))
-                        break
-
+    for tid in sorted(finished):
+        notifications.merge(finished[tid])
     notifications.flush()
 
 

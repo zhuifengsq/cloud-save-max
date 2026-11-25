@@ -7,6 +7,7 @@ from app.application.container import execution_reads_repo, system_settings_repo
 from app.application.drama_pins import drama_group_key
 from app.application.media_category import categorize, CATEGORY_ORDER
 from app.application.queries.task_views import task_view
+from app.application.task_scheduler import configured_task_schedule_time
 from app.application.tmdb_view import (
     load_tmdb_status_map,
     load_tmdb_payload_map,
@@ -50,6 +51,7 @@ def summaries(db, ids, *, full=False, include_latest_success=False):
     weekdays = load_tmdb_weekday_map(db, items, payload_map=payloads)
     lead = load_lead_in_summary_map(db, ids)
     configured = is_tmdb_configured(db)
+    schedule_now = configured_task_schedule_time(db) if any(item.task_type == "drama" for item in items) else None
     executions = execution_reads_repo().read_recent_summaries(db, ids)
     if include_latest_success:
         successful = execution_reads_repo().read_recent_summaries(
@@ -70,6 +72,7 @@ def summaries(db, ids, *, full=False, include_latest_success=False):
             tmdb_weekday_map=weekdays,
             lead_in_map=lead,
             tmdb_configured=configured,
+            schedule_now=schedule_now,
         )
         output = asdict(view)
         output["executions"] = executions.get(item.id, [])

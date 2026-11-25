@@ -315,6 +315,7 @@ class DramaLeadInTriggerRegressionTests(unittest.TestCase):
         adapter = Mock()
         adapter.extract_url.return_value = ("share", "", "selected", [])
         adapter.get_stoken.return_value = {"status": 200, "data": {"stoken": "token"}}
+        adapter.get_detail.return_value = {"code": 0, "data": {"list": []}}
         log = ExecutionLog()
         executor = DramaTaskExecutor(
             adapter=adapter,
@@ -327,7 +328,6 @@ class DramaLeadInTriggerRegressionTests(unittest.TestCase):
         )
         executor._ensure_dest_dir_fid = Mock(side_effect=lambda path: f"dest:{path}")
         executor._ls_dir = Mock(return_value={"data": {"list": []}})
-        executor._fetch_share_items = Mock(return_value=[])
         executor._save_with_saved_fids = Mock(return_value=[])
 
         executor.execute()

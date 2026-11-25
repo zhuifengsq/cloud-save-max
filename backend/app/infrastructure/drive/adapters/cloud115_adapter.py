@@ -250,6 +250,8 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
         获取分享文件详情。
         使用独立空 session 访问，不携带用户 cookie。
         """
+        from .complete_listing import Collector, mapping, rows
+
         parts = stoken.split(":") if stoken else [pwd_id, ""]
         share_code = parts[0]
         receive_code = parts[1] if len(parts) > 1 else ""
@@ -264,14 +266,13 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
                 share_session, share_code, receive_code, cid
             )
 
-        list_merge = []
-        offset = 0
+        listing = Collector()
         limit = 50
 
-        while True:
+        for page in range(self.COMPLETE_LISTING_MAX_PAGES):
             url = (
                 f"{self.WEB_URL}/webapi/share/snap"
-                f"?share_code={share_code}&offset={offset}&limit={limit}"
+                f"?share_code={share_code}&offset={page * limit}&limit={limit}"
                 f"&asc=0&cid={cid}&receive_code={receive_code}&format=json"
             )
             try:
@@ -283,14 +284,14 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
                         "message": data.get("error", "获取分享信息失败"),
                         "data": {"list": []},
                     }
-                file_list = data.get("data", {}).get("list", [])
-                if not file_list:
-                    break
-                for item in file_list:
-                    list_merge.append(self._convert_share_item(item))
-                if len(file_list) < limit:
-                    break
-                offset += limit
+                payload = mapping(data.get("data"))
+                file_list = rows(payload.get("list"))
+                total = payload.get("count", data.get("count"))
+                listing.add([self._convert_share_item(item) for item in file_list], total)
+                if len(file_list) < limit or len(listing.items) == listing.expected:
+                    result = listing.result()
+                    result["data"]["full_path"] = full_path
+                    return result
             except Exception as e:
                 return {
                     "code": 1,
@@ -298,15 +299,7 @@ class Cloud115Adapter(BaseCloudDriveAdapter):
                     "data": {"list": []},
                 }
 
-        return {
-            "code": 0,
-            "message": "success",
-            "data": {
-                "list": list_merge,
-                "full_path": full_path,
-            },
-            "metadata": {"_total": len(list_merge)},
-        }
+        return {"code": 1, "message": "115 share pagination limit reached", "data": {"list": []}}
 
     def _resolve_share_path(
         self,

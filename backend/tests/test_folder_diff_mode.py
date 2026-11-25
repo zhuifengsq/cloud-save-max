@@ -31,7 +31,9 @@ def _run(executor: DramaTaskExecutor, *, share_items, children, dest_dirs, exist
     executor._list_dest_for_diff = Mock(return_value=([
         {"file_name": name} for name in existing_names
     ], False))
-    executor._fetch_share_items = Mock(side_effect=lambda **kwargs: children.get(kwargs["pdir_fid"], []))
+    executor.adapter.get_detail.side_effect = lambda pwd, token, fid: {
+        "code": 0, "data": {"list": children.get(fid, [])},
+    }
     executor._save_with_saved_fids = Mock(return_value=["saved-fid"])
     executor._execute_folder_diff(
         share_items=share_items,
@@ -64,7 +66,7 @@ class FolderDiffModeTests(unittest.TestCase):
         self.assertEqual([item.fid for item in kwargs["plan"]], ["f-new"])
         self.assertEqual(kwargs["dest_root_fid"], "dest:/tv/测试剧/4K")
         self.assertEqual(
-            [call.kwargs["pdir_fid"] for call in executor._fetch_share_items.call_args_list],
+            [call.args[2] for call in executor.adapter.get_detail.call_args_list],
             ["d-4k"],
         )
 
@@ -86,7 +88,7 @@ class FolderDiffModeTests(unittest.TestCase):
              dest_dirs={"1080P SDR": "dest-sdr"}, existing_names=set())
 
         self.assertEqual(
-            [call.kwargs["pdir_fid"] for call in executor._fetch_share_items.call_args_list],
+            [call.args[2] for call in executor.adapter.get_detail.call_args_list],
             ["d-4k", "d-hdr"],
         )
 

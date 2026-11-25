@@ -123,3 +123,33 @@ test('history chunks use byte next offset, retain content on error and permit re
  fail=true;await load();assert.equal(dialog.loading,false);assert.equal(dialog.content,'中文');assert.match(dialog.error,/重试/)
  fail=false;await load();assert.deepEqual(calls,[0,6,6]);assert.equal(dialog.content,'中文尾');assert.equal(dialog.complete,true);assert.equal(dialog.truncated,true)
 })
+
+test('editing the drama drawer sends only changed task fields and explicit status intent', async () => {
+  const source = readFileSync(new URL('../src/components/tasks/DramaTaskDrawer.vue', import.meta.url), 'utf8')
+  const start = source.indexOf('function buildTaskPayload()')
+  const end = source.indexOf('async function createSaveDir()', start)
+  const js = ts.transpileModule(source.slice(start, end), {
+    compilerOptions: {target: ts.ScriptTarget.ES2022},
+  }).outputText
+  const state = {
+    taskname: 'Old title', shareurl: 'https://pan.quark.cn/s/show', savepath: '/show',
+    account_choice: '', pattern: null, replace: null, ignore_extension: true,
+    tmdb_id: null, tmdb_media_type: null, enabled: true, addition: {folder_mode: 'normal'},
+  }
+  const payloads = []
+  const extra = {allow_once: true, saved_latest: {episode: 8}, runweek: [3]}
+  const drawer = new Function('state', 'validateBeforeSubmit', 'clone', 'buildExtraPayload', 'emit',
+    'let initialPayload = null; ' + js + ';return {submit, capture: () => { initialPayload = buildTaskPayload() }}')(
+    state, () => true, structuredClone, () => structuredClone(extra), (_, payload) => payloads.push(payload),
+  )
+  drawer.capture()
+  state.taskname = 'New title'
+  await drawer.submit()
+  assert.deepEqual(payloads.pop(), {taskname: 'New title'})
+  state.enabled = false
+  extra.runweek = [5]
+  await drawer.submit()
+  assert.deepEqual(payloads.pop(), {
+    taskname: 'New title', enabled: false, expected_enabled: true, extra: {runweek: [5]},
+  })
+})

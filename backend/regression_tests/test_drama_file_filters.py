@@ -11,11 +11,12 @@ from app.infrastructure.execution.execution_log import ExecutionLog
     ({"filter_words": "群"}, "关键词过滤：移除 1 个匹配的文件"),
     ({"file_filter": "后会友期|mp4"}, "文件筛选：移除 1 个不匹配的文件"),
     ({"min_size": "1KB"}, "大小过滤：移除 1 个低于 1KB 的文件"),
+    ({"file_min_date": "2026-01-01"}, "时间过滤：移除 1 个早于 2026-01-01 的文件"),
 ])
 def test_drama_applies_file_filters_before_saving(location, rules, log_message):
     files = [
-        {"fid": "ad", "fid_token": "ad-token", "file_name": "加群，获取更多资源.jpg", "size": 1},
-        {"fid": "video", "fid_token": "video-token", "file_name": "后会友期 S01E01.mp4", "size": 1024},
+        {"fid": "ad", "fid_token": "ad-token", "file_name": "加群，获取更多资源.jpg", "size": 1, "updated_at": "2024-01-02"},
+        {"fid": "video", "fid_token": "video-token", "file_name": "后会友期 S01E01.mp4", "size": 1024, "updated_at": "2026-01-01"},
     ]
     folder = {"fid": "extras", "fid_token": "folder-token", "file_name": "资源", "dir": True}
     share = {"selected": files if location in {"normal", "root"} else [folder], "extras": files}
@@ -38,7 +39,7 @@ def test_drama_applies_file_filters_before_saving(location, rules, log_message):
     )
     executor._ensure_dest_dir_fid = Mock(side_effect=lambda path: f"dest:{path}")
     executor._ls_dir = Mock(return_value={"data": {"list": []}})
-    executor._fetch_share_items = Mock(side_effect=lambda **kwargs: share[kwargs["pdir_fid"]])
+    adapter.get_detail.side_effect = lambda _pwd, _token, fid: {"data": {"list": share[fid]}}
     executor._save_with_saved_fids = Mock(return_value=["saved-video"])
 
     executor.execute()
@@ -62,7 +63,7 @@ def test_existing_destination_progress_is_recorded_without_new_transfers(mode, h
     })
     executor._ensure_dest_dir_fid = Mock(return_value='dest')
     executor._ls_dir = Mock(return_value={'data': {'list': existing}})
-    executor._fetch_share_items = Mock(return_value=source)
+    adapter.get_detail.return_value = {"data": {"list": source}}
     executor._save_with_saved_fids = Mock(side_effect=AssertionError('No files should be transferred'))
     executor.execute()
     executor._save_with_saved_fids.assert_not_called()
@@ -70,6 +71,21 @@ def test_existing_destination_progress_is_recorded_without_new_transfers(mode, h
     assert executor.saved_latest['episode'] == 10
     assert executor.saved_latest['name'] == '测试剧 S01E10.mp4'
     executor._ls_dir.assert_called_once_with('dest')
+
+
+@pytest.mark.parametrize("ignore_extension", [False, True])
+@pytest.mark.parametrize(("existing_name", "expected"), [
+    ("Series.S01E05.srt", ["source"]),
+    ("Series.S01E05.nfo", ["source"]),
+    ("Series.S01E05.mp4", []),
+])
+def test_normal_episode_dedup_ignores_sidecars(ignore_extension, existing_name, expected):
+    executor = DramaTaskExecutor(adapter=Mock(), task_data={"ignore_extension": ignore_extension})
+    plan = executor._plan_transfer(
+        share_files=[{"fid": "source", "file_name": "Series.S01E05.mkv"}],
+        dest_file_list=[{"fid": "existing", "file_name": existing_name}],
+    )
+    assert [item.fid for item in plan] == expected
 
 
 def test_empty_destination_does_not_claim_source_episodes_are_saved():
@@ -81,7 +97,9 @@ def test_empty_destination_does_not_claim_source_episodes_are_saved():
     })
     executor._ensure_dest_dir_fid = Mock(return_value='dest')
     executor._ls_dir = Mock(return_value={'data': {'list': []}})
-    executor._fetch_share_items = Mock(return_value=[{'fid': 'source-10', 'file_name': '测试剧 S01E10.mp4', 'size': 1024}])
+    adapter.get_detail.return_value = {"data": {"list": [
+        {'fid': 'source-10', 'file_name': '测试剧 S01E10.mp4', 'size': 1024},
+    ]}}
     executor._save_with_saved_fids = Mock(side_effect=AssertionError('Filtered files must not be saved'))
     executor.execute()
     assert executor.saved_latest is None

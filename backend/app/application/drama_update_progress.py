@@ -19,7 +19,9 @@ def _parse_air_date(value: Any) -> date | None:
         return None
 
 
-def resolve_tmdb_latest_aired_episode(details: dict[str, Any] | None) -> tuple[int | None, int | None, str | None]:
+def resolve_tmdb_latest_aired_episode(
+    details: dict[str, Any] | None, *, today: date | None = None,
+) -> tuple[int | None, int | None, str | None]:
     if not isinstance(details, dict):
         return None, None, "TMDB 缓存缺失"
 
@@ -29,7 +31,7 @@ def resolve_tmdb_latest_aired_episode(details: dict[str, Any] | None) -> tuple[i
     picked = None
     if isinstance(next_ep, dict):
         ad = _parse_air_date(next_ep.get("air_date"))
-        if ad is not None and ad <= datetime.now().date():
+        if ad is not None and ad <= (today or datetime.now().date()):
             picked = next_ep
     if picked is None:
         picked = last_ep if isinstance(last_ep, dict) else None
@@ -58,13 +60,14 @@ def build_drama_update_progress(
     *,
     tmdb_details: dict[str, Any] | None,
     saved_latest: dict[str, Any] | None,
+    today: date | None = None,
 ) -> DramaUpdateProgressOut:
     """Compose progress info from TMDB's latest aired episode plus the task's saved_latest.
 
     ``saved_latest`` is computed during each task execution (see DramaTaskExecutor),
     so no extra drive requests are needed when rendering task lists.
     """
-    tmdb_season, tmdb_episode, tmdb_reason = resolve_tmdb_latest_aired_episode(tmdb_details)
+    tmdb_season, tmdb_episode, tmdb_reason = resolve_tmdb_latest_aired_episode(tmdb_details, today=today)
     saved = saved_latest if isinstance(saved_latest, dict) else {}
     saved_season = _to_int(saved.get("season"))
     saved_episode = _to_int(saved.get("episode"))

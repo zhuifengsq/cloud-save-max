@@ -6,12 +6,27 @@ from datetime import datetime
 from typing import Any, Callable, Protocol
 
 @dataclass(frozen=True)
+class ScheduledTaskIdentity:
+    task_uid: str
+    account_name: str | None
+    shareurl: str
+    savepath: str
+    named_account_reserved: bool
+
+    def matches(self, task: TaskExecutionState) -> bool:
+        return (task.task_type == "drama" and task.task_uid == self.task_uid
+                and task.account_name == self.account_name and task.shareurl == self.shareurl
+                and task.savepath == self.savepath)
+
+@dataclass(frozen=True)
 class RunTaskCommand:
     task_id: int
     actor_user_id: int | None = None
     ip: str | None = None
     user_agent: str | None = None
     preview: dict[str, Any] | None = None
+    schedule_now: datetime | None = None
+    scheduled_identity: ScheduledTaskIdentity | None = None
 
 @dataclass
 class TaskRunResult:

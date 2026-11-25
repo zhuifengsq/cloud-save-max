@@ -119,7 +119,7 @@ def test_real_transport_failure_is_not_cached_or_marked_invalid(preview_db, monk
         response = requests.Response()
         response.status_code = 200
         response._content = (b'{"status":200,"code":0,"data":{"stoken":"fake"}}' if method == 'POST'
-            else b'{"status":200,"code":0,"data":{"list":[]}}')
+            else b'{"status":200,"code":0,"data":{"list":[]},"metadata":{"_total":0}}')
         return response
     monkeypatch.setattr(requests, 'request', recovered)
     # Keep memory cache intact: transient failures must not suppress recovery.

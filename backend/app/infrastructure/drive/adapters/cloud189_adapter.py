@@ -41,6 +41,10 @@ class Cloud189SecondValidRequired(Exception):
         self.context = context
 
 
+class _UnresolvedShareDirectory(RuntimeError):
+    pass
+
+
 from app.infrastructure.drive.transfer import NamedTransferStrategy
 
 
@@ -1227,6 +1231,8 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
     def _list_share_dir_by_code_v2(
         self, meta: Dict[str, Any], file_id: str, access_code: str, *, is_folder: bool = True
     ) -> List[Dict[str, Any]]:
+        from .complete_listing import Collector
+
         url = f"{self.HOST_URL}/api/open/share/listShareDir.action"
         params: Dict[str, Any] = {
             "noCache": str(time.time()),
@@ -1242,9 +1248,8 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
             "descending": "true",
             "accessCode": access_code or "",
         }
-        merged: List[Dict[str, Any]] = []
-        page = 1
-        while True:
+        collector = Collector()
+        for page in range(1, 201):
             params["pageNum"] = page
             resp = self._request("GET", url, params=params, timeout=15)
             try:
@@ -1262,8 +1267,12 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
                     raise RuntimeError(j.get("res_message") or "解析分享失败")
                 ao = j.get("fileListAO") if isinstance(j, dict) else None
                 if not isinstance(ao, dict):
-                    break
-                total = int(ao.get("count") or 0)
+                    if not is_folder and page == 1:
+                        return []
+                    if page == 1:
+                        raise _UnresolvedShareDirectory("分享目录响应缺少文件列表")
+                    raise RuntimeError("分享目录响应缺少文件列表")
+                total = ao.get("count")
                 folder_list = ao.get("folderList") or []
                 file_list = ao.get("fileList") or []
                 batch: List[Dict[str, Any]] = []
@@ -1297,11 +1306,8 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
                                 "isFolder": False,
                             }
                         )
-                merged.extend(batch)
-                if total and page * 60 >= total:
-                    break
-                if not batch:
-                    break
+            except _UnresolvedShareDirectory:
+                raise
             except Exception:
                 text = (resp.text or "").strip()
                 if not text.startswith("<?xml"):
@@ -1316,12 +1322,12 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
                 root = ET.fromstring(text)
                 file_list_node = root.find("fileList")
                 if file_list_node is None:
-                    break
-                count_text = self._xml_text(file_list_node, "count")
-                try:
-                    total = int(count_text) if count_text else 0
-                except Exception:
-                    total = 0
+                    if not is_folder and page == 1:
+                        return []
+                    if page == 1:
+                        raise _UnresolvedShareDirectory("分享目录响应缺少文件列表")
+                    raise RuntimeError("分享目录响应缺少文件列表")
+                total = self._xml_text(file_list_node, "count") or None
                 batch = []
                 for child in list(file_list_node):
                     if child.tag not in ("folder", "file"):
@@ -1336,16 +1342,12 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
                         "isFolder": child.tag == "folder",
                     }
                     batch.append(item)
-                merged.extend(batch)
-                if total and page * 60 >= total:
-                    break
-                if not batch:
-                    break
-            page += 1
-            if page > 200:
-                break
-            time.sleep(0.2)
-        return merged
+            collector.add([dict(item, fid=item["id"]) for item in batch], total)
+            if not batch or len(collector.items) == collector.expected:
+                return collector.result()["data"]["list"]
+            if page < 200:
+                time.sleep(0.2)
+        raise RuntimeError("分享目录达到分页上限")
 
     def _build_share_full_path_by_code_v2(
         self, share_meta: Dict[str, Any], root_file_id: str, target_file_id: str, access_code: str
@@ -1538,8 +1540,16 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
             resolved_pdir_fid: str | None = None
             try:
                 share_meta = {"shareId": share_id, "shareMode": share_mode}
-                items = self._list_share_dir_by_code_v2(share_meta, file_id, access_code, is_folder=True)
-                if (not items) and file_id and (file_id != root_file_id) and str(file_id) not in ("0", "root", "/"):
+                selected_child = bool(file_id and file_id != root_file_id and file_id not in ("0", "root", "/"))
+                unresolved = None
+                try:
+                    items = self._list_share_dir_by_code_v2(share_meta, file_id, access_code, is_folder=True)
+                except _UnresolvedShareDirectory as exc:
+                    if not selected_child:
+                        raise
+                    unresolved = exc
+                    items = []
+                if not items and selected_child:
                     file_items = self._list_share_dir_by_code_v2(share_meta, file_id, access_code, is_folder=False)
                     if file_items:
                         parent_id = str(file_items[0].get("parentId") or "").strip()
@@ -1547,6 +1557,8 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
                             resolved_pdir_fid = parent_id
                             file_id = parent_id
                             items = self._list_share_dir_by_code_v2(share_meta, file_id, access_code, is_folder=True)
+                    if unresolved is not None and resolved_pdir_fid is None:
+                        raise unresolved
             except Exception as e:
                 return {"code": 1, "message": str(e) or "解析分享失败", "data": {"list": []}}
             parent_id = str(file_id)
@@ -1612,7 +1624,10 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
             parent_id = str(pdir_fid or "0")
         except Exception:
             parent_id = "0"
-        items = self._list_share_dir(share_id, verify_code, stoken or "", parent_id)
+        try:
+            items = self._list_share_dir(share_id, verify_code, stoken or "", parent_id)
+        except Exception as exc:
+            return {"code": 1, "message": str(exc) or "解析分享失败", "data": {"list": []}}
         data_list: List[Dict[str, Any]] = []
         for it in items:
             name = it.get("fileName") or ""
@@ -1651,10 +1666,11 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
         access_code: str,
         parent_id: str,
     ) -> List[Dict[str, Any]]:
+        from .complete_listing import Collector, integer, mapping, rows
+
         url = f"{self.HOST_URL}/v2/listShareDir.action"
-        merged: List[Dict[str, Any]] = []
-        page = 1
-        while True:
+        collector = Collector()
+        for page in range(1, 101):
             params: Dict[str, Any] = {
                 "shareId": share_id,
                 "verifyCode": verify_code,
@@ -1666,25 +1682,16 @@ FlhDeqVOG094hFJvZeK4OzA6HVwzwnEW5vIZ7d+u61RV1bsFxmB68+8JXs3ycGcE
             }
             if parent_id not in ("0", "", None):
                 params["fileId"] = parent_id
-            j = self._request_json("GET", url, params=params, timeout=15)
-            if isinstance(j, dict) and "errorVO" in j:
+            j = mapping(self._request_json("GET", url, params=params, timeout=15))
+            if "errorVO" in j:
                 raise RuntimeError("提取码错误或资源不可访问")
-            data = (j or {}).get("data") if isinstance(j, dict) else None
-            if not isinstance(data, list):
-                data = []
-            merged.extend(data)
-            record_count = (j or {}).get("recordCount") if isinstance(j, dict) else None
-            page_size = (j or {}).get("pageSize") if isinstance(j, dict) else None
-            page_num = (j or {}).get("pageNum") if isinstance(j, dict) else None
-            if isinstance(record_count, int) and isinstance(page_size, int) and isinstance(page_num, int):
-                if record_count <= page_size * page_num:
-                    break
-            if not data:
-                break
-            page += 1
-            if page > 100:
-                break
-        return merged
+            if "pageNum" in j and integer(j["pageNum"]) != page:
+                raise RuntimeError("分享目录页码与请求不一致")
+            data = rows(j.get("data"))
+            collector.add([dict(item, fid=item.get("fileId")) for item in data], j.get("recordCount"))
+            if not data or len(collector.items) == collector.expected:
+                return collector.result()["data"]["list"]
+        raise RuntimeError("分享目录达到分页上限")
 
     def _map_root_fid(self, fid: str) -> str:
         if not fid or str(fid) in ("0", "root", "/"):

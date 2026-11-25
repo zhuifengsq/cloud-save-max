@@ -30,11 +30,16 @@ class SqlTaskRunStore:
             row = None
             values = dict(command.preview, id=0, enabled=True)
         task = TaskRunState(**values)
+        reservation = command.scheduled_identity
+        if reservation is not None and not reservation.matches(task):
+            raise ApiError("TASK_CHANGED", "调度后任务配置已变更，留待下轮执行", 409)
         if not task.enabled:
             from app.core.errors import bad_request
             raise bad_request('TASK_DISABLED', '任务已禁用')
         self.baseline = {key:getattr(task,key) for key in ('extra_json','shareurl','enabled','account_name','savepath')}
         data = TaskExecutor._task_to_dict(task)
+        if command.schedule_now is not None:
+            data['schedule_now'] = command.schedule_now
         if row is not None and task.task_type == 'drama':
             data['drama_transfer_store'] = DramaTransferStore(sessionmaker(bind=self.db.get_bind()), task.id)
         data['magic_regex'] = get_enabled_magic_regex_map(self.db)
@@ -52,6 +57,7 @@ class SqlTaskRunStore:
         setting = self.db.get(NotificationSetting, 1)
         notification_config = load_notification_config(setting) if setting is not None else {}
         return TaskRunPlan(task, {'task_data':data, 'share_check':check,
+                                 'reserved_account':reservation.account_name if reservation and reservation.named_account_reserved else None,
                                  'accounts':load_accounts_payload(self.db), 'notification_config':notification_config})
 
     def save_task(self, task: TaskExecutionState) -> None:
@@ -109,6 +115,11 @@ class PreparedTaskEngine:
     @scoped_adapters
     def execute(self, plan: TaskRunPlan, policy: RunPolicyPort, log: ExecutionLogPort | None, recover: RecoveryCallback) -> TaskRunResult:
         manager = DatabaseAccountManager.from_payload(plan.prepared['accounts'])
+        reserved_account = plan.prepared.get('reserved_account')
+        if reserved_account:
+            selected = manager.get_adapter_for_task(plan.prepared['task_data'])
+            if getattr(selected, 'account_name', None) != reserved_account:
+                raise ApiError("TASK_ACCOUNT_CHANGED", "本轮指定账号不可用，留待下轮重新调度", 409)
         check = probe_generated_share_check(plan.prepared['share_check'], manager,
                                            always_notify=policy.share_check_always_notify)
         executor = TaskExecutor(None)
