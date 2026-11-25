@@ -1146,4 +1146,40 @@ onBeforeUnmount(() => {
     max-width: 220px;
   }
 }
+
+@media (max-width: 767px) {
+  .dashboard-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .dashboard-metrics .metric-tile {
+    padding: 14px 12px;
+  }
+
+  .dashboard-metrics .metric-tile:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+
+  .dashboard-metrics .metric-tile__label {
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .dashboard-metrics .metric-tile__icon {
+    width: 24px;
+    height: 24px;
+    font-size: 13px;
+  }
+
+  .dashboard-metrics .metric-tile__value {
+    margin-top: 6px;
+    font-size: 24px;
+  }
+
+  .dashboard-metrics .metric-tile__hint {
+    margin-top: 6px;
+    font-size: 11.5px;
+  }
+}
 </style>

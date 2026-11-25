@@ -482,6 +482,7 @@ html:root[data-theme='dark'] .glass-panel {
   min-height: 100vh;
   margin: 0;
   padding: 0;
+  transition: grid-template-columns 0.18s ease;
 }
 
 .app-aside {
@@ -513,6 +514,21 @@ html:root[data-theme='dark'] .glass-panel {
   align-items: center;
   gap: 10px;
   padding: 0 8px 6px;
+}
+
+.app-logo__text {
+  min-width: 0;
+  flex: 1;
+}
+
+.app-collapse-btn {
+  flex: 0 0 auto;
+  padding: 6px;
+  color: var(--ink-muted);
+}
+
+.app-collapse-btn:hover {
+  color: var(--brand);
 }
 
 .app-logo__mark {
@@ -1466,6 +1482,75 @@ pre {
   }
 }
 
+.mobile-tabbar {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .app-shell.app-shell--collapsed {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .app-shell--collapsed .app-nav-card {
+    padding: 16px 6px 14px;
+    gap: 12px;
+  }
+
+  .app-shell--collapsed .app-logo {
+    flex-direction: column;
+    padding: 0 0 6px;
+    gap: 8px;
+  }
+
+  .app-shell--collapsed .app-logo__mark {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  .app-shell--collapsed .app-logo__text,
+  .app-shell--collapsed .app-nav-section__title,
+  .app-shell--collapsed .app-aside-actions__label,
+  .app-shell--collapsed .app-user-meta {
+    display: none;
+  }
+
+  .app-shell--collapsed .app-menu.el-menu--collapse {
+    width: 100%;
+  }
+
+  .app-shell--collapsed .app-menu.el-menu--collapse .el-menu-item,
+  .app-shell--collapsed .app-menu.el-menu--collapse .el-sub-menu__title,
+  .app-shell--collapsed .app-menu.el-menu--collapse .el-menu-tooltip__trigger {
+    justify-content: center;
+    padding: 0 !important;
+  }
+
+  .app-shell--collapsed .app-menu.el-menu--collapse .el-sub-menu__icon-arrow {
+    display: none;
+  }
+
+  .app-shell--collapsed .app-menu.el-menu--collapse .el-icon {
+    margin: 0 !important;
+  }
+
+  .app-shell--collapsed .app-aside-actions {
+    padding: 12px 2px 0;
+    align-items: center;
+  }
+
+  .app-shell--collapsed .app-aside-actions__row {
+    justify-content: center;
+  }
+
+  .app-shell--collapsed .app-user-footer {
+    flex-direction: column;
+    padding: 8px 6px;
+    gap: 6px;
+    width: 100%;
+  }
+}
+
 @media (max-width: 767px) {
   .el-dialog {
     padding: 18px;
@@ -1492,8 +1577,52 @@ pre {
   }
 
   .app-content {
-    padding: 16px 14px 28px;
+    padding: 16px 14px calc(84px + env(safe-area-inset-bottom));
     gap: 22px;
+  }
+
+  .mobile-tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    gap: 4px;
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--card) 90%, transparent);
+    backdrop-filter: blur(16px);
+    border-top: 1px solid var(--line);
+  }
+
+  .mobile-tabbar__item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-height: 46px;
+    padding: 4px 2px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink-muted);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease;
+  }
+
+  .mobile-tabbar__item .el-icon {
+    font-size: 19px;
+  }
+
+  .mobile-tabbar__item.is-active {
+    color: var(--brand);
+    background: var(--brand-soft);
+    font-weight: 600;
   }
 
   .app-header {

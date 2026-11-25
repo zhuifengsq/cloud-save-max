@@ -1816,6 +1816,7 @@ watch(
 .month-title {
   font-size: 18px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .month-nav {
@@ -2136,6 +2137,29 @@ watch(
 
   .month-day {
     font-size: 11px;
+  }
+}
+
+@media (max-width: 767px) {
+  .month-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .month-title {
+    order: 1;
+  }
+
+  .month-nav {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .month-legend {
+    order: 3;
+    flex: 1 0 100%;
+    margin-left: 0;
+    font-size: 12px;
   }
 }
 

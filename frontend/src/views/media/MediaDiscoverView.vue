@@ -795,7 +795,7 @@ watch(() => route.name, (name, previousName) => {
       v-model="detail.visible"
       :title="detailTitle"
       class="media-detail-dialog"
-      width="700px"
+      :width="isMobile ? 'calc(100vw - 20px)' : '700px'"
       align-center
     >
       <div v-loading="detail.loading" class="detail">
@@ -871,10 +871,10 @@ watch(() => route.name, (name, previousName) => {
         <div v-if="detail.mediaType === 'tv' && tvSeasons.length" class="detail__seasons">
           <div class="detail__section-title">季信息</div>
           <el-table :data="tvSeasons" size="small" style="width: 100%">
-            <el-table-column prop="season_number" label="季" width="60" />
-            <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
-            <el-table-column prop="episode_count" label="集数" width="70" />
-            <el-table-column prop="air_date" label="首播" width="110" />
+            <el-table-column prop="season_number" label="季" :width="isMobile ? 42 : 60" />
+            <el-table-column prop="name" label="名称" :min-width="isMobile ? 96 : 140" show-overflow-tooltip />
+            <el-table-column prop="episode_count" label="集数" :width="isMobile ? 54 : 70" />
+            <el-table-column prop="air_date" label="首播" :width="isMobile ? 92 : 110" />
           </el-table>
         </div>
       </div>
@@ -1416,6 +1416,10 @@ watch(() => route.name, (name, previousName) => {
 }
 
 @media (max-width: 767px) {
+  :global(.media-detail-dialog.el-dialog) {
+    padding: 14px;
+  }
+
   .poster-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
@@ -1428,7 +1432,13 @@ watch(() => route.name, (name, previousName) => {
   }
 
   .detail {
-    padding: 0 0 18px;
+    padding: 0 0 12px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .detail__hero {
+    padding: 14px;
   }
 
   .detail__top {
@@ -1438,6 +1448,20 @@ watch(() => route.name, (name, previousName) => {
   .detail__poster {
     width: 120px;
     height: 168px;
+  }
+
+  .detail__overview-box {
+    padding: 12px;
+    min-width: 0;
+  }
+
+  .detail__seasons {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .detail__seasons :deep(.el-table .cell) {
+    padding: 0 8px;
   }
 }
 </style>

@@ -21,6 +21,7 @@ import type { RouteRecordRaw } from 'vue-router'
 defineProps<{
   items: RouteRecordRaw[]
   activePath: string
+  collapse?: boolean
 }>()
 
 const emit = defineEmits(['select'])
@@ -58,7 +59,14 @@ function menuRouteIndex(route: any, parent?: any) {
 </script>
 
 <template>
-  <el-menu router :default-active="activePath" class="app-menu" @select="emit('select')">
+  <el-menu
+    router
+    :default-active="activePath"
+    :collapse="collapse"
+    :collapse-transition="false"
+    class="app-menu"
+    @select="emit('select')"
+  >
     <template v-for="item in items" :key="String(item.name)">
       <el-sub-menu v-if="item.children?.some((child) => !child.meta?.hidden)" :index="routeIndex(item.path)">
         <template #title>
@@ -75,14 +83,18 @@ function menuRouteIndex(route: any, parent?: any) {
           <el-icon>
             <component :is="iconMap[child.meta?.icon as keyof typeof iconMap] || iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
           </el-icon>
-          <span>{{ child.meta?.title }}</span>
+          <template #title>
+            <span>{{ child.meta?.title }}</span>
+          </template>
         </el-menu-item>
       </el-sub-menu>
       <el-menu-item v-else :index="routeIndex(item.path)">
         <el-icon>
           <component :is="iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
         </el-icon>
-        <span>{{ item.meta?.title }}</span>
+        <template #title>
+          <span>{{ item.meta?.title }}</span>
+        </template>
       </el-menu-item>
     </template>
   </el-menu>
