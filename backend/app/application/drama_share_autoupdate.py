@@ -226,6 +226,25 @@ def _prepare_candidates(db: Session, *, suggestions: list[dict], addition: dict,
     return candidates, stats
 
 
+def _group_latest_ts(file_list: Any, fallback_ts: Any = 0) -> int:
+    latest_ts = 0
+    if isinstance(file_list, (list, tuple)):
+        for item in file_list:
+            if not isinstance(item, dict):
+                continue
+            try:
+                ts = int(float(item.get("updated_at") or 0))
+            except (TypeError, ValueError):
+                ts = 0
+            latest_ts = max(latest_ts, ts)
+    if latest_ts == 0 and fallback_ts:
+        try:
+            latest_ts = int(float(fallback_ts or 0))
+        except (TypeError, ValueError):
+            latest_ts = 0
+    return latest_ts
+
+
 def _pick_fid_for_normal_mode(groups: list) -> str | None:
     """普通模式按目录优先级、文件数和文件更新时间选组。"""
     best_fid: str | None = None
@@ -236,13 +255,7 @@ def _pick_fid_for_normal_mode(groups: list) -> str | None:
         file_list, fid = group[:2]
         if not file_list or fid is None:
             continue
-        latest_ts = 0
-        for item in file_list:
-            try:
-                ts = int(float(item.get("updated_at") or 0))
-            except (TypeError, ValueError):
-                ts = 0
-            latest_ts = max(latest_ts, ts)
+        latest_ts = _group_latest_ts(file_list)
         score = (bool(getattr(group, "priority", False)), len(file_list), latest_ts)
         if score > best_score:
             best_score = score
@@ -251,13 +264,34 @@ def _pick_fid_for_normal_mode(groups: list) -> str | None:
 
 
 def _pick_fid_for_folder_diff(groups: list, taskname: str) -> str:
-    branches = []
+    lower_task = taskname.lower()
+    branch_scores: dict[str, list[Any]] = {}
     for group in groups:
         branch = getattr(group, "branch", None)
         if branch is None:
             return str(getattr(group, "fid", "") or "")
-        branches.append(branch)
-    return max(branches, key=lambda branch: taskname.lower() in branch[1].lower())[0]
+        branch_fid = str(branch[0] or "")
+        branch_name = str(branch[1] or "")
+        file_list = group[0] if isinstance(group, (tuple, list)) and len(group) > 0 else []
+        fallback_ts = group[2] if isinstance(group, (tuple, list)) and len(group) > 2 else 0
+        has_priority = bool(getattr(group, "priority", False))
+        file_count = len(file_list) if isinstance(file_list, (list, tuple)) else 0
+        latest_ts = _group_latest_ts(file_list, fallback_ts)
+        entry = branch_scores.get(branch_fid)
+        if entry is None:
+            branch_scores[branch_fid] = [
+                bool(lower_task and lower_task in branch_name.lower()),
+                has_priority,
+                file_count,
+                latest_ts,
+            ]
+        else:
+            entry[1] = entry[1] or has_priority
+            entry[2] += file_count
+            entry[3] = max(entry[3], latest_ts)
+    if not branch_scores:
+        return ""
+    return max(branch_scores.items(), key=lambda item: tuple(item[1]))[0]
 
 
 def resolve_drama_shareurl_update(

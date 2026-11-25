@@ -98,3 +98,60 @@ def test_baidu_classify_share_failure_auth_precedes_invalid() -> None:
     assert adapter.classify_share_failure({"code": -6, "message": "Cookie已失效"})["kind"] == "auth"
     assert adapter.classify_share_failure({"message": "请重新登录，Cookie已失效"})["kind"] == "auth"
     assert adapter.classify_share_failure({"code": -12, "message": "分享已失效"})["kind"] == "invalid"
+
+
+def test_retry_utils_stops_on_non_transient_auth_and_non_retryable_result() -> None:
+    from app.infrastructure.execution.retry_utils import RetryResult, is_transient_error, retry_call
+
+    assert is_transient_error(payload={"status": 500, "message": "Cookie已失效"}) is False
+    assert is_transient_error(payload={"status": 500, "message": "百度网盘客户端未初始化"}) is False
+    assert is_transient_error(payload={"status": 503, "message": "Service Unavailable"}) is True
+
+    attempts = 0
+
+    def _call() -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        return {"status": 503, "message": "bad response"}
+
+    with pytest.raises(RuntimeError):
+        retry_call(
+            action="test",
+            fn=_call,
+            validate=lambda r: RetryResult(value=r, ok=False, error_message="permanent", retryable=False),
+            attempts=3,
+            backoff_seconds=0.0,
+        )
+    assert attempts == 1
+
+
+def test_baidu_rename_batch_chunks_and_propagates_errors() -> None:
+    from app.infrastructure.drive.adapters.baidu_adapter import BaiduAdapter
+
+    adapter = object.__new__(BaiduAdapter)
+    adapter._session = object()
+    adapter._resolve_fid_to_path = lambda fid: str(fid)  # type: ignore[method-assign]
+    adapter._get_error_message = lambda errno: f"err:{errno}"  # type: ignore[method-assign]
+    batches: list[list[dict[str, str]]] = []
+
+    def _operate(op: str, params: list[dict[str, str]]) -> dict[str, int]:
+        assert op == "move"
+        batches.append(params)
+        return {"errno": 0}
+
+    adapter._api_file_operate = _operate  # type: ignore[method-assign]
+    res = adapter.rename_batch(
+        [("/show/a.mp4", "E01.mp4"), ("/show/b.mp4", "E02.mp4"), ("/show/c.mp4", "E03.mp4")],
+        chunk_size=2,
+    )
+    assert res == {"code": 0, "message": "success"}
+    assert len(batches) == 2
+    assert batches[0] == [
+        {"from": "/show/a.mp4", "to": "/show/E01.mp4"},
+        {"from": "/show/b.mp4", "to": "/show/E02.mp4"},
+    ]
+    assert batches[1] == [{"from": "/show/c.mp4", "to": "/show/E03.mp4"}]
+
+    adapter._api_file_operate = lambda op, params: {"errno": -9}  # type: ignore[method-assign]
+    err_res = adapter.rename_batch([("/show/a.mp4", "E01.mp4")])
+    assert err_res == {"code": -9, "message": "err:-9"}

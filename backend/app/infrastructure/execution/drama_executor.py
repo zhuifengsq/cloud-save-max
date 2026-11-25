@@ -92,18 +92,36 @@ def _validate_code_status(action: str, resp: Any) -> RetryResult:
     return RetryResult(value=resp, ok=True)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
+def check_drama_schedule_skip(
+    task_data: dict[str, Any],
+    *,
+    manual_run: bool,
+    log: ExecutionLogPort | None = None,
+) -> str | None:
+    """Return skip_reason if scheduled drama task should skip before touching cloud drives."""
+    extra = task_data.get("extra") or {}
+    now = task_data.get("schedule_now") or datetime.now()
+    decision = resolve_run_schedule(
+        task_type="drama",
+        extra=extra if isinstance(extra, dict) else {},
+        now=now,
+        tmdb_id=task_data.get("tmdb_id"),
+        tmdb_media_type=task_data.get("tmdb_media_type"),
+        tmdb_configured=bool(task_data.get("tmdb_configured")),
+        episode_weekdays=task_data.get("tmdb_episode_weekdays") or [],
+        update_weekdays=task_data.get("tmdb_update_weekdays") or [],
+    )
+    if not requires_skip(decision, manual_run):
+        return None
+    if log is not None:
+        log.set_stage("validate_schedule")
+        log.section("验证调度条件")
+        log.line(f"执行时间: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        if decision.reason == REASON_OFF_DAY:
+            log.line(f"跳过: 星期 {now.isoweekday()} 不在 {list(decision.weekdays)}")
+        else:
+            log.line(f"跳过: {decision.skip_reason}")
+    return decision.skip_reason
 
 
 class DramaTaskExecutor:
@@ -334,10 +352,14 @@ class DramaTaskExecutor:
                 return RetryResult(value=detail, ok=False, error_message=f"get_detail invalid response: {summarize_payload(detail)}")
             status = detail.get("status")
             if status is not None and status not in (200, "200"):
-                return RetryResult(value=detail, ok=False, error_message=f"get_detail status={status} message={detail.get('message') or ''} resp={summarize_payload(detail)}")
+                msg = f"get_detail status={status} message={detail.get('message') or ''} resp={summarize_payload(detail)}"
+                kind, _ = self._classify_share_response(detail, msg)
+                return RetryResult(value=detail, ok=False, error_message=msg, retryable=kind not in {"invalid", "auth", "passcode", "captcha", "pending"})
             code = detail.get("code")
             if code is not None and code not in (0, "0"):
-                return RetryResult(value=detail, ok=False, error_message=f"get_detail code={code} message={detail.get('message') or ''} resp={summarize_payload(detail)}")
+                msg = f"get_detail code={code} message={detail.get('message') or ''} resp={summarize_payload(detail)}"
+                kind, _ = self._classify_share_response(detail, msg)
+                return RetryResult(value=detail, ok=False, error_message=msg, retryable=kind not in {"invalid", "auth", "passcode", "captcha", "pending"})
             data = detail.get("data")
             if not isinstance(data, dict) or not isinstance(data.get("list"), list):
                 return RetryResult(value=detail, ok=False, error_message=f"get_detail invalid list: {summarize_payload(detail)}")
@@ -649,18 +671,15 @@ class DramaTaskExecutor:
         target = str(target or "")
         if not fid or not origin or not target or origin == target:
             return True
+        target_fid = (
+            f"{destination.rstrip('/')}/{origin}"
+            if self._quark_strategy is None and getattr(self.adapter, "DRIVE_TYPE", None) == "baidu"
+            else fid
+        )
         try:
-            if self._quark_strategy is None:
-                if getattr(self.adapter, "DRIVE_TYPE", None) == "baidu":
-                    # Baidu addresses the write by path; verification uses fs_id.
-                    fid = f"{destination.rstrip('/')}/{origin}"
-                verdict = _validate_code_status("rename", self.adapter.rename(fid, target))
-                if not verdict.ok:
-                    raise RuntimeError(verdict.error_message)
-                return True
             self._retry(
                 action="rename",
-                fn=lambda: self.adapter.rename(fid, target),
+                fn=lambda: self.adapter.rename(target_fid, target),
                 validate=lambda r: _validate_code_status("rename", r),
             )
             return True
@@ -679,9 +698,30 @@ class DramaTaskExecutor:
             return True, {}
 
         if not verify_first:
-            for fid, origin, target in attempted:
-                self._line(f"重命名：{origin} → {target}")
-                self._rename_one(fid=fid, origin=origin, target=target, destination=dest_root_fid)
+            rename_batch = getattr(self.adapter, "rename_batch", None)
+            if (
+                len(attempted) > 1
+                and self._quark_strategy is None
+                and getattr(self.adapter, "DRIVE_TYPE", None) == "baidu"
+                and callable(rename_batch)
+            ):
+                pairs = [(f"{dest_root_fid.rstrip('/')}/{origin}", target) for _fid, origin, target in attempted]
+                try:
+                    self._retry(
+                        action="rename_batch",
+                        fn=lambda: rename_batch(pairs),
+                        validate=lambda r: _validate_code_status("rename_batch", r),
+                    )
+                    self._line(f"批量重命名: {len(pairs)} 项")
+                except Exception as exc:
+                    self._line(f"批量重命名失败，回退逐条重命名: {str(exc).strip() or type(exc).__name__}")
+                    for fid, origin, target in attempted:
+                        self._line(f"重命名：{origin} → {target}")
+                        self._rename_one(fid=fid, origin=origin, target=target, destination=dest_root_fid)
+            else:
+                for fid, origin, target in attempted:
+                    self._line(f"重命名：{origin} → {target}")
+                    self._rename_one(fid=fid, origin=origin, target=target, destination=dest_root_fid)
 
         fid_name = self._read_rename_names(dest_root_fid)
         if fid_name is None:
@@ -801,7 +841,13 @@ class DramaTaskExecutor:
             if st:
                 return RetryResult(value=resp, ok=True)
             msg = (resp or {}).get("message") or "获取分享 token 失败"
-            return RetryResult(value=resp, ok=False, error_message=f"{msg} resp={summarize_payload(resp)}")
+            kind, _ = self._classify_share_response(resp, str(msg))
+            return RetryResult(
+                value=resp,
+                ok=False,
+                error_message=f"{msg} resp={summarize_payload(resp)}",
+                retryable=kind not in {"invalid", "auth", "passcode", "captcha", "pending"},
+            )
 
         try:
             token_response = self._retry(action="get_stoken", fn=_call_get_stoken, validate=_validate_stoken)

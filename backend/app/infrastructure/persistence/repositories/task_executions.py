@@ -12,17 +12,32 @@ from app.infrastructure.persistence.models.task_execution import TaskExecution
 
 
 def list_stale_execution_ids(db: Session, *, task_id: int, limit: int) -> list[Any]:
-    rows = (
+    rows = list(
         db.execute(
-            select(TaskExecution.id)
+            select(TaskExecution.id, TaskExecution.status)
             .where(TaskExecution.task_id == int(task_id))
             .order_by(TaskExecution.started_at.desc(), TaskExecution.id.desc())
-            .offset(limit)
-        )
-        .scalars()
-        .all()
+        ).all()
     )
-    return list(rows)
+    if len(rows) <= limit:
+        return []
+    if limit <= 1:
+        return [row_id for row_id, _status in rows[limit:]]
+
+    max_effective = max(1, limit // 2)
+    kept_ids: set[int] = set()
+    effective_count = 0
+    for row_id, status in rows:
+        if status != "skipped":
+            kept_ids.add(int(row_id))
+            effective_count += 1
+            if effective_count >= max_effective:
+                break
+    for row_id, _status in rows:
+        if len(kept_ids) >= limit:
+            break
+        kept_ids.add(int(row_id))
+    return [row_id for row_id, _status in rows if int(row_id) not in kept_ids]
 
 
 def delete_executions(db: Session, *, ids: list[int]) -> int:

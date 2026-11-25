@@ -1,6 +1,7 @@
 """Infrastructure stages. No execution commit is owned here."""
 import json
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 from sqlalchemy.orm import Session, sessionmaker
 from app.domain.task_run import ExecutionLogPort, RecoveryCallback, RunPolicyPort, TaskExecutionState
@@ -10,13 +11,58 @@ from app.infrastructure.persistence.models.task import Task
 from app.application.dto.task_run import TaskRunPlan, TaskRunResult, TaskRunState, RunTaskCommand
 from app.application.tasks import get_task
 from app.application.magic_regex import get_enabled_magic_regex_map
-from app.application.generated_share_check import prepare_generated_share_check, probe_generated_share_check
+from app.application.generated_share_check import SNAPSHOT_KEY, prepare_generated_share_check, probe_generated_share_check
 from app.application.task_executions import prune_task_executions
 from app.infrastructure.persistence.models.task_execution import TaskExecution
 from app.infrastructure.persistence.repositories.drama_transfers import DramaTransferStore
 from app.infrastructure.drive.account_manager import load_accounts_payload, DatabaseAccountManager
+from app.infrastructure.drive.factory import AdapterFactory
+from app.infrastructure.execution.drama_executor import check_drama_schedule_skip
+from app.infrastructure.execution.execution_log import ExecutionLog
 from app.infrastructure.execution.task_executor import TaskExecutor
 from app.infrastructure.drive.lifecycle import scoped_adapters
+
+
+def scope_accounts_payload(
+    payload: dict[str, Any],
+    *,
+    task_data: dict[str, Any] | None = None,
+    share_check: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Filter accounts snapshot down to accounts needed by this task and its outbound share check."""
+    accounts = payload.get("accounts")
+    if not isinstance(accounts, list):
+        return payload
+
+    needed_names: set[str] = set()
+    needed_drives: set[str] = set()
+    record = share_check.get("record") if isinstance(share_check, dict) else None
+    for cfg in (task_data, record if isinstance(record, dict) else None):
+        if not isinstance(cfg, dict):
+            continue
+        name = str(cfg.get("account_name") or "").strip()
+        if name:
+            needed_names.add(name)
+            continue
+        url = str(cfg.get("shareurl") or cfg.get("share_url") or "").strip()
+        drive = AdapterFactory.get_drive_type_by_url(url) if url else None
+        if not drive:
+            return payload
+        needed_drives.add(drive)
+
+    if not needed_names and not needed_drives:
+        return payload
+
+    filtered = [
+        acc
+        for acc in accounts
+        if isinstance(acc, dict)
+        and (
+            str(acc.get("name") or "").strip() in needed_names
+            or str(acc.get("drive_type") or "").strip() in needed_drives
+        )
+    ]
+    return {**payload, "accounts": filtered}
 
 class SqlTaskRunStore:
     def __init__(self, db: Session) -> None:
@@ -114,18 +160,68 @@ class SqlTaskRunStore:
 class PreparedTaskEngine:
     @scoped_adapters
     def execute(self, plan: TaskRunPlan, policy: RunPolicyPort, log: ExecutionLogPort | None, recover: RecoveryCallback) -> TaskRunResult:
-        manager = DatabaseAccountManager.from_payload(plan.prepared['accounts'])
-        reserved_account = plan.prepared.get('reserved_account')
+        task_data = plan.prepared["task_data"]
+        share_check = plan.prepared.get("share_check")
+        if task_data.get("task_type") == "drama" and not policy.manual_run:
+            skip_reason = check_drama_schedule_skip(task_data, manual_run=False, log=None)
+            if skip_reason is not None:
+                run_log: ExecutionLogPort = log or ExecutionLog()
+                run_log.set_stage("start")
+                run_log.section("程序开始")
+                run_log.line(f"执行时间: {run_log.started_at.strftime('%Y-%m-%d %H:%M:%S')}")
+                run_log.line(f"任务名称: {plan.task.taskname}")
+                run_log.line(f"分享链接: {plan.task.shareurl}")
+                run_log.line(f"保存路径: {plan.task.savepath}")
+                run_log.line("")
+                check: dict[str, Any] | None = None
+                if share_check is not None:
+                    scoped_check_accounts = scope_accounts_payload(
+                        plan.prepared["accounts"], task_data=None, share_check=share_check
+                    )
+                    check_manager = DatabaseAccountManager.from_payload(scoped_check_accounts)
+                    check = probe_generated_share_check(
+                        share_check, check_manager, always_notify=policy.share_check_always_notify
+                    )
+                    if check:
+                        run_log.section("分享链接检测")
+                        run_log.line(str(check["message"]))
+                check_drama_schedule_skip(task_data, manual_run=False, log=run_log)
+                run_log.set_stage("validate_schedule")
+                run_log.section("程序结束")
+                finished_at = datetime.now()
+                run_log.line("状态: skipped")
+                run_log.line(f"运行时长: {(finished_at - run_log.started_at).total_seconds():.2f}s")
+                snapshot: dict[str, Any] = {"execution_log": run_log.metadata()}
+                if check:
+                    snapshot[SNAPSHOT_KEY] = check
+                return TaskRunResult(
+                    id=0,
+                    task_id=int(getattr(plan.task, "id", 0) or 0),
+                    status="skipped",
+                    started_at=run_log.started_at,
+                    finished_at=finished_at,
+                    tree_summary="",
+                    message=skip_reason,
+                    stage="validate_schedule",
+                    run_log=run_log.render(),
+                    adapter_snapshot=snapshot,
+                )
+
+        scoped_accounts = scope_accounts_payload(
+            plan.prepared["accounts"], task_data=task_data, share_check=share_check
+        )
+        manager = DatabaseAccountManager.from_payload(scoped_accounts)
+        reserved_account = plan.prepared.get("reserved_account")
         if reserved_account:
-            selected = manager.get_adapter_for_task(plan.prepared['task_data'])
+            selected = manager.get_adapter_for_task(task_data)
             if getattr(selected, 'account_name', None) != reserved_account:
                 raise ApiError("TASK_ACCOUNT_CHANGED", "本轮指定账号不可用，留待下轮重新调度", 409)
-        check = probe_generated_share_check(plan.prepared['share_check'], manager,
+        check = probe_generated_share_check(share_check, manager,
                                            always_notify=policy.share_check_always_notify)
         executor = TaskExecutor(None)
         raw = executor.run_task(plan.task, log=log, persist_execution=False,
                                 account_manager=manager, manual_run=policy.manual_run,
-                                prepared_data=plan.prepared['task_data'],
+                                prepared_data=task_data,
                                 _generated_share_check=check, recover=recover)
         return TaskRunResult(**{field:getattr(raw, field) for field in
             ('id','task_id','status','started_at','finished_at','tree_summary','message','stage','run_log')},

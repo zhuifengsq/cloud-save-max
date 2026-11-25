@@ -295,3 +295,176 @@ def test_magic_rename_sequential_numbering_in_plan_and_no_collision() -> None:
         dest_file_list=[{"server_filename": "Show - E01.mp4", "isdir": 0}],
     )
     assert [item.target_name for item in plan] == ["Show - E02.mp4", "Show - E03.mp4"]
+
+
+def test_off_day_skips_without_adapter_init_or_account_construction() -> None:
+    from datetime import datetime
+    from app.application.dto.task_run import TaskRunPlan
+    from app.domain.task_run import TaskRunState
+    from app.infrastructure.execution import task_run_stages
+
+    engine = task_run_stages.PreparedTaskEngine()
+    off_day = datetime(2026, 11, 16, 12, 0)  # Monday, task allows Wednesday only.
+    plan = TaskRunPlan(
+        task=TaskRunState(id=7, task_uid="off", task_type="drama", taskname="Show", shareurl="https://pan.quark.cn/s/x", savepath="/show", enabled=True),
+        prepared={
+            "task_data": {
+                "task_type": "drama",
+                "taskname": "Show",
+                "shareurl": "https://pan.quark.cn/s/x",
+                "savepath": "/show",
+                "extra": {"runweek_mode": "manual", "runweek": [3]},
+                "schedule_now": off_day,
+            },
+            "share_check": None,
+            "accounts": {"accounts": [{"name": "q1", "drive_type": "quark", "enabled": True}]},
+        },
+    )
+    with patch.object(task_run_stages.DatabaseAccountManager, "from_payload") as from_payload:
+        res = engine.execute(plan, RunPolicy.for_trigger("scheduler"), None, lambda *a: False)
+        assert res.status == "skipped"
+        assert res.stage == "validate_schedule"
+        from_payload.assert_not_called()
+
+    init_calls: list[str] = []
+    adapter = SimpleNamespace(is_active=False, init=lambda: init_calls.append("init"))
+    executor = TaskExecutor(db=None)
+    with pytest.raises(SkipTask):
+        executor._execute_adapter(
+            plan.task,
+            {**plan.prepared["task_data"], "manual_run": False},
+            adapter,
+            ExecutionLog(),
+            False,
+            plan.prepared["task_data"],
+        )
+    assert init_calls == []
+
+
+def test_baidu_batch_rename_and_transient_retry() -> None:
+    attempts = 0
+    batch_calls: list[list[tuple[str, str]]] = []
+
+    def _batch(pairs: list[tuple[str, str]]) -> dict[str, object]:
+        batch_calls.append(pairs)
+        return {"code": 0}
+
+    def _rename(fid: str, name: str) -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return {"status": 503, "message": "service unavailable"}
+        return {"code": 0}
+
+    baidu = object.__new__(BaiduAdapter)
+    baidu.DRIVE_TYPE = "baidu"
+    baidu.rename_batch = _batch  # type: ignore[method-assign]
+    baidu.rename = _rename  # type: ignore[method-assign]
+    baidu.ls_dir_complete = lambda dest: {  # type: ignore[method-assign]
+        "code": 0,
+        "data": {"list": [{"fs_id": "1", "file_name": "E01.mp4"}, {"fs_id": "2", "file_name": "E02.mp4"}]},
+    }
+    ex = DramaTaskExecutor(adapter=baidu, task_data={"task_type": "drama", "taskname": "S", "shareurl": "s", "savepath": "/show"}, log=ExecutionLog())
+    with patch("app.infrastructure.execution.retry_utils.time.sleep"):
+        ok, _ = ex._rename_by_fids(
+            saved_fids=["1", "2"],
+            plan=[
+                SimpleNamespace(origin_name="a.mp4", target_name="E01.mp4"),  # type: ignore[list-item]
+                SimpleNamespace(origin_name="b.mp4", target_name="E02.mp4"),  # type: ignore[list-item]
+            ],
+            dest_root_fid="/show",
+        )
+        assert ok is True
+        assert batch_calls == [[("/show/a.mp4", "E01.mp4"), ("/show/b.mp4", "E02.mp4")]]
+        assert ex._rename_one(fid="1", origin="a.mp4", target="E01.mp4", destination="/show") is True
+        assert attempts == 2
+
+
+def test_prune_task_executions_preserves_effective_history_under_skipped_flood(tmp_path: Path) -> None:
+    from datetime import datetime, timedelta
+    from sqlalchemy import select
+    from app.application.task_executions import prune_task_executions
+    from app.infrastructure.persistence.models.task_execution import TaskExecution
+
+    engine, sessions = _make_session(tmp_path, "prune_skipped.db")
+    try:
+        base = datetime(2026, 1, 1, 0, 0, 0)
+        with sessions.begin() as db:
+            db.add(Task(id=1, task_uid="p1", taskname="p1", task_type="drama", shareurl="https://pan.quark.cn/s/1", savepath="/s"))
+            for i in range(3):
+                db.add(TaskExecution(task_id=1, status="success" if i != 1 else "failed", started_at=base + timedelta(hours=i), run_log="eff"))
+            for i in range(10):
+                db.add(TaskExecution(task_id=1, status="skipped", started_at=base + timedelta(hours=10 + i), run_log="skip"))
+        with sessions.begin() as db:
+            removed = prune_task_executions(db, 1, keep=6)
+            assert removed == 7
+            statuses = list(db.execute(select(TaskExecution.status).where(TaskExecution.task_id == 1)).scalars().all())
+            assert len(statuses) == 6
+            assert sum(1 for s in statuses if s != "skipped") == 3
+    finally:
+        engine.dispose()
+
+
+def test_permanent_share_failure_does_not_retry_stoken_or_detail() -> None:
+    stoken_calls = 0
+    quark = object.__new__(QuarkAdapter)
+    quark.DRIVE_TYPE = "quark"
+    quark.extract_url = lambda url: ("pwd", "", "", None)  # type: ignore[method-assign]
+
+    def _stoken(pwd: str, pc: str = "") -> dict[str, object]:
+        nonlocal stoken_calls
+        stoken_calls += 1
+        return {"code": 41008, "message": "分享已失效"}
+
+    quark.get_stoken = _stoken  # type: ignore[method-assign]
+    ex = DramaTaskExecutor(adapter=quark, task_data={"task_type": "drama", "taskname": "S", "shareurl": "https://pan.quark.cn/s/x", "savepath": "/s"}, log=ExecutionLog())
+    with patch("app.infrastructure.execution.drama_executor.settings.drama_runtime_retry_max_attempts", 3):
+        with pytest.raises(ShareSourceInvalidError):
+            ex.execute()
+    assert stoken_calls == 1
+
+    detail_calls = 0
+
+    def _detail(*args: object) -> dict[str, object]:
+        nonlocal detail_calls
+        detail_calls += 1
+        return {"code": 500, "message": "Cookie 认证失败"}
+
+    quark.get_detail = _detail  # type: ignore[method-assign]
+    with patch("app.infrastructure.execution.drama_executor.settings.drama_runtime_retry_max_attempts", 3):
+        with pytest.raises(ShareAccessError):
+            ex._fetch_share_detail(pwd_id="pwd", stoken="st", pdir_fid="")
+    assert detail_calls == 1
+
+
+def test_folder_diff_autoupdate_picks_best_branch_by_score() -> None:
+    from app.application.drama_share_autoupdate import _pick_fid_for_folder_diff
+    from app.application.share_listing import ShareFileGroup
+
+    groups = [
+        ShareFileGroup(files=[{"updated_at": 100}], fid="s1", updated_at=100, name="1080p", branch=("b_small", "TestShow"), priority=False),
+        ShareFileGroup(files=[{"updated_at": 200}, {"updated_at": 300}], fid="s2", updated_at=300, name="4K", branch=("b_best", "TestShow"), priority=True),
+        ShareFileGroup(files=[{"updated_at": 500}] * 5, fid="s3", updated_at=500, name="4K", branch=("b_other", "Other"), priority=True),
+    ]
+    assert _pick_fid_for_folder_diff(groups, "TestShow") == "b_best"
+
+
+def test_scope_accounts_payload_filters_to_needed_accounts() -> None:
+    from app.infrastructure.execution.task_run_stages import scope_accounts_payload
+
+    payload = {
+        "accounts": [
+            {"name": "q1", "drive_type": "quark"},
+            {"name": "b1", "drive_type": "baidu"},
+            {"name": "x1", "drive_type": "xunlei"},
+        ]
+    }
+    scoped = scope_accounts_payload(
+        payload,
+        task_data={"account_name": "q1", "shareurl": "https://pan.quark.cn/s/abc"},
+        share_check={"record": {"share_url": "https://pan.baidu.com/s/xyz", "account_name": ""}},
+    )
+    assert [a["name"] for a in scoped["accounts"]] == ["q1", "b1"]
+
+    unscoped = scope_accounts_payload(payload, task_data={"account_name": "", "shareurl": "unknown://url"}, share_check=None)
+    assert unscoped == payload

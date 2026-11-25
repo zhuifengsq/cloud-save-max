@@ -104,17 +104,35 @@ def _extract_code(payload: Any) -> int | None:
     return None
 
 
+_NON_TRANSIENT_MARKERS = (
+    "cookie",
+    "未初始化",
+    "未登录",
+    "认证失败",
+    "登录失败",
+    "提取码",
+    "验证码",
+    "分享不存在",
+    "分享已失效",
+    "已被删除",
+    "审核中",
+)
+
+
 def is_transient_error(exc: Exception | None = None, payload: Any | None = None) -> bool:
+    exc_text = str(exc).strip().lower() if exc is not None else ""
+    payload_text = ""
+    if isinstance(payload, dict):
+        payload_text = str(payload.get("message") or payload.get("error") or "").strip().lower()
+    combined = f"{exc_text} {payload_text}".strip()
+    if combined and any(marker in combined for marker in _NON_TRANSIENT_MARKERS):
+        return False
+
     status = _extract_status(payload)
     if status in (408, 425, 429, 500, 502, 503, 504):
         return True
 
-    text = ""
-    if exc is not None:
-        text = str(exc).strip().lower()
-    if not text and isinstance(payload, dict):
-        text = str(payload.get("message") or payload.get("error") or "").strip().lower()
-
+    text = exc_text or payload_text
     if not text:
         return False
 
@@ -145,6 +163,7 @@ class RetryResult:
     value: Any | None
     ok: bool
     error_message: str | None = None
+    retryable: bool = True
 
 
 def retry_call(
@@ -169,6 +188,7 @@ def retry_call(
 
     for attempt in range(1, attempts + 1):
         payload: Any | None = None
+        retryable = True
         try:
             value = fn()
             payload = value
@@ -177,6 +197,7 @@ def retry_call(
             rs = validate(value)
             if rs.ok:
                 return value
+            retryable = bool(rs.retryable)
             raise RuntimeError(rs.error_message or f"{action} failed")
         except Exception as e:
             last_exc = e
@@ -188,7 +209,7 @@ def retry_call(
                     log.warning("retry failed action=%s attempt=%s/%s err=%s payload=%s", action, attempt, attempts, err_text, summarize_payload(payload))
                 except Exception:
                     pass
-            if attempt >= attempts:
+            if attempt >= attempts or not retryable:
                 break
             if not is_transient_error(e, payload):
                 break

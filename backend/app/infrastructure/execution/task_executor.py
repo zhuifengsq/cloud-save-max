@@ -21,6 +21,7 @@ from app.infrastructure.execution.drama_executor import (
     ShareAccessError,
     ShareSourceInvalidError,
     SkipTask,
+    check_drama_schedule_skip,
 )
 from app.infrastructure.execution.execution_log import ExecutionLog, bounded_text
 from app.infrastructure.execution.retry_utils import is_transient_error
@@ -293,6 +294,9 @@ class TaskExecutor:
     def _execute_adapter(self, task: TaskExecutionState, task_data: dict[str, Any], adapter: Any, log: ExecutionLogPort, persist_execution: bool, prepared_data: dict[str, Any] | None) -> ExecutionPayload:
         task_id = int(getattr(task, 'id', 0) or 0)
         drama_executor = None
+        if task_data.get('task_type') == 'drama' and not bool(task_data.get('manual_run')):
+            if skip_reason := check_drama_schedule_skip(task_data, manual_run=False, log=log):
+                raise SkipTask(skip_reason)
         log.set_stage("validate_account")
         log.section("验证账户")
         if not getattr(adapter, 'is_active', False):

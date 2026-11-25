@@ -1355,6 +1355,35 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             logger.error(f"[Baidu] 重命名失败: {type(e).__name__}")
             return {"code": 1, "message": f"重命名失败: {e}"}
 
+    def rename_batch(self, items: List[Tuple[str, str]], *, chunk_size: int = 50) -> Dict:
+        """批量重命名文件，避免多集逐条请求触发限流。"""
+        if not self._session:
+            return {"code": 1, "message": "百度网盘客户端未初始化"}
+        if not items:
+            return {"code": 0, "message": "success"}
+
+        try:
+            params: List[Dict[str, str]] = []
+            for fid, file_name in items:
+                old_path = self._resolve_fid_to_path(fid)
+                if old_path == "/":
+                    return {"code": 1, "message": "未找到文件路径，请先刷新目录"}
+                parent_path = "/".join(old_path.rstrip("/").split("/")[:-1]) or "/"
+                params.append({"from": old_path, "to": f"{parent_path}/{file_name}"})
+
+            step = max(1, int(chunk_size))
+            for offset in range(0, len(params), step):
+                info = self._api_file_operate("move", params[offset : offset + step])
+                if info.get("errno") and info.get("errno") != 0:
+                    errno = info.get("errno")
+                    return {"code": errno, "message": self._get_error_message(errno)}
+
+            return {"code": 0, "message": "success"}
+
+        except Exception as e:
+            logger.error(f"[Baidu] 批量重命名失败: {type(e).__name__}")
+            return {"code": 1, "message": f"批量重命名失败: {e}"}
+
     def delete(self, filelist: List[str]) -> Dict:
         """删除文件"""
         if not self._session:
