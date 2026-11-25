@@ -569,10 +569,10 @@ html:root[data-theme='dark'] .glass-panel {
 
 .app-menu .el-menu-item,
 .app-menu .el-sub-menu__title {
-  height: 44px;
-  margin: 3px 0;
+  height: 52px;
+  margin: 5px 0;
   border-radius: var(--control-radius);
-  font-size: 14px;
+  font-size: 15px;
   color: var(--ink-2);
 }
 
@@ -618,7 +618,7 @@ html:root[data-theme='dark'] .glass-panel {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 20px;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
