@@ -34,29 +34,17 @@ const props = withDefaults(
 )
 
 const rootEl = ref<HTMLDivElement | null>(null)
-let echartsCore: typeof import('echarts/core') | null = null
+let echartsInit: typeof import('@/utils/echartsLine').init | null = null
 let chart: ECharts | null = null
 let resizeObserver: ResizeObserver | null = null
 let themeListener: ((e: Event) => void) | null = null
 
-async function getEcharts() {
-  if (!echartsCore) {
-    const [core, charts, components, renderers] = await Promise.all([
-      import('echarts/core'),
-      import('echarts/charts'),
-      import('echarts/components'),
-      import('echarts/renderers'),
-    ])
-    core.use([
-      charts.LineChart,
-      components.GridComponent,
-      components.TooltipComponent,
-      components.LegendComponent,
-      renderers.CanvasRenderer,
-    ])
-    echartsCore = core
+async function getEchartsInit() {
+  if (!echartsInit) {
+    const mod = await import('@/utils/echartsLine')
+    echartsInit = mod.init
   }
-  return echartsCore
+  return echartsInit
 }
 
 function buildOption(): ChartOption {
@@ -177,8 +165,8 @@ async function ensureChart(retry = 0) {
     return
   }
   if (!chart) {
-    const api = await getEcharts()
-    chart = api.init(el, undefined, { renderer: 'canvas' })
+    const initChart = await getEchartsInit()
+    chart = initChart(el, undefined, { renderer: 'canvas' })
   }
   chart.setOption(buildOption(), { notMerge: true })
 }

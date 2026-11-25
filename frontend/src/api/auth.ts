@@ -13,7 +13,11 @@ export async function loginApi(username: string, password: string) {
 }
 
 export async function refreshApi() {
-  const { data } = await http.post<{ access_token: string; expires_in: number }>('/auth/refresh')
+  const { data } = await http.post<{ access_token: string; expires_in: number }>(
+    '/auth/refresh',
+    undefined,
+    { headers: { 'X-Silent-Toast': '1' } },
+  )
   return data
 }
 

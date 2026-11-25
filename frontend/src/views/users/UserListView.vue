@@ -121,14 +121,17 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="page-stack">
+  <div class="shell-page">
     <div class="section-header">
       <div class="section-header__title">
         <h1>用户管理</h1>
         <div class="section-header__desc">管理登录账号、角色与权限分配。</div>
       </div>
+      <div class="toolbar__right">
+        <el-button v-if="canWrite" type="primary" @click="createDialogVisible = true">新建用户</el-button>
+      </div>
     </div>
-    <el-card shadow="never">
+    <section class="glass-panel filter-strip">
       <div class="toolbar">
         <div class="toolbar__left">
           <div class="user-search">
@@ -145,7 +148,6 @@ onMounted(async () => {
         </div>
 
         <div class="toolbar__right">
-          <el-button v-if="canWrite" type="success" @click="createDialogVisible = true">新建用户</el-button>
           <el-button v-if="canWrite" :disabled="!selectedRows.length" @click="handleBatchStatus(true)">
             批量启用
           </el-button>
@@ -157,23 +159,35 @@ onMounted(async () => {
           </el-button>
         </div>
       </div>
-    </el-card>
+    </section>
 
-    <el-card shadow="never">
+    <section class="glass-panel table-panel">
       <el-table :data="users" border v-loading="loading" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="48" />
-        <el-table-column prop="username" label="用户名" min-width="140" />
-        <el-table-column prop="email" label="邮箱" min-width="220" />
-        <el-table-column label="角色" min-width="220">
+        <el-table-column label="用户名" min-width="160">
           <template #default="{ row }">
-            <div class="tag-list">
-              <el-tag v-for="role in row.roles" :key="role.id" type="info">{{ role.name }}</el-tag>
+            <div class="user-name-cell">
+              <span class="user-avatar" aria-hidden="true">{{ String(row.username || '?').slice(0, 1).toUpperCase() }}</span>
+              <span>{{ row.username }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="120">
+        <el-table-column label="邮箱" min-width="220">
           <template #default="{ row }">
-            <el-tag :type="row.is_active ? 'success' : 'danger'">
+            <span :class="{ 'user-muted': !row.email }">{{ row.email || '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="角色" min-width="200">
+          <template #default="{ row }">
+            <div v-if="row.roles?.length" class="tag-list">
+              <el-tag v-for="role in row.roles" :key="role.id" type="info" round>{{ role.name }}</el-tag>
+            </div>
+            <span v-else class="user-muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="110">
+          <template #default="{ row }">
+            <el-tag :type="row.is_active ? 'success' : 'danger'" round>
               {{ row.is_active ? '启用' : '禁用' }}
             </el-tag>
           </template>
@@ -181,8 +195,7 @@ onMounted(async () => {
         <el-table-column
           v-if="canWrite"
           label="操作"
-          :width="isMobile ? 124 : 240"
-          fixed="right"
+          :width="isMobile ? 124 : 200"
           class-name="user-op-column"
           label-class-name="user-op-column"
         >
@@ -207,7 +220,7 @@ onMounted(async () => {
           @change="loadUsers"
         />
       </div>
-    </el-card>
+    </section>
 
     <RoleAssignDialog
       v-model="roleDialogVisible"
@@ -238,6 +251,34 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.table-panel {
+  padding: 18px;
+}
+
+.user-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-avatar {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-muted {
+  color: var(--ink-muted);
+}
+
 .user-search {
   display: flex;
   align-items: center;

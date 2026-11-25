@@ -184,66 +184,72 @@ async function exportExcel() {
         <el-tab-pane v-for="tab in tabs" :key="tab.key" :label="tab.label" :name="tab.key" />
       </el-tabs>
       <div class="tool-content">
-        <div v-if="activeTab !== 'dual'" class="tool-field">
-          <label for="wps-document-url">WPS 文档链接</label>
-          <div class="wps-source">
-            <el-input id="wps-document-url" v-model="wpsUrl" clearable placeholder="粘贴公开金山文档的分享链接" />
-            <div class="tool-actions">
-              <el-button :disabled="!wpsUrl.trim()" @click="saveWpsUrl">保存链接</el-button>
-              <el-button :disabled="!wpsUrl.trim() || wpsPending !== null" :loading="wpsClearing" @click="clearWpsCache">清除缓存</el-button>
+        <div class="tool-workspace">
+          <div class="tool-pane tool-pane--source">
+            <div v-if="activeTab !== 'dual'" class="tool-field">
+              <label for="wps-document-url">WPS 文档链接</label>
+              <div class="wps-source">
+                <el-input id="wps-document-url" v-model="wpsUrl" clearable placeholder="粘贴公开金山文档的分享链接" />
+                <div class="tool-actions">
+                  <el-button :disabled="!wpsUrl.trim()" @click="saveWpsUrl">保存链接</el-button>
+                  <el-button :disabled="!wpsUrl.trim() || wpsPending !== null" :loading="wpsClearing" @click="clearWpsCache">清除缓存</el-button>
+                </div>
+              </div>
+            </div>
+            <div class="tool-field">
+              <label for="link-source">原始内容</label>
+              <el-input id="link-source" v-model="current.input" type="textarea" :rows="9" :placeholder="tabInfo.placeholder" :disabled="wpsPending === activeTab" @paste="paste" />
+            </div>
+            <div v-if="activeTab === 'quark'" class="tool-field">
+              <label for="quark-suffix">输出后缀</label>
+              <el-input id="quark-suffix" v-model="quarkSuffix" type="textarea" :rows="4" placeholder="可选，附加在结果末尾" />
+            </div>
+            <div v-if="activeTab === 'hot'" class="affix-grid">
+              <div class="tool-field">
+                <label for="hot-prefix">输出前缀</label>
+                <el-input id="hot-prefix" v-model="hotPrefix" type="textarea" :rows="3" placeholder="可选" />
+              </div>
+              <div class="tool-field">
+                <label for="hot-suffix">输出后缀</label>
+                <el-input id="hot-suffix" v-model="hotSuffix" type="textarea" :rows="3" placeholder="可选" />
+              </div>
+            </div>
+            <div class="tool-actions source-actions">
+              <el-button :disabled="wpsPending === activeTab" @click="clear">清空</el-button>
+              <el-button type="primary" :disabled="!current.input.trim() || wpsPending === activeTab" @click="process()">{{ tabInfo.action }}</el-button>
+              <el-button v-if="activeTab !== 'dual'" type="primary" plain :loading="wpsPending === activeTab"
+                :disabled="!wpsUrl.trim() || wpsPending !== null || wpsClearing" @click="importWps">从 WPS 读取并整理</el-button>
             </div>
           </div>
-        </div>
-        <div class="tool-field">
-          <label for="link-source">原始内容</label>
-          <el-input id="link-source" v-model="current.input" type="textarea" :rows="9" :placeholder="tabInfo.placeholder" :disabled="wpsPending === activeTab" @paste="paste" />
-        </div>
-        <div v-if="activeTab === 'quark'" class="tool-field">
-          <label for="quark-suffix">输出后缀</label>
-          <el-input id="quark-suffix" v-model="quarkSuffix" type="textarea" :rows="4" placeholder="可选，附加在结果末尾" />
-        </div>
-        <div v-if="activeTab === 'hot'" class="affix-grid">
-          <div class="tool-field">
-            <label for="hot-prefix">输出前缀</label>
-            <el-input id="hot-prefix" v-model="hotPrefix" type="textarea" :rows="3" placeholder="可选" />
-          </div>
-          <div class="tool-field">
-            <label for="hot-suffix">输出后缀</label>
-            <el-input id="hot-suffix" v-model="hotSuffix" type="textarea" :rows="3" placeholder="可选" />
-          </div>
-        </div>
-        <div class="tool-actions source-actions">
-          <el-button :disabled="wpsPending === activeTab" @click="clear">清空</el-button>
-          <el-button type="primary" :disabled="!current.input.trim() || wpsPending === activeTab" @click="process()">{{ tabInfo.action }}</el-button>
-          <el-button v-if="activeTab !== 'dual'" type="primary" plain :loading="wpsPending === activeTab"
-            :disabled="!wpsUrl.trim() || wpsPending !== null || wpsClearing" @click="importWps">从 WPS 读取并整理</el-button>
-        </div>
 
-        <section v-if="current.processed" class="tool-result" aria-label="整理结果">
-          <div class="result-heading">
-            <div class="result-title">
-              <h3>{{ activeTab === 'table' ? '提取结果' : '整理结果' }}</h3>
-              <span v-if="current.wpsDate">WPS 热门更新 · {{ current.wpsDate }}</span>
-              <span role="status">{{ current.status }}</span>
-            </div>
-            <div class="result-actions">
-              <el-button :disabled="activeTab === 'table' ? !rows.length : !current.output" @click="copyResult">{{ activeTab === 'table' ? '复制表格' : '复制文本' }}</el-button>
-              <el-button v-if="activeTab === 'table'" type="primary" plain :disabled="!rows.length" :loading="exporting" @click="exportExcel">导出 Excel</el-button>
-            </div>
+          <div class="tool-pane tool-pane--result">
+            <section v-if="current.processed" class="tool-result" aria-label="整理结果">
+              <div class="result-heading">
+                <div class="result-title">
+                  <h3>{{ activeTab === 'table' ? '提取结果' : '整理结果' }}</h3>
+                  <span v-if="current.wpsDate">WPS 热门更新 · {{ current.wpsDate }}</span>
+                  <span role="status">{{ current.status }}</span>
+                </div>
+                <div class="result-actions">
+                  <el-button :disabled="activeTab === 'table' ? !rows.length : !current.output" @click="copyResult">{{ activeTab === 'table' ? '复制表格' : '复制文本' }}</el-button>
+                  <el-button v-if="activeTab === 'table'" type="primary" plain :disabled="!rows.length" :loading="exporting" @click="exportExcel">导出 Excel</el-button>
+                </div>
+              </div>
+              <template v-if="activeTab === 'table'">
+                <el-table :data="rows" max-height="440" empty-text="未识别到链接，请检查粘贴内容" stripe>
+                  <el-table-column prop="title" label="影视名称" min-width="150" />
+                  <el-table-column label="下载链接" min-width="250">
+                    <template #default="scope">
+                      <a class="result-link" :href="scope.row.url" target="_blank" rel="noopener noreferrer">{{ scope.row.url }}</a>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </template>
+              <el-input v-else :model-value="current.output" type="textarea" :rows="13" readonly aria-label="整理结果文本" />
+            </section>
+            <div v-else class="result-placeholder">{{ activeTab === 'table' ? '提取后可预览、复制或导出 Excel' : '整理后的内容会显示在这里' }}</div>
           </div>
-          <template v-if="activeTab === 'table'">
-            <el-table :data="rows" max-height="440" empty-text="未识别到链接，请检查粘贴内容" stripe>
-              <el-table-column prop="title" label="影视名称" min-width="150" />
-              <el-table-column label="下载链接" min-width="250">
-                <template #default="scope">
-                  <a class="result-link" :href="scope.row.url" target="_blank" rel="noopener noreferrer">{{ scope.row.url }}</a>
-                </template>
-              </el-table-column>
-            </el-table>
-          </template>
-          <el-input v-else :model-value="current.output" type="textarea" :rows="9" readonly aria-label="整理结果文本" />
-        </section>
-        <div v-else class="result-placeholder">{{ activeTab === 'table' ? '提取后可预览、复制或导出 Excel' : '整理后的内容会显示在这里' }}</div>
+        </div>
       </div>
     </section>
   </div>
@@ -253,6 +259,8 @@ async function exportExcel() {
 .link-extractor { min-width: 0; }
 .tool-panel { padding: 8px 24px 24px; min-width: 0; }
 .tool-content { display: grid; gap: 20px; padding-top: 8px; min-width: 0; }
+.tool-workspace { display: grid; gap: 20px; min-width: 0; }
+.tool-pane { display: grid; gap: 20px; min-width: 0; align-content: start; }
 .tool-field { display: grid; gap: 10px; min-width: 0; }
 .tool-field label { color: var(--ink-2); font-size: 14px; font-weight: 600; }
 .wps-source { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -269,11 +277,31 @@ async function exportExcel() {
 .result-link { color: var(--brand); overflow-wrap: anywhere; }
 .result-link:hover { text-decoration: underline; }
 .result-placeholder { padding: 26px 12px; border: 1px dashed var(--line-strong); border-radius: var(--control-radius); text-align: center; color: var(--ink-3); font-size: 14px; }
+@media (min-width: 1180px) {
+  .tool-workspace {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+    gap: 24px;
+    align-items: start;
+  }
+  .tool-pane--result {
+    border-left: 1px solid var(--line);
+    padding-left: 24px;
+  }
+  .tool-result {
+    border-top: 0;
+    padding-top: 0;
+  }
+  .result-placeholder {
+    min-height: 280px;
+    display: grid;
+    place-items: center;
+  }
+}
 @media (max-width: 640px) {
   .tool-panel { padding: 4px 14px 18px; }
   .affix-grid { grid-template-columns: 1fr; }
   .source-actions { flex-wrap: nowrap; gap: 8px; }
-  .tool-panel .tool-content > .source-actions > .el-button {
+  .tool-panel .source-actions > .el-button {
     flex: 1 1 auto;
     min-inline-size: 44px;
     min-block-size: 44px;

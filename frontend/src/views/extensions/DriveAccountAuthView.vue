@@ -4,6 +4,8 @@ import type { AxiosError } from 'axios'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
+import { isImeComposing } from '@/utils/ime'
 import {
   fetchDriveAccountAuthSession,
   pollDriveAccountQrcodeAuth,
@@ -227,7 +229,10 @@ onBeforeUnmount(stopPoll)
   <div class="shell-page" v-loading="loading">
     <div class="section-header">
       <div class="section-header__title">
-        <h2>账号二次认证</h2>
+        <h1 class="auth-heading">
+          <DriveTypeIcon v-if="driveType" :type="driveType" :size="24" />
+          <span>账号二次认证</span>
+        </h1>
         <div class="section-header__desc">完成扫码或短信验证后，账号即可恢复自动转存。</div>
       </div>
       <div class="toolbar__right">
@@ -246,7 +251,11 @@ onBeforeUnmount(stopPoll)
             <div v-else class="auth-empty">未获取到验证码图片，可点击“重新检测”。</div>
           </div>
           <div class="auth-right">
-            <el-input v-model="captchaCode" placeholder="输入验证码" />
+            <el-input
+              v-model="captchaCode"
+              placeholder="输入验证码"
+              @keydown.enter="!isImeComposing($event) && submitCaptcha()"
+            />
             <div class="auth-actions">
               <el-button :loading="captchaSubmitting" type="primary" @click="submitCaptcha">提交验证码</el-button>
             </div>
@@ -273,7 +282,12 @@ onBeforeUnmount(stopPoll)
             <div class="auth-actions">
               <el-button :loading="smsSending" @click="handleSendSms">发送验证码</el-button>
             </div>
-            <el-input v-model="smsCode" placeholder="输入短信验证码" style="margin-top: 12px" />
+            <el-input
+              v-model="smsCode"
+              placeholder="输入短信验证码"
+              style="margin-top: 12px"
+              @keydown.enter="!isImeComposing($event) && submitSms()"
+            />
             <div class="auth-actions">
               <el-button :loading="smsSubmitting" type="primary" @click="submitSms">提交短信验证码</el-button>
             </div>
@@ -285,14 +299,19 @@ onBeforeUnmount(stopPoll)
         <el-alert type="info" show-icon :closable="false" title="请使用手机扫描二维码完成登录。" style="margin-bottom: 16px" />
         <div class="auth-grid">
           <div class="auth-left">
-            <img v-if="payload.qrcode_url" class="qrcode-img" :src="payload.qrcode_url" alt="qrcode" />
+            <div v-if="payload.qrcode_url" class="qrcode-box">
+              <img class="qrcode-img" :src="payload.qrcode_url" alt="qrcode" />
+            </div>
             <div v-else class="auth-empty">未获取到二维码，可点击“扫码登录”。</div>
           </div>
           <div class="auth-right">
             <div class="auth-meta">
               <div class="auth-meta__row">
                 <span class="auth-meta__label">状态</span>
-                <span class="auth-meta__value">{{ payload.message || payload.status || '-' }}</span>
+                <span class="auth-meta__value auth-meta__status">
+                  <span v-if="pollTimer" class="auth-pulse-dot" aria-hidden="true" />
+                  <span>{{ payload.message || payload.status || '等待扫码' }}</span>
+                </span>
               </div>
             </div>
             <div class="auth-actions">
@@ -308,6 +327,46 @@ onBeforeUnmount(stopPoll)
 <style scoped>
 .auth-panel {
   padding: 18px;
+}
+
+.auth-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.qrcode-box {
+  padding: 12px;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+}
+
+.auth-meta__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--el-color-success);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--el-color-success) 55%, transparent);
+  animation: auth-pulse 1.6s ease-out infinite;
+}
+
+@keyframes auth-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--el-color-success) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 .auth-grid {

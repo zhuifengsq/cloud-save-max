@@ -209,9 +209,11 @@ async function handleLogout() {
 
       <div class="app-main">
         <RouterView v-slot="{ Component }">
-          <keep-alive :include="CACHED_VIEWS">
-            <component :is="Component" />
-          </keep-alive>
+          <Transition name="page-fade" mode="out-in">
+            <keep-alive :include="CACHED_VIEWS">
+              <component :is="Component" />
+            </keep-alive>
+          </Transition>
         </RouterView>
       </div>
     </main>

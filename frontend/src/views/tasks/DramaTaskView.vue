@@ -1242,10 +1242,14 @@ async function confirmStopCompleted() {
     const checked = Number(res?.checked || 0)
     const matched = Number(res?.matched || 0)
     const stopped = Number(res?.stopped || 0)
-    await ElMessageBox.alert(`处理完成：checked=${checked}，matched=${matched}，stopped=${stopped}`, '停止结果', {
-      type: 'success',
-      confirmButtonText: '确定',
-    })
+    await ElMessageBox.alert(
+      `处理完成：已检查 ${checked} 个任务，匹配已完结 ${matched} 个，已停止 ${stopped} 个`,
+      '停止结果',
+      {
+        type: 'success',
+        confirmButtonText: '确定',
+      },
+    )
     await loadData()
   } catch (e: any) {
     const msg = String(e?.response?.data?.message || e?.response?.data?.detail || e?.message || '停止失败')

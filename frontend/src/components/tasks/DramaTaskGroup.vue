@@ -75,12 +75,23 @@ const executionLabels: Record<string, string> = {
   running: '执行中',
   skipped: '已跳过',
 }
+
+function executionTagType(status: string): 'success' | 'danger' | 'warning' | 'info' {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'running') return 'warning'
+  return 'info'
+}
 </script>
 
 <template>
   <div
     class="drama-group"
-    :class="{ 'drama-group--failed': group.failed > 0, 'drama-group--open': open }"
+    :class="{
+      'drama-group--failed': group.failed > 0,
+      'drama-group--pinned': group.pinned,
+      'drama-group--open': open,
+    }"
   >
     <div class="drama-group__summary" @click="emit('update:open', !open)">
       <span class="drama-group__chevron" aria-hidden="true"><ArrowRight /></span>
@@ -130,6 +141,7 @@ const executionLabels: Record<string, string> = {
               />
             </svg>
           </span>
+          <el-tag v-if="group.pinned" size="small" effect="plain" round>置顶</el-tag>
         </div>
         <span class="drama-group__meta">
           <span>{{ group.items.length }} 个任务</span>
@@ -249,7 +261,9 @@ const executionLabels: Record<string, string> = {
             <ul v-if="task.executions?.length">
               <li v-for="execution in task.executions.slice(0, 3)" :key="execution.id">
                 <span class="drama-group-task__execution">
-                  <strong>{{ executionLabels[execution.status] || execution.status }}</strong>
+                  <el-tag size="small" :type="executionTagType(execution.status)" round>
+                    {{ executionLabels[execution.status] || execution.status }}
+                  </el-tag>
                   <el-button
                     v-if="execution.started_at"
                     link
@@ -288,6 +302,10 @@ const executionLabels: Record<string, string> = {
 
 .drama-group--failed {
   border-inline-start: 3px solid var(--el-color-danger);
+}
+
+.drama-group--pinned:not(.drama-group--failed) {
+  border-inline-start: 3px solid var(--brand);
 }
 
 .drama-group-task__history > summary {
