@@ -967,15 +967,11 @@ onBeforeUnmount(() => {
   color: var(--el-text-color-secondary);
 }
 
-.updates-card {
-  padding: 22px;
-}
-
 .updates-row {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(0, 0.85fr);
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
   min-width: 0;
 }
 
@@ -986,16 +982,32 @@ onBeforeUnmount(() => {
 .updates-card,
 .upcoming-card {
   min-width: 0;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 804px;
+  overflow: hidden;
+}
+
+.updates-card .section-header,
+.upcoming-card .section-header {
+  flex: none;
 }
 
 .update-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding-top: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding-right: 2px;
 }
 
 .update-row {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   gap: 14px;
@@ -1060,7 +1072,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .failure-entry-body {
@@ -1081,20 +1093,19 @@ onBeforeUnmount(() => {
   text-decoration: underline;
 }
 
-.upcoming-card {
-  padding: 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
 .upcoming-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding-right: 2px;
 }
 
 .upcoming-row {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1104,6 +1115,14 @@ onBeforeUnmount(() => {
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
   transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.updates-card .empty-state,
+.upcoming-card .empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .upcoming-row__left {
@@ -1213,6 +1232,25 @@ onBeforeUnmount(() => {
 
   .updates-row {
     grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .updates-card,
+  .upcoming-card {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .update-list,
+  .upcoming-list {
+    flex: none;
+    overflow-y: visible;
+    padding-right: 0;
+  }
+
+  .updates-card .empty-state,
+  .upcoming-card .empty-state {
+    flex: none;
   }
 
   .update-row__name {
@@ -1221,6 +1259,9 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 767px) {
+  .dashboard-log-grid {
+    align-items: start;
+  }
   .dashboard-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;

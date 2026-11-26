@@ -50,11 +50,9 @@ const visibleRecords = computed(() => expanded.value ? props.records : props.rec
 </template>
 
 <style scoped>
-.dashboard-log { padding: 22px; min-inline-size: 0; }
-.dashboard-log--empty { padding: 14px 18px; }
-.dashboard-log--empty .dashboard-log__empty { margin: 4px 0 0; }
+.dashboard-log { display: flex; flex-direction: column; padding: 22px; min-inline-size: 0; }
 .dashboard-log__header, .dashboard-log__title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.dashboard-log__header { flex-wrap: wrap; }
+.dashboard-log__header { flex: none; flex-wrap: wrap; min-height: 28px; }
 .dashboard-log__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px; margin-inline-start: auto; }
 .dashboard-log__actions :deep(.el-button + .el-button) { margin-inline-start: 0; }
 .dashboard-log h2 { margin: 0; font-size: 18px; }
@@ -65,5 +63,5 @@ const visibleRecords = computed(() => expanded.value ? props.records : props.rec
 .dashboard-log__title strong { font-size: 15px; overflow-wrap: anywhere; }
 .dashboard-log__title :slotted(.el-tag) { flex-shrink: 0; }
 .dashboard-log__meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; }
-.dashboard-log__empty { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
+.dashboard-log__empty { flex: 1; display: grid; place-items: center; text-align: center; margin: 12px 0 0; padding: 8px 0; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   ArrowRight,
   Calendar,
@@ -25,6 +25,13 @@ import logoCat from '@/assets/logo-cat.webp'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+
+const pageTransitionName = ref('page-fade')
+const stopTransitionGuard = router.beforeResolve((to, from) => {
+  pageTransitionName.value =
+    to.name === 'TaskCopywriting' || from.name === 'TaskCopywriting' ? '' : 'page-fade'
+})
+onBeforeUnmount(stopTransitionGuard)
 
 const CACHED_VIEWS = ['DashboardView', 'DramaCalendarView', 'MediaDiscoverView', 'DramaTaskView']
 const listScrollPositions = new Map<typeof route.name, number>([
@@ -284,9 +291,15 @@ async function handleLogout() {
 
       <div class="app-main">
         <RouterView v-slot="{ Component }">
-          <keep-alive :include="CACHED_VIEWS">
-            <component :is="Component" />
-          </keep-alive>
+          <Transition
+            :name="pageTransitionName"
+            :mode="pageTransitionName ? 'out-in' : undefined"
+            :css="Boolean(pageTransitionName)"
+          >
+            <keep-alive :include="CACHED_VIEWS">
+              <component :is="Component" />
+            </keep-alive>
+          </Transition>
         </RouterView>
       </div>
     </main>

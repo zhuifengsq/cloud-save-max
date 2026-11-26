@@ -45,7 +45,7 @@ export const appRoutes: RouteRecordRaw[] = [
         path: '',
         name: 'Dashboard',
         component: () => import('@/views/DashboardView.vue'),
-        meta: { title: '工作台', icon: 'HomeFilled', breadcrumb: false },
+        meta: { title: '工作台', icon: 'HomeFilled' },
       },
       {
         path: 'tasks/calendar',
