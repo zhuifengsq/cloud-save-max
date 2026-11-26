@@ -87,7 +87,9 @@ watch(activeType, () => {imagePage.value = 1})
       <el-alert :title="gallery.error" type="error" :closable="false" />
       <el-button @click="loadImages(true)">重试</el-button>
     </div>
-    <el-empty v-else-if="!currentImages.length" :description="gallery.images.posters.length || gallery.images.backdrops.length ? '此分类暂无配图' : '暂无更多配图'" />
+    <div v-else-if="!currentImages.length" class="empty-state empty-state--compact">
+      <div class="empty-state__title">{{ gallery.images.posters.length || gallery.images.backdrops.length ? '此分类暂无配图' : '暂无更多配图' }}</div>
+    </div>
     <template v-else>
       <div class="image-picker__grid" :class="{'image-picker__grid--wide': activeType === 'backdrops'}">
         <button

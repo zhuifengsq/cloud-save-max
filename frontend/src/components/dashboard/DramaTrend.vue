@@ -86,7 +86,10 @@ const chartHeight = computed(() => (isMobile.value ? 220 : 280))
     <div v-if="points.length" class="trend-chart">
       <EChartsLineChart :x-labels="xLabels" :series="chartSeries" :height="chartHeight" />
     </div>
-    <el-empty v-else description="近期开启后尚无执行记录。" :image-size="88" />
+    <div v-else class="empty-state empty-state--compact">
+      <div class="empty-state__title">暂无执行趋势</div>
+      <div class="empty-state__desc">近期开启调度并执行任务后会在此展示趋势曲线。</div>
+    </div>
   </section>
 </template>
 

@@ -215,7 +215,9 @@ watch(
           </template>
         </el-table-column>
         <template #empty>
-          <el-empty :image-size="60" :description="state.loading ? '加载中…' : '当前目录为空'" />
+          <div class="empty-state empty-state--compact">
+            <div class="empty-state__title">{{ state.loading ? '加载中…' : '当前目录为空' }}</div>
+          </div>
         </template>
       </el-table>
 

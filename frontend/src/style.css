@@ -234,6 +234,16 @@ body {
   line-height: 1.6;
 }
 
+::selection {
+  background: color-mix(in srgb, var(--brand) 20%, transparent);
+  color: var(--ink);
+}
+
+html:root[data-theme='dark'] ::selection {
+  background: color-mix(in srgb, var(--brand) 34%, transparent);
+  color: #ffffff;
+}
+
 button,
 input,
 textarea,
@@ -767,6 +777,27 @@ html:root[data-theme='dark'] .glass-panel {
 
 .app-header__theme {
   margin-right: 6px;
+}
+
+.app-theme-switch {
+  --el-switch-off-color: #cbd5e1;
+  --el-switch-on-color: #3b6ef0;
+}
+
+.app-theme-switch .el-switch__core .el-switch__inner-wrapper,
+.app-theme-switch .el-switch__core .el-switch__inner-wrapper .el-icon {
+  color: #334155;
+  font-size: 13px;
+}
+
+.app-theme-switch.is-checked .el-switch__core .el-switch__inner-wrapper,
+.app-theme-switch.is-checked .el-switch__core .el-switch__inner-wrapper .el-icon {
+  color: #ffffff;
+}
+
+html:root[data-theme='dark'] .app-theme-switch {
+  --el-switch-off-color: #334155;
+  --el-switch-on-color: #3b6ef0;
 }
 
 .app-content {

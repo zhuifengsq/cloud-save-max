@@ -8,6 +8,8 @@ import {
   Fold,
   HomeFilled,
   Menu,
+  Moon,
+  Sunny,
   SwitchButton,
   User,
   VideoPlay,
@@ -161,7 +163,14 @@ async function handleLogout() {
         <div class="app-aside-actions">
           <div class="app-aside-actions__row">
             <span class="app-aside-actions__label">主题</span>
-            <el-switch v-model="isDark" inline-prompt active-text="暗" inactive-text="亮" />
+            <el-switch
+              v-model="isDark"
+              inline-prompt
+              :active-icon="Moon"
+              :inactive-icon="Sunny"
+              aria-label="切换深浅主题"
+              class="app-theme-switch"
+            />
           </div>
           <div class="app-user-footer">
             <div class="app-user-avatar" aria-hidden="true">{{ userInitial }}</div>
@@ -243,7 +252,14 @@ async function handleLogout() {
           </div>
         </div>
         <div class="app-header__right">
-          <el-switch v-model="isDark" inline-prompt active-text="暗" inactive-text="亮" class="app-header__theme" />
+          <el-switch
+            v-model="isDark"
+            inline-prompt
+            :active-icon="Moon"
+            :inactive-icon="Sunny"
+            aria-label="切换深浅主题"
+            class="app-header__theme app-theme-switch"
+          />
           <div class="app-user-chip">
             <div class="app-user-chip__name">{{ auth.user?.username }}</div>
             <div class="app-user-chip__meta">{{ auth.roles.join(' / ') || '已登录' }}</div>
