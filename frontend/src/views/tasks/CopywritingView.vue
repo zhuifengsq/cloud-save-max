@@ -802,7 +802,6 @@ function goBack() {
         </template>
       </section>
     </div>
-  </div>
 
     <TMDBImagePicker
       v-model="imagePickerVisible" :media-type="draft.mediaType" :tmdb-id="draft.tmdbId"
@@ -820,6 +819,7 @@ function goBack() {
         </div>
       </div>
     </el-dialog>
+  </div>
 </template>
 
 <style scoped>

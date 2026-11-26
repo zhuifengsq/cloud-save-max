@@ -30,7 +30,7 @@ import { useAuthStore } from '@/stores/auth'
 import type { TaskLeadInSummary } from '@/types/dramaLeadIn'
 import type { DriveAccountItem } from '@/types/extensions'
 import { loadTaskPage, loadTaskOrderIndex, dropSharedTasks } from '@/stores/taskCache'
-import { ensureTmdbDetail, tmdbDetailsById } from '@/stores/tmdbDetailCache'
+import { ensureTmdbDetails, tmdbDetailsById } from '@/stores/tmdbDetailCache'
 import { markTasksChanged, subscribeTasksChanged } from '@/utils/taskChangeBus'
 import type { TaskDetail, TaskExecutionSummary, TaskReadFilters, TaskFacets, TaskSummary as TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/tasks'
 import { validateCrontab5, validateTimezone } from '@/utils/cron'
@@ -304,8 +304,8 @@ const taskTotal = ref(0)
 
 // 一部剧一个抽屉：先分页循环拉全量，再按 TMDB（media_type + id）分组，
 // 避免同一部剧的两条任务被服务端分页切开成两个抽屉。
-const TMDB_TITLE_PREFETCH_LIMIT = 60
 function tmdbDisplayTitle(task: TaskItem): string {
+  if (String(task.tmdb_media_type || '').toLowerCase() !== 'tv') return ''
   const id = Number(task.tmdb_id || 0)
   if (!id) return ''
   const data = (tmdbDetailsById[id]?.data || {}) as Record<string, any>
@@ -395,13 +395,16 @@ function setExpanded<T>(keys: Set<T>, key: T, open: boolean) {
 }
 
 async function prefetchGroupTitles() {
-  const ids = taskGroups.value
-    .filter((group) => group.tmdbId && !tmdbDetailsById[group.tmdbId])
+  const ids = pagedGroups.value
+    .filter((group) => group.tmdbId && String(group.mediaType || '').toLowerCase() === 'tv' && !tmdbDetailsById[group.tmdbId])
     .map((group) => group.tmdbId as number)
-  for (const id of ids.slice(0, TMDB_TITLE_PREFETCH_LIMIT)) {
-    void ensureTmdbDetail(id).catch(() => null)
-  }
+  if (!ids.length) return
+  await ensureTmdbDetails(ids, { concurrency: 4 })
 }
+
+watch(pagedGroups, () => {
+  void prefetchGroupTitles()
+})
 const facets = ref<TaskFacets>({categories: [], drives: [], failed_count: 0})
 const pageLoaded = ref(false)
 let readVersion = 0

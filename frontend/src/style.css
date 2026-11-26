@@ -2146,20 +2146,6 @@ pre {
   }
 }
 
-.page-fade-enter-active,
-.page-fade-leave-active {
-  transition: opacity 0.14s ease, transform 0.14s ease;
-}
-
-.page-fade-enter-from {
-  opacity: 0;
-  transform: translateY(4px);
-}
-
-.page-fade-leave-to {
-  opacity: 0;
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

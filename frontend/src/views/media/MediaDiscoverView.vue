@@ -681,7 +681,7 @@ watch(() => route.name, (name, previousName) => {
         </div>
         <div v-else v-loading="searchState.loading" class="poster-grid">
           <div
-            v-for="row in searchItems"
+            v-for="(row, index) in searchItems"
             :key="String(row.id || row.title || row.name)"
             class="poster-card"
             role="button"
@@ -692,7 +692,15 @@ watch(() => route.name, (name, previousName) => {
             @keydown.space.prevent.self="openDetailByBrief(row)"
           >
             <div class="poster-card__cover">
-              <el-image v-if="posterUrlFromTMDB(row.poster_path)" :src="posterUrlFromTMDB(row.poster_path)" fit="cover" lazy class="poster-card__img">
+              <el-image
+                v-if="posterUrlFromTMDB(row.poster_path)"
+                :src="posterUrlFromTMDB(row.poster_path)"
+                fit="cover"
+                :lazy="index >= 6"
+                :fetchpriority="index < 2 ? 'high' : undefined"
+                :decoding="index >= 6 ? 'async' : undefined"
+                class="poster-card__img"
+              >
                 <template #placeholder>
                   <div class="poster-card__skeleton" />
                 </template>
@@ -778,7 +786,7 @@ watch(() => route.name, (name, previousName) => {
         </div>
         <div v-else v-loading="listState.loading" class="poster-grid">
           <div
-            v-for="row in items"
+            v-for="(row, index) in items"
             :key="row.id"
             class="poster-card"
             role="button"
@@ -789,7 +797,15 @@ watch(() => route.name, (name, previousName) => {
             @keydown.space.prevent.self="openDetailFromDouban(row)"
           >
             <div class="poster-card__cover">
-              <el-image v-if="bestDoubanPoster(row)" :src="bestDoubanPoster(row)" fit="cover" lazy class="poster-card__img">
+              <el-image
+                v-if="bestDoubanPoster(row)"
+                :src="bestDoubanPoster(row)"
+                fit="cover"
+                :lazy="index >= 6"
+                :fetchpriority="index < 2 ? 'high' : undefined"
+                :decoding="index >= 6 ? 'async' : undefined"
+                class="poster-card__img"
+              >
                 <template #placeholder>
                   <div class="poster-card__skeleton" />
                 </template>
