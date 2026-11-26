@@ -1086,9 +1086,8 @@ onMounted(() => {
       </div>
     </section>
 
-    <section class="glass-panel settings-tabs-panel">
-      <el-tabs v-model="activeTab" class="settings-tabs">
-        <el-tab-pane label="保存规则" name="magic_regex">
+    <el-tabs v-model="activeTab" class="settings-tabs">
+      <el-tab-pane label="保存规则" name="magic_regex">
           <section class="glass-panel settings-card">
             <header class="settings-card__header">
               <div class="settings-card__title">
@@ -1604,9 +1603,7 @@ onMounted(() => {
           </div>
         </section>
       </el-tab-pane>
-
-      </el-tabs>
-    </section>
+    </el-tabs>
 
     <el-dialog v-model="dialog.visible" :title="dialog.isEdit ? '编辑规则' : '新增规则'" width="720px">
       <el-form label-position="top">
@@ -1724,10 +1721,6 @@ onMounted(() => {
   min-height: 36px;
 }
 
-.settings-tabs-panel {
-  padding: 18px 20px 22px;
-}
-
 .settings-tabs :deep(.el-tabs__header) {
   margin-bottom: 18px;
 }
@@ -1832,9 +1825,6 @@ onMounted(() => {
 }
 
 @media (max-width: 767px) {
-  .settings-tabs-panel {
-    padding: 14px;
-  }
   .settings-card {
     padding: 14px;
   }

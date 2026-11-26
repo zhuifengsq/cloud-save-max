@@ -1047,6 +1047,14 @@ html:root[data-theme='dark'] .app-theme-switch {
   flex-wrap: wrap;
 }
 
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--line-strong);
+  margin-inline: 4px;
+  flex-shrink: 0;
+}
+
 .filter-strip {
   padding: 18px 22px;
 }
@@ -1457,6 +1465,38 @@ body .el-table th.el-table__cell {
   box-shadow: -8px 0 14px -4px rgba(23, 32, 51, .14);
 }
 
+.el-table__body-wrapper::before,
+.el-table__body-wrapper::after {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inline-size: 16px;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.el-table__body-wrapper::before {
+  inset-inline-start: 0;
+  background: radial-gradient(farthest-side at 0 50%, var(--nav-scroll-shadow), transparent);
+}
+
+.el-table__body-wrapper::after {
+  inset-inline-end: 0;
+  background: radial-gradient(farthest-side at 100% 50%, var(--nav-scroll-shadow), transparent);
+}
+
+.el-table.is-scrolling-middle .el-table__body-wrapper::before,
+.el-table.is-scrolling-right .el-table__body-wrapper::before {
+  opacity: 1;
+}
+
+.el-table.is-scrolling-left .el-table__body-wrapper::after,
+.el-table.is-scrolling-middle .el-table__body-wrapper::after {
+  opacity: 1;
+}
+
 .el-dialog,
 .el-drawer,
 .el-dropdown-menu,
@@ -1590,6 +1630,91 @@ html:root[data-theme='dark'] .el-message-box__btns .el-button--primary.el-button
   gap: 8px;
   padding-top: 10px;
   border-top: 1px solid var(--line);
+}
+
+.mobile-record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mobile-record-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--control-radius);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+}
+
+.mobile-record-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mobile-record-card__head-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mobile-record-dl {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.mobile-record-dl__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mobile-record-dl__row dt {
+  margin: 0;
+  flex: 0 0 auto;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.mobile-record-dl__row dd {
+  margin: 0;
+  min-width: 0;
+  text-align: right;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.mobile-record-code {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.mobile-record-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.mobile-record-card__actions .el-button + .el-button {
+  margin-left: 0;
 }
 
 @keyframes ui-shimmer {

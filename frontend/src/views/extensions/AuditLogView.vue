@@ -192,6 +192,48 @@ onMounted(() => {
             </div>
           </div>
 
+          <div v-else-if="isMobile" class="mobile-record-list" v-loading="loading && Boolean(items.length)">
+            <div v-if="!items.length" class="empty-state empty-state--compact">
+              <div class="empty-state__title">暂无审计日志</div>
+              <div class="empty-state__desc">当前筛选条件下没有记录，可清空筛选后再试。</div>
+            </div>
+            <article v-for="row in items" :key="row.id" class="mobile-record-card">
+              <header class="mobile-record-card__head">
+                <div class="mobile-record-card__head-main">
+                  <code class="audit-action-pill">{{ row.action }}</code>
+                </div>
+                <el-tag :type="row.success ? 'success' : 'danger'" round size="small">
+                  {{ row.success ? '成功' : '失败' }}
+                </el-tag>
+              </header>
+              <dl class="mobile-record-dl">
+                <div class="mobile-record-dl__row">
+                  <dt>时间</dt>
+                  <dd class="audit-time">{{ formatDateTimeText(row.created_at) }}</dd>
+                </div>
+                <div class="mobile-record-dl__row">
+                  <dt>用户</dt>
+                  <dd>{{ row.actor_username || (row.actor_user_id ? `#${row.actor_user_id}` : '—') }}</dd>
+                </div>
+                <div class="mobile-record-dl__row">
+                  <dt>目标</dt>
+                  <dd>
+                    <span>{{ row.target_type || '—' }}</span>
+                    <span v-if="row.target_id" class="muted">:{{ row.target_id }}</span>
+                  </dd>
+                </div>
+                <div class="mobile-record-dl__row">
+                  <dt>IP</dt>
+                  <dd class="audit-ip">{{ row.ip || '—' }}</dd>
+                </div>
+                <div class="mobile-record-dl__row">
+                  <dt>详情</dt>
+                  <dd :class="{ muted: !row.detail }">{{ row.detail || '—' }}</dd>
+                </div>
+              </dl>
+            </article>
+          </div>
+
           <el-table v-else :data="items" border v-loading="loading && Boolean(items.length)">
             <template #empty>
               <div class="empty-state empty-state--compact">
@@ -297,6 +339,10 @@ onMounted(() => {
   margin-top: 0;
 }
 
+.audit-tabs .filter-strip {
+  margin-bottom: 16px;
+}
+
 .table-panel {
   padding: 18px;
 }
@@ -331,13 +377,6 @@ onMounted(() => {
   color: var(--ink);
 }
 
-.toolbar-divider {
-  width: 1px;
-  height: 20px;
-  background: var(--line-strong);
-  margin-inline: 4px;
-}
-
 .pagination-bar {
   display: flex;
   justify-content: flex-end;
@@ -348,5 +387,11 @@ onMounted(() => {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin-top: 4px;
+}
+
+@media (max-width: 767px) {
+  .table-panel {
+    padding: 14px;
+  }
 }
 </style>

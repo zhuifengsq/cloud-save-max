@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDown, Bell, CircleCheck, Search, Setting, Warning } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowRight, Bell, CircleCheck, Search, Setting, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
 import { fetchNotificationConfig, sendNotificationTest, updateNotificationConfig } from '@/api/notifications'
@@ -398,7 +398,6 @@ const CHANNEL_SEARCH_ALIASES: Record<string, string> = {
 
 type ChannelStatusFilter = 'all' | 'enabled' | 'configured' | 'unconfigured'
 
-const filterExpanded = ref(false)
 const statusFilter = ref<ChannelStatusFilter>('all')
 const searchKeyword = ref('')
 const unconfiguredOpen = ref<boolean | null>(null)
@@ -696,16 +695,14 @@ onMounted(loadData)
       </div>
     </section>
 
-    <section class="glass-panel notify-filter-card">
-      <button
-        type="button"
-        class="notify-filter-card__toggle"
-        :aria-expanded="filterExpanded"
-        @click="filterExpanded = !filterExpanded"
-      >
+    <details class="glass-panel notify-filter-card">
+      <summary class="notify-filter-card__summary-bar">
+        <span class="notify-filter-card__marker" aria-hidden="true">
+          <ArrowRight />
+        </span>
         <div class="notify-filter-card__header">
           <div class="notify-filter-card__title-row">
-            <h3>通知过滤</h3>
+            <span class="notify-filter-card__title">通知过滤</span>
             <div class="notify-filter-card__summary">
               <el-tag v-if="excludeKeywordsCount" size="small" type="warning" effect="plain" round>
                 排除 {{ excludeKeywordsCount }} 词
@@ -720,12 +717,12 @@ onMounted(loadData)
           </div>
           <div class="notify-filter-card__hint">基于通知标题和内容的关键词过滤，所有渠道统一生效</div>
         </div>
-        <span class="notify-filter-card__chevron">
-          <span>{{ filterExpanded ? '收起' : '展开配置' }}</span>
-          <el-icon class="chevron-icon" :class="{ 'is-open': filterExpanded }"><ArrowDown /></el-icon>
+        <span class="notify-filter-card__action">
+          <span class="notify-filter-card__action-expand">展开配置</span>
+          <span class="notify-filter-card__action-collapse">收起</span>
         </span>
-      </button>
-      <div v-show="filterExpanded" class="notify-filter-card__body">
+      </summary>
+      <div class="notify-filter-card__body">
         <el-form label-position="top">
           <el-form-item label="关键词排除">
             <el-input
@@ -762,7 +759,7 @@ onMounted(loadData)
           <el-button type="primary" :loading="saving" :disabled="!canWrite" @click="saveAll">保存</el-button>
         </div>
       </div>
-    </section>
+    </details>
 
     <section class="glass-panel filter-strip channel-toolbar" aria-label="渠道筛选">
       <el-segmented v-model="statusFilter" :options="statusFilterOptions" class="channel-toolbar__segmented" />
@@ -826,7 +823,7 @@ onMounted(loadData)
             @click="toggleUnconfigured"
           >
             <div class="channel-group__head-left">
-              <h2>更多可接入渠道</h2>
+              <span class="channel-group__title">更多可接入渠道</span>
               <span class="status-pill">{{ unconfiguredChannels.length }} 个未配置</span>
             </div>
             <span class="notify-filter-card__chevron">
@@ -961,22 +958,47 @@ onMounted(loadData)
 }
 
 .notify-filter-card {
-  padding: 16px 20px;
+  padding: 0;
+  overflow: hidden;
 }
 
-.notify-filter-card__toggle {
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+.notify-filter-card__summary-bar {
+  list-style: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
+  padding: 14px 20px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.notify-filter-card__summary-bar::-webkit-details-marker {
+  display: none;
+}
+
+.notify-filter-card[open] > .notify-filter-card__summary-bar {
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.notify-filter-card__marker {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+}
+
+.notify-filter-card__marker svg {
+  width: 13px;
+  height: 13px;
+}
+
+.notify-filter-card[open] > .notify-filter-card__summary-bar .notify-filter-card__marker svg {
+  transform: rotate(90deg);
+  color: var(--brand);
 }
 
 .notify-filter-card__header {
@@ -992,11 +1014,11 @@ onMounted(loadData)
   margin-bottom: 4px;
 }
 
-.notify-filter-card__header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
+.notify-filter-card__title {
+  font-size: 15px;
+  font-weight: 700;
   line-height: 1.35;
+  color: var(--ink);
 }
 
 .notify-filter-card__summary {
@@ -1010,6 +1032,20 @@ onMounted(loadData)
   color: var(--el-text-color-secondary);
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+.notify-filter-card__action {
+  margin-inline-start: auto;
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--brand);
+  white-space: nowrap;
+}
+
+.notify-filter-card[open] .notify-filter-card__action-expand,
+.notify-filter-card:not([open]) .notify-filter-card__action-collapse {
+  display: none;
 }
 
 .notify-filter-card__chevron {
@@ -1035,9 +1071,28 @@ onMounted(loadData)
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
+  padding: 16px 20px 20px;
+}
+
+.notify-filter-card::details-content {
+  interpolate-size: allow-keywords;
+  overflow: clip;
+  contain: layout;
+}
+
+.notify-filter-card:not([open])::details-content {
+  block-size: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .notify-filter-card__marker svg {
+    transition: transform 180ms ease;
+  }
+
+  .notify-filter-card::details-content {
+    transition: block-size 0.22s ease, content-visibility 0.22s ease;
+    transition-behavior: allow-discrete;
+  }
 }
 
 .notify-filter-card__actions {
@@ -1080,7 +1135,7 @@ onMounted(loadData)
 }
 
 .channel-group__head h2,
-.channel-group__head-left h2 {
+.channel-group__title {
   margin: 0;
   font-size: 17px;
   font-weight: 650;
@@ -1249,8 +1304,12 @@ onMounted(loadData)
     grid-template-columns: 1fr;
   }
 
-  .notify-filter-card {
-    padding: 14px 16px;
+  .notify-filter-card__summary-bar {
+    padding: 12px 14px;
+  }
+
+  .notify-filter-card__body {
+    padding: 14px;
   }
 
   .channel-group__toggle {

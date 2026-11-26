@@ -300,7 +300,7 @@ onMounted(() => { if (canRead.value) refresh() })
     </section>
 
     <el-alert v-if="!canRead" title="搜索源配置仅限管理员查看" type="warning" :closable="false" />
-    <el-tabs v-else v-model="activeTab" class="glass-panel source-tabs">
+    <el-tabs v-else v-model="activeTab" class="source-tabs">
       <el-tab-pane label="API 搜索源" name="api">
         <div class="tab-heading">
           <p>配置返回 JSON 的搜索接口。URL 或请求体中用 <code>[[keyword]]</code> 表示搜索关键词。</p>
@@ -316,7 +316,7 @@ onMounted(() => { if (canRead.value) refresh() })
             <span class="ui-skeleton" style="width: 100%; height: 52px"></span>
           </div>
         </div>
-        <div v-else-if="!apiSources.length" class="empty-state">
+        <div v-else-if="!apiSources.length" class="glass-panel empty-state">
           <div class="empty-state__title">还没有 API 搜索源</div>
           <div class="empty-state__desc">新增 JSON 搜索接口后，即可在创建追剧任务时自动聚合结果。</div>
           <div class="empty-state__actions">
@@ -390,7 +390,7 @@ class MySearchPlugin(BaseSearchPlugin):
             <span class="ui-skeleton" style="width: 100%; height: 52px"></span>
           </div>
         </div>
-        <div v-else-if="!plugins.length" class="empty-state">
+        <div v-else-if="!plugins.length" class="glass-panel empty-state">
           <div class="empty-state__title">还没有 Python 搜索插件</div>
           <div class="empty-state__desc">上传符合规范的 <code>_plugin.py</code> 脚本后，可在此启用并测试搜索。</div>
         </div>
@@ -530,10 +530,9 @@ class MySearchPlugin(BaseSearchPlugin):
 .tab-heading, .test-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .tab-heading p { margin: 0; font-size: 13px; color: var(--el-text-color-secondary); line-height: 1.6; }
 .source-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.source-tabs { padding: 18px 22px 24px; }
 .source-tabs :deep(.el-tabs__item) { height: 46px; font-size: 14px; font-weight: 600; }
-.source-tabs :deep(.el-tabs__header) { margin-bottom: 20px; }
-.tab-heading { margin: 0 0 18px; padding: 2px 0 18px; border-bottom: 1px solid var(--panel-border); }
+.source-tabs :deep(.el-tabs__header) { margin-bottom: 16px; }
+.tab-heading { margin: 0 0 16px; padding: 0 0 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .tab-heading p { max-width: 75ch; font-size: 13px; }
 .tab-heading code { padding: 2px 6px; border-radius: 5px; background: var(--surface-muted); color: var(--el-color-primary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .file-input { display: none; }
@@ -640,6 +639,5 @@ class MySearchPlugin(BaseSearchPlugin):
   .editor-top-grid { grid-template-columns: 1fr; gap: 0; }
   .editor-card { padding: 14px; }
   .editor-label-hint { display: block; }
-  .source-tabs { padding: 14px; }
 }
 </style>

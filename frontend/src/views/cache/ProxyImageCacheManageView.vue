@@ -140,27 +140,22 @@ onMounted(loadData)
       </section>
 
       <section class="glass-panel table-panel" v-loading="loading">
+        <div class="config-panel__header">
+          <h2 class="config-panel__title">存储配置与维护</h2>
+          <div class="config-panel__actions">
+            <el-button :disabled="!canWrite" @click="handlePurge">清理过期</el-button>
+            <span v-if="canWrite" class="toolbar-divider" aria-hidden="true" />
+            <el-button type="danger" plain :disabled="!canWrite" @click="handleClear">一键清空</el-button>
+          </div>
+        </div>
+
         <el-descriptions :column="isMobile ? 1 : 2" border>
-          <el-descriptions-item label="缓存状态">
-            <el-tag :type="stats.enabled ? 'success' : 'info'" effect="plain" round size="small">
-              {{ stats.enabled ? '已启用' : '未启用' }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="缓存有效期">{{ formatDuration(stats.ttl_seconds) }}</el-descriptions-item>
           <el-descriptions-item label="单文件上限">{{ formatBytes(stats.max_file_bytes) }}</el-descriptions-item>
           <el-descriptions-item label="总容量上限">{{ formatBytes(stats.max_total_bytes) }}</el-descriptions-item>
-          <el-descriptions-item label="已缓存文件数">{{ stats.total_files }} 个</el-descriptions-item>
-          <el-descriptions-item label="已占用空间">{{ formatBytes(stats.total_bytes) }}</el-descriptions-item>
-          <el-descriptions-item label="已过期文件数">{{ stats.stale_files }} 个</el-descriptions-item>
           <el-descriptions-item label="缓存目录" :span="isMobile ? 1 : 2">
             <code class="cache-path">{{ stats.cache_dir || '—' }}</code>
           </el-descriptions-item>
         </el-descriptions>
-
-        <div class="actions">
-          <el-button :disabled="!canWrite" @click="handlePurge">清理过期</el-button>
-          <el-button type="danger" :disabled="!canWrite" @click="handleClear">一键清空</el-button>
-        </div>
       </section>
     </template>
 
@@ -194,18 +189,40 @@ onMounted(loadData)
   padding: 18px;
 }
 
+.config-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.config-panel__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.config-panel__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.config-panel__actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
 .cache-path {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   color: var(--ink);
   word-break: break-all;
-}
-
-.actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 16px;
 }
 
 @media (max-width: 1024px) {

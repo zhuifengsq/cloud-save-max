@@ -60,8 +60,23 @@ async function loadUsers() {
     const data = await fetchUsers({ ...query, q: query.q || undefined })
     users.value = data.items
     total.value = data.total
+    selectedRows.value = []
   } finally {
     loading.value = false
+  }
+}
+
+function isUserSelected(userId: number) {
+  return selectedRows.value.some((item) => item.id === userId)
+}
+
+function toggleUserSelected(row: UserItem, checked: boolean) {
+  if (checked) {
+    if (!isUserSelected(row.id)) {
+      selectedRows.value = [...selectedRows.value, row]
+    }
+  } else {
+    selectedRows.value = selectedRows.value.filter((item) => item.id !== row.id)
   }
 }
 
@@ -171,6 +186,51 @@ onMounted(async () => {
           <span class="ui-skeleton ui-skeleton--pill" style="width: 52px; height: 22px"></span>
           <span class="ui-skeleton" style="margin-left: auto; width: 96px; height: 15px"></span>
         </div>
+      </div>
+
+      <div v-else-if="isMobile" class="mobile-record-list" v-loading="loading && Boolean(users.length)">
+        <div v-if="!users.length" class="empty-state empty-state--compact">
+          <div class="empty-state__title">暂无匹配用户</div>
+          <div class="empty-state__desc">尝试调整搜索关键词，或点击右上角新建用户。</div>
+        </div>
+        <article v-for="row in users" :key="row.id" class="mobile-record-card">
+          <header class="mobile-record-card__head">
+            <div class="mobile-record-card__head-main">
+              <el-checkbox
+                v-if="canWrite"
+                :model-value="isUserSelected(row.id)"
+                :aria-label="`选择 ${row.username}`"
+                @change="toggleUserSelected(row, Boolean($event))"
+              />
+              <span class="user-avatar" aria-hidden="true">{{ String(row.username || '?').slice(0, 1).toUpperCase() }}</span>
+              <strong class="mobile-user-name">{{ row.username }}</strong>
+            </div>
+            <el-tag :type="row.is_active ? 'success' : 'danger'" round size="small">
+              {{ row.is_active ? '启用' : '禁用' }}
+            </el-tag>
+          </header>
+          <dl class="mobile-record-dl">
+            <div class="mobile-record-dl__row">
+              <dt>邮箱</dt>
+              <dd :class="{ 'user-muted': !row.email }">{{ row.email || '—' }}</dd>
+            </div>
+            <div class="mobile-record-dl__row">
+              <dt>角色</dt>
+              <dd>
+                <div v-if="row.roles?.length" class="tag-list mobile-role-tags">
+                  <el-tag v-for="role in row.roles" :key="role.id" type="info" round size="small">{{ role.name }}</el-tag>
+                </div>
+                <span v-else class="user-muted">—</span>
+              </dd>
+            </div>
+          </dl>
+          <footer v-if="canWrite" class="mobile-record-card__actions">
+            <el-button link type="primary" @click="toggleStatus(row, !row.is_active)">
+              {{ row.is_active ? '禁用' : '启用' }}
+            </el-button>
+            <el-button link type="primary" @click="openRoleDialog(row)">分配角色</el-button>
+          </footer>
+        </article>
       </div>
 
       <el-table v-else :data="users" border v-loading="loading && Boolean(users.length)" @selection-change="handleSelectionChange">
@@ -319,6 +379,23 @@ onMounted(async () => {
 }
 
 @media (max-width: 767px) {
+  .table-panel {
+    padding: 14px;
+  }
+
+  .mobile-user-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    color: var(--ink);
+  }
+
+  .mobile-role-tags {
+    justify-content: flex-end;
+  }
+
   .toolbar__left {
     flex: 1 1 100%;
   }
