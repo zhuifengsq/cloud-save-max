@@ -28,6 +28,19 @@ const runtimeTag = computed<TagProps['type']>(() => {
   if (props.account.runtime_status === 'error') return 'danger'
   return 'info'
 })
+
+const runtimeStatusLabel = computed(() => {
+  const status = String(props.account.runtime_status || '').trim()
+  if (!status) return '未探测'
+  const labels: Record<string, string> = {
+    active: '运行正常',
+    error: '探测异常',
+    auth_required: '待二次认证',
+    pending_auth: '待二次认证',
+    disabled: '已禁用',
+  }
+  return labels[status] || status
+})
 </script>
 
 <template>
@@ -37,7 +50,7 @@ const runtimeTag = computed<TagProps['type']>(() => {
         <div class="account-card__title-row">
           <DriveTypeIcon :type="account.drive_type" :size="22" />
           <h3>{{ account.name }}</h3>
-          <el-tag v-if="account.is_default && !$slots.controls" type="success" effect="plain" round>默认账号</el-tag>
+          <el-tag v-if="account.is_default && !$slots.controls" type="success" effect="plain" round disable-transitions>默认账号</el-tag>
         </div>
         <div class="account-card__meta">
           <span>{{ account.profile?.nickname || account.profile?.username || '未命名账号' }}</span>（<span>{{ account.profile?.drive_name || account.drive_type }}</span>）
@@ -47,12 +60,12 @@ const runtimeTag = computed<TagProps['type']>(() => {
       <slot name="controls" />
 
       <div class="account-card__status">
-        <el-tag v-if="account.is_default && $slots.controls" type="success" effect="plain" round size="small">默认账号</el-tag>
-        <el-tag :type="account.enabled ? 'success' : 'info'" :size="$slots.controls ? 'small' : undefined" effect="plain" round>
+        <el-tag v-if="account.is_default && $slots.controls" type="success" effect="plain" round size="small" disable-transitions>默认账号</el-tag>
+        <el-tag :type="account.enabled ? 'success' : 'info'" :size="$slots.controls ? 'small' : undefined" effect="plain" round disable-transitions>
           {{ account.enabled ? '启用' : '禁用' }}
         </el-tag>
-        <el-tag :type="runtimeTag" :size="$slots.controls ? 'small' : undefined" effect="plain" round>
-          {{ account.runtime_status || '未探测' }}
+        <el-tag :type="runtimeTag" :size="$slots.controls ? 'small' : undefined" effect="plain" round disable-transitions>
+          {{ runtimeStatusLabel }}
         </el-tag>
       </div>
     </div>

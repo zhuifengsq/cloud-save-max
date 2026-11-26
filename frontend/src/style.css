@@ -19,8 +19,8 @@ html:root {
   --brand-2: var(--brand);
   --radius: 12px;
   --control-radius: 8px;
-  --shadow: 0 2px 8px rgba(23, 32, 51, .025);
-  --shadow-hover: 0 6px 20px rgba(23, 32, 51, .06);
+  --shadow: 0 1px 2px rgba(23, 32, 51, 0.04), 0 4px 12px rgba(23, 32, 51, 0.03);
+  --shadow-hover: 0 2px 6px rgba(23, 32, 51, 0.05), 0 10px 26px rgba(23, 32, 51, 0.08);
   --shell-max-width: none;
   --panel-bg: var(--card);
   --panel-border: var(--line);
@@ -63,8 +63,8 @@ html:root {
   --el-bg-color-overlay: var(--card);
   --el-bg-color-page: var(--bg);
   --el-mask-color: rgba(255, 255, 255, 0.72);
-  --el-box-shadow: 0 12px 40px rgba(23, 32, 51, .12);
-  --el-box-shadow-light: 0 6px 24px rgba(23, 32, 51, .08);
+  --el-box-shadow: 0 4px 12px rgba(23, 32, 51, 0.08), 0 18px 44px rgba(23, 32, 51, 0.14);
+  --el-box-shadow-light: 0 2px 8px rgba(23, 32, 51, 0.06), 0 8px 24px rgba(23, 32, 51, 0.08);
   --el-menu-text-color: var(--ink-2);
   --el-menu-active-color: var(--brand);
   --el-menu-hover-bg-color: var(--el-fill-color-light);
@@ -107,8 +107,8 @@ html:root:has(> head > meta[name='color-scheme'][content='light']) {
     --line: #2b3545;
     --line-strong: #3b485b;
     --brand: #8aabff;
-    --shadow: 0 2px 8px rgba(0, 0, 0, .08);
-    --shadow-hover: 0 6px 20px rgba(0, 0, 0, .18);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.14);
+    --shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.24), 0 12px 28px rgba(0, 0, 0, 0.28);
     --scrollbar-thumb: #64748b;
     --el-color-primary-dark-2: #7299fb;
     --el-color-primary-light-3: #7299fb;
@@ -186,8 +186,8 @@ html:root[data-theme='dark'] {
   --line: #2b3545;
   --line-strong: #3b485b;
   --brand: #8aabff;
-  --shadow: 0 2px 8px rgba(0, 0, 0, .08);
-  --shadow-hover: 0 6px 20px rgba(0, 0, 0, .18);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.14);
+  --shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.24), 0 12px 28px rgba(0, 0, 0, 0.28);
   --scrollbar-thumb: #64748b;
   --el-color-primary-dark-2: #7299fb;
   --el-color-primary-light-3: #7299fb;
@@ -235,12 +235,12 @@ body {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--brand) 20%, transparent);
+  background: color-mix(in oklab, var(--brand) 20%, transparent);
   color: var(--ink);
 }
 
 html:root[data-theme='dark'] ::selection {
-  background: color-mix(in srgb, var(--brand) 34%, transparent);
+  background: color-mix(in oklab, var(--brand) 34%, transparent);
   color: #ffffff;
 }
 
@@ -442,7 +442,7 @@ html:root[data-theme='dark'] .glass-panel {
 }
 
 .metric-tile--warn {
-  border-color: color-mix(in srgb, var(--el-color-warning) 35%, var(--line));
+  border-color: color-mix(in oklab, var(--el-color-warning) 35%, var(--line));
 }
 
 .card-grid {
@@ -624,22 +624,106 @@ html:root[data-theme='dark'] .glass-panel {
   display: none;
 }
 
-/* 侧边导航分段：小标题 + 分组菜单 */
+/* 侧边导航分段：小标题 + 分组菜单 + 滚动阴影提示 */
 .app-nav-sections {
   flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+  display: block;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 2px;
+  container-type: scroll-state;
+  --nav-scroll-shadow: rgb(15 23 42 / 0.14);
+}
+
+html:root[data-theme='dark'] .app-nav-sections {
+  --nav-scroll-shadow: rgb(0 0 0 / 0.36);
+}
+
+@media (prefers-color-scheme: dark) {
+  html:root:not([data-theme='light']) .app-nav-sections {
+    --nav-scroll-shadow: rgb(0 0 0 / 0.36);
+  }
+}
+
+.app-nav-sections::before,
+.app-nav-sections::after {
+  content: '';
+  display: block;
+  position: sticky;
+  block-size: 12px;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.app-nav-sections::before {
+  inset-block-start: 0;
+  margin-block-end: -12px;
+  background: radial-gradient(farthest-side at 50% 0, var(--nav-scroll-shadow), transparent);
+}
+
+.app-nav-sections::after {
+  inset-block-end: 0;
+  margin-block-start: -12px;
+  background: radial-gradient(farthest-side at 50% 100%, var(--nav-scroll-shadow), transparent);
+}
+
+@container scroll-state(scrollable: block-start) {
+  .app-nav-sections::before {
+    opacity: 1;
+  }
+}
+
+@container scroll-state(scrollable: block-end) {
+  .app-nav-sections::after {
+    opacity: 1;
+  }
+}
+
+@supports not (container-type: scroll-state) {
+  .app-nav-sections::before,
+  .app-nav-sections::after {
+    animation: nav-scroll-shadow linear both;
+    animation-timeline: scroll();
+  }
+
+  .app-nav-sections::before {
+    animation-range: 0 2rem;
+  }
+
+  .app-nav-sections::after {
+    animation-direction: reverse;
+    animation-range: calc(100% - 2rem) 100%;
+  }
+}
+
+@keyframes nav-scroll-shadow {
+  to {
+    opacity: 1;
+  }
+}
+
+@supports not ((container-type: scroll-state) or (animation-timeline: scroll())) {
+  .app-nav-sections {
+    background:
+      linear-gradient(var(--card) 30%, transparent) top / 100% 2.5rem no-repeat local,
+      linear-gradient(transparent, var(--card) 70%) bottom / 100% 2.5rem no-repeat local,
+      radial-gradient(farthest-side at 50% 0, var(--nav-scroll-shadow), transparent) top / 100% 0.75rem no-repeat,
+      radial-gradient(farthest-side at 50% 100%, var(--nav-scroll-shadow), transparent) bottom / 100% 0.75rem no-repeat,
+      var(--card);
+  }
 }
 
 .app-nav-section {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.app-nav-section + .app-nav-section {
+  margin-top: 20px;
 }
 
 .app-nav-section__title {
@@ -681,7 +765,7 @@ html:root[data-theme='dark'] .glass-panel {
   gap: 10px;
   padding: 10px;
   border-radius: var(--control-radius);
-  background: color-mix(in srgb, var(--surface-muted) 80%, transparent);
+  background: color-mix(in oklab, var(--surface-muted) 80%, transparent);
   border: 1px solid var(--line-soft);
 }
 
@@ -849,10 +933,18 @@ html:root[data-theme='dark'] .app-theme-switch {
 }
 
 .app-header__eyebrow,
-.app-header__title,
+.app-header__brand,
 .app-header__right,
 .app-header .app-header__menu {
   display: none;
+}
+
+.app-header__brand-logo {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .app-header .el-breadcrumb {
@@ -1185,14 +1277,22 @@ html:root[data-theme='dark'] .app-theme-switch {
 
 /* Controls: Element Plus owns semantic, disabled, text and link states. */
 body .el-button:not(.el-button--small):not(.is-text):not(.is-link) {
-  height: 40px;
+  min-block-size: 40px;
+  height: auto;
+  padding-block: 8px;
   padding-inline: 16px;
 }
 
 body .el-button {
   border-radius: var(--control-radius);
   font-weight: 500;
-  transition: background-color .15s, border-color .15s, color .15s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s, scale 0.12s ease-out;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body .el-button:not(.is-disabled):active {
+    scale: 0.98;
+  }
 }
 
 .toolbar__left > .el-button + .el-button,
@@ -1270,32 +1370,32 @@ body .el-segmented {
 
 .el-tag--plain.el-tag--primary {
   --el-tag-text-color: var(--el-color-primary);
-  --el-tag-bg-color: color-mix(in srgb, var(--el-color-primary) 8%, var(--card));
-  --el-tag-border-color: color-mix(in srgb, var(--el-color-primary) 34%, transparent);
+  --el-tag-bg-color: color-mix(in oklab, var(--el-color-primary) 8%, var(--card));
+  --el-tag-border-color: color-mix(in oklab, var(--el-color-primary) 34%, transparent);
 }
 
 .el-tag--plain.el-tag--success {
   --el-tag-text-color: var(--el-color-success);
-  --el-tag-bg-color: color-mix(in srgb, var(--el-color-success) 8%, var(--card));
-  --el-tag-border-color: color-mix(in srgb, var(--el-color-success) 34%, transparent);
+  --el-tag-bg-color: color-mix(in oklab, var(--el-color-success) 8%, var(--card));
+  --el-tag-border-color: color-mix(in oklab, var(--el-color-success) 34%, transparent);
 }
 
 .el-tag--plain.el-tag--warning {
   --el-tag-text-color: var(--el-color-warning);
-  --el-tag-bg-color: color-mix(in srgb, var(--el-color-warning) 9%, var(--card));
-  --el-tag-border-color: color-mix(in srgb, var(--el-color-warning) 36%, transparent);
+  --el-tag-bg-color: color-mix(in oklab, var(--el-color-warning) 9%, var(--card));
+  --el-tag-border-color: color-mix(in oklab, var(--el-color-warning) 36%, transparent);
 }
 
 .el-tag--plain.el-tag--danger,
 .el-tag--plain.el-tag--error {
   --el-tag-text-color: var(--el-color-danger);
-  --el-tag-bg-color: color-mix(in srgb, var(--el-color-danger) 8%, var(--card));
-  --el-tag-border-color: color-mix(in srgb, var(--el-color-danger) 36%, transparent);
+  --el-tag-bg-color: color-mix(in oklab, var(--el-color-danger) 8%, var(--card));
+  --el-tag-border-color: color-mix(in oklab, var(--el-color-danger) 36%, transparent);
 }
 
 .el-tag--plain.el-tag--info {
   --el-tag-text-color: var(--ink-2);
-  --el-tag-bg-color: color-mix(in srgb, var(--ink-2) 7%, var(--card));
+  --el-tag-bg-color: color-mix(in oklab, var(--ink-2) 7%, var(--card));
   --el-tag-border-color: var(--line-strong);
 }
 
@@ -1734,6 +1834,10 @@ pre {
 }
 
 @media (max-width: 767px) {
+  html {
+    scroll-padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
   .el-dialog {
     padding: 18px;
     --el-dialog-width: 95% !important;
@@ -1773,7 +1877,7 @@ pre {
     grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
     gap: 4px;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
-    background: color-mix(in srgb, var(--card) 90%, transparent);
+    background: color-mix(in oklab, var(--card) 90%, transparent);
     backdrop-filter: blur(16px);
     border-top: 1px solid var(--line);
   }
@@ -1816,14 +1920,26 @@ pre {
 
   .app-header .app-header__menu {
     display: inline-flex;
-    width: 36px;
-    height: 36px;
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
   }
 
-  .app-header__title {
-    display: block;
-    margin: 0;
-    font-size: 16px;
+  .app-header__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  .app-header__brand span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .app-header .el-breadcrumb {
@@ -1835,10 +1951,19 @@ pre {
     gap: 8px;
   }
 
-  .app-header__user {
-    width: 34px;
-    height: 34px;
+  .app-header .app-header__user,
+  .app-header .app-header__user.is-text {
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
     padding: 0;
+    border-radius: 999px !important;
+    background: var(--brand-soft);
+    color: var(--brand);
+    border: 1px solid color-mix(in oklab, var(--brand) 22%, transparent);
+    font-size: 15px;
+    font-weight: 700;
   }
 
   .app-user-chip {

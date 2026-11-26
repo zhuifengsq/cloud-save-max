@@ -15,7 +15,7 @@ const visibleRecords = computed(() => expanded.value ? props.records : props.rec
 </script>
 
 <template>
-  <article class="glass-panel dashboard-log" :aria-label="title">
+  <article class="glass-panel dashboard-log" :class="{ 'dashboard-log--empty': !records.length }" :aria-label="title">
     <header class="dashboard-log__header">
       <h2>{{ title }} <span>{{ records.length }} 条</span></h2>
       <div class="dashboard-log__actions">
@@ -51,6 +51,8 @@ const visibleRecords = computed(() => expanded.value ? props.records : props.rec
 
 <style scoped>
 .dashboard-log { padding: 22px; min-inline-size: 0; }
+.dashboard-log--empty { padding: 14px 18px; }
+.dashboard-log--empty .dashboard-log__empty { margin: 4px 0 0; }
 .dashboard-log__header, .dashboard-log__title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .dashboard-log__header { flex-wrap: wrap; }
 .dashboard-log__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px; margin-inline-start: auto; }

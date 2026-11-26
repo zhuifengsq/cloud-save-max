@@ -523,6 +523,9 @@ function backToDouban() {
 }
 
 const isTmdbMode = computed(() => viewMode.value === 'tmdb')
+const showDoubanSkeleton = computed(() => listState.loading && !items.value.length)
+const showSearchSkeleton = computed(() => searchState.loading && !searchItems.value.length)
+const discoverSkeletonCount = computed(() => (isMobile.value ? 6 : 12))
 
 const detailTitle = computed(() => {
   const d = detail.data || {}
@@ -639,7 +642,7 @@ watch(() => route.name, (name, previousName) => {
 
     <el-card class="page__card search-card" shadow="never">
       <div class="search-card__controls">
-        <el-input v-model="searchState.q" class="search-card__input" placeholder="搜索 TMDB 资源（点击搜索后切换结果）" clearable @keydown.enter="!isImeComposing($event) && doSearch()">
+        <el-input v-model="searchState.q" class="search-card__input" placeholder="搜索 TMDB 剧集或电影" clearable @keydown.enter="!isImeComposing($event) && doSearch()">
           <template #prefix>
             <el-icon class="search-card__icon"><Search /></el-icon>
           </template>
@@ -650,21 +653,33 @@ watch(() => route.name, (name, previousName) => {
     </el-card>
 
     <template v-if="isTmdbMode">
-      <el-card class="page__card page__card--compact" shadow="never">
-        <template #header>
-          <div class="toolbar">
-            <el-button size="small" :icon="ArrowLeft" @click="backToDouban">返回影视发现</el-button>
-            <div id="discover-results-heading" tabindex="-1" class="toolbar__title">搜索结果</div>
-            <div class="toolbar__content">
-              <span class="search-result__meta">
-                <template v-if="String(searchState.q || '').trim()">「{{ String(searchState.q || '').trim() }}」· </template>
-                共 {{ searchPager.totalResults }} 条
-                <template v-if="searchPager.totalPages > 1">· 第 {{ searchPager.page }}/{{ searchPager.totalPages }} 页</template>
-              </span>
+      <section class="discover-section">
+        <div class="discover-toolbar">
+          <el-button size="small" :icon="ArrowLeft" @click="backToDouban">返回影视发现</el-button>
+          <div id="discover-results-heading" tabindex="-1" class="toolbar__title">搜索结果</div>
+          <div class="toolbar__content">
+            <span class="search-result__meta">
+              <template v-if="String(searchState.q || '').trim()">「{{ String(searchState.q || '').trim() }}」· </template>
+              共 {{ searchPager.totalResults }} 条
+              <template v-if="searchPager.totalPages > 1">· 第 {{ searchPager.page }}/{{ searchPager.totalPages }} 页</template>
+            </span>
+          </div>
+        </div>
+        <div v-if="showSearchSkeleton" class="poster-grid" aria-hidden="true">
+          <div v-for="i in discoverSkeletonCount" :key="`tmdb-sk-${i}`" class="poster-card poster-card--skeleton">
+            <div class="poster-card__cover">
+              <div class="poster-card__skeleton" />
+            </div>
+            <div class="poster-card__meta">
+              <span class="ui-skeleton" style="width: 78%; height: 15px" />
+              <span class="ui-skeleton" style="width: 54%; height: 12px" />
+            </div>
+            <div v-if="canWrite" class="poster-card__actions">
+              <span class="ui-skeleton" style="width: 100%; height: 28px; border-radius: 9px" />
             </div>
           </div>
-        </template>
-        <div v-loading="searchState.loading" class="poster-grid">
+        </div>
+        <div v-else v-loading="searchState.loading" class="poster-grid">
           <div
             v-for="row in searchItems"
             :key="String(row.id || row.title || row.name)"
@@ -681,14 +696,24 @@ watch(() => route.name, (name, previousName) => {
                 <template #placeholder>
                   <div class="poster-card__skeleton" />
                 </template>
+                <template #error>
+                  <div class="poster-card__fallback" aria-hidden="true">
+                    <span class="poster-card__fallback-char">{{ (bestTitle(row) || '影').slice(0, 1) }}</span>
+                    <span class="poster-card__fallback-text">暂无封面</span>
+                  </div>
+                </template>
               </el-image>
-              <div v-else class="poster-card__placeholder">暂无海报</div>
+              <div v-else class="poster-card__fallback" aria-hidden="true">
+                <span class="poster-card__fallback-char">{{ (bestTitle(row) || '影').slice(0, 1) }}</span>
+                <span class="poster-card__fallback-text">暂无封面</span>
+              </div>
               <div
+                v-if="row.vote_average != null && Number(row.vote_average) > 0"
                 class="poster-card__rating"
-                :class="{ 'poster-card__rating--high': row.vote_average != null && Number(row.vote_average) >= 8 }"
+                :class="{ 'poster-card__rating--high': Number(row.vote_average) >= 8 }"
               >
                 <span aria-hidden="true">★</span>
-                <span>{{ row.vote_average != null ? Number(row.vote_average).toFixed(1) : '-' }}</span>
+                <span>{{ Number(row.vote_average).toFixed(1) }}</span>
               </div>
             </div>
             <div class="poster-card__meta">
@@ -705,7 +730,7 @@ watch(() => route.name, (name, previousName) => {
           </div>
         </div>
         <ResponsivePagination
-          v-if="searchPager.totalResults > 0"
+          v-if="!showSearchSkeleton && searchPager.totalResults > 0"
           class="discover-pagination"
           label="影视发现分页"
           :current-page="searchPager.page"
@@ -716,7 +741,7 @@ watch(() => route.name, (name, previousName) => {
           :disabled="searchState.loading"
           @current-change="onSearchPageChange"
         />
-      </el-card>
+      </section>
     </template>
 
     <template v-else>
@@ -725,21 +750,33 @@ watch(() => route.name, (name, previousName) => {
         <div v-if="listState.isMockData">当前为模拟数据：{{ listState.mockReason || '豆瓣接口不可用' }}</div>
       </div>
 
-      <el-card class="page__card page__card--compact" shadow="never">
-        <template #header>
-          <div class="toolbar">
-            <div id="discover-filter-heading" tabindex="-1" class="toolbar__title">筛选</div>
-            <div class="toolbar__content">
-              <el-select v-model="filters.main" size="small" :disabled="categoriesLoading" style="width: 220px" @change="onCategoryChange">
-                <el-option v-for="c in categories" :key="c.key" :label="c.label" :value="c.key" />
-              </el-select>
-              <el-select v-model="filters.sub" size="small" :disabled="categoriesLoading" style="width: 220px" @change="onCategoryChange">
-                <el-option v-for="s in subOptions" :key="s.key" :label="s.label" :value="s.key" />
-              </el-select>
+      <section class="discover-section">
+        <div class="discover-toolbar">
+          <div id="discover-filter-heading" tabindex="-1" class="toolbar__title">筛选</div>
+          <div class="toolbar__content">
+            <el-select v-model="filters.main" size="small" class="discover-filter-select" :disabled="categoriesLoading" @change="onCategoryChange">
+              <el-option v-for="c in categories" :key="c.key" :label="c.label" :value="c.key" />
+            </el-select>
+            <el-select v-model="filters.sub" size="small" class="discover-filter-select" :disabled="categoriesLoading" @change="onCategoryChange">
+              <el-option v-for="s in subOptions" :key="s.key" :label="s.label" :value="s.key" />
+            </el-select>
+          </div>
+        </div>
+        <div v-if="showDoubanSkeleton" class="poster-grid" aria-hidden="true">
+          <div v-for="i in discoverSkeletonCount" :key="`douban-sk-${i}`" class="poster-card poster-card--skeleton">
+            <div class="poster-card__cover">
+              <div class="poster-card__skeleton" />
+            </div>
+            <div class="poster-card__meta">
+              <span class="ui-skeleton" style="width: 78%; height: 15px" />
+              <span class="ui-skeleton" style="width: 62%; height: 12px" />
+            </div>
+            <div v-if="canWrite" class="poster-card__actions">
+              <span class="ui-skeleton" style="width: 100%; height: 28px; border-radius: 9px" />
             </div>
           </div>
-        </template>
-        <div v-loading="listState.loading" class="poster-grid">
+        </div>
+        <div v-else v-loading="listState.loading" class="poster-grid">
           <div
             v-for="row in items"
             :key="row.id"
@@ -756,14 +793,24 @@ watch(() => route.name, (name, previousName) => {
                 <template #placeholder>
                   <div class="poster-card__skeleton" />
                 </template>
+                <template #error>
+                  <div class="poster-card__fallback" aria-hidden="true">
+                    <span class="poster-card__fallback-char">{{ (row.title || '影').slice(0, 1) }}</span>
+                    <span class="poster-card__fallback-text">暂无封面</span>
+                  </div>
+                </template>
               </el-image>
-              <div v-else class="poster-card__placeholder">暂无海报</div>
+              <div v-else class="poster-card__fallback" aria-hidden="true">
+                <span class="poster-card__fallback-char">{{ (row.title || '影').slice(0, 1) }}</span>
+                <span class="poster-card__fallback-text">暂无封面</span>
+              </div>
               <div
+                v-if="row.rating?.value != null && Number(row.rating.value) > 0"
                 class="poster-card__rating"
-                :class="{ 'poster-card__rating--high': row.rating?.value != null && Number(row.rating.value) >= 8 }"
+                :class="{ 'poster-card__rating--high': Number(row.rating.value) >= 8 }"
               >
                 <span aria-hidden="true">★</span>
-                <span>{{ row.rating?.value != null ? Number(row.rating.value).toFixed(1) : '-' }}</span>
+                <span>{{ Number(row.rating.value).toFixed(1) }}</span>
               </div>
             </div>
             <div class="poster-card__meta">
@@ -779,6 +826,7 @@ watch(() => route.name, (name, previousName) => {
         </div>
 
         <ResponsivePagination
+          v-if="!showDoubanSkeleton && listState.total > 0"
           class="discover-pagination"
           label="影视发现分页"
           :current-page="currentPage"
@@ -787,7 +835,7 @@ watch(() => route.name, (name, previousName) => {
           :mobile="isMobile"
           @current-change="onPageChange"
         />
-      </el-card>
+      </section>
     </template>
 
     <el-dialog
@@ -1032,6 +1080,20 @@ watch(() => route.name, (name, previousName) => {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
+.discover-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.discover-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.discover-filter-select {
+  width: 210px;
+}
 .toolbar {
   display: flex;
   align-items: center;
@@ -1105,13 +1167,22 @@ watch(() => route.name, (name, previousName) => {
   width: 100%;
   height: 100%;
 }
+.poster-card--skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+.poster-card--skeleton:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--el-border-color-lighter);
+}
 .poster-card__skeleton {
   width: 100%;
   height: 100%;
   background: linear-gradient(
     90deg,
     var(--surface-muted) 25%,
-    color-mix(in srgb, var(--surface-muted) 45%, var(--card)) 50%,
+    color-mix(in oklab, var(--surface-muted) 45%, var(--card)) 50%,
     var(--surface-muted) 75%
   );
   background-size: 200% 100%;
@@ -1125,14 +1196,39 @@ watch(() => route.name, (name, previousName) => {
     background-position: -200% 0;
   }
 }
-.poster-card__placeholder {
+.poster-card__fallback {
   width: 100%;
   height: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
+  gap: 8px;
+  background: linear-gradient(
+    145deg,
+    color-mix(in oklab, var(--brand) 10%, var(--surface-muted)) 0%,
+    var(--surface-muted) 60%,
+    color-mix(in oklab, var(--line-strong) 45%, var(--card)) 100%
+  );
+  color: var(--ink-muted);
+}
+.poster-card__fallback-char {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklab, var(--brand) 14%, var(--card));
+  border: 1px solid color-mix(in oklab, var(--brand) 24%, transparent);
+  color: var(--brand);
+  font-size: 18px;
+  font-weight: 700;
+}
+.poster-card__fallback-text {
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
 }
 .poster-card__rating {
   position: absolute;
@@ -1191,7 +1287,7 @@ watch(() => route.name, (name, previousName) => {
   border-radius: 9px;
 }
 .poster-card__actions :deep(.el-button:hover) {
-  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  background: color-mix(in oklab, var(--brand) 18%, transparent);
 }
 .title__main {
   font-weight: 600;
@@ -1267,8 +1363,8 @@ watch(() => route.name, (name, previousName) => {
   inset: 0;
   background: linear-gradient(
     135deg,
-    color-mix(in srgb, var(--card) 68%, transparent) 0%,
-    color-mix(in srgb, var(--card) 88%, transparent) 62%,
+    color-mix(in oklab, var(--card) 68%, transparent) 0%,
+    color-mix(in oklab, var(--card) 88%, transparent) 62%,
     var(--card) 100%
   );
 }
@@ -1340,7 +1436,7 @@ watch(() => route.name, (name, previousName) => {
   border-radius: 999px;
   font-size: 12px;
   color: var(--ink-2);
-  background: color-mix(in srgb, var(--surface-muted) 88%, transparent);
+  background: color-mix(in oklab, var(--surface-muted) 88%, transparent);
   border: 1px solid var(--line);
 }
 .detail__sub {
@@ -1418,6 +1514,26 @@ watch(() => route.name, (name, previousName) => {
 @media (max-width: 767px) {
   :global(.media-detail-dialog.el-dialog) {
     padding: 14px;
+  }
+
+  .discover-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .discover-toolbar .toolbar__content {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .discover-filter-select {
+    width: 100%;
+  }
+
+  .search-result__meta {
+    grid-column: 1 / -1;
   }
 
   .poster-grid {

@@ -97,6 +97,18 @@ const badgeStyle = computed(() => {
   object-fit: contain;
 }
 
+:global(html[data-theme='dark']) .drive-type-logo {
+  filter: brightness(0.88) saturate(0.96);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--line-strong) 80%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :global(html:not([data-theme='light'])) .drive-type-logo {
+    filter: brightness(0.88) saturate(0.96);
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--line-strong) 80%, transparent);
+  }
+}
+
 .drive-type-badge {
   display: inline-flex;
   align-items: center;

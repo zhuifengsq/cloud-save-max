@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import axios, { type AxiosError } from 'axios'
-import { CircleCheck, FolderOpened, Star, Warning } from '@element-plus/icons-vue'
+import { ArrowRight, CircleCheck, FolderOpened, Star, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 
@@ -455,25 +455,44 @@ onMounted(loadProbeScheduler)
       </div>
     </section>
 
-    <section class="glass-panel dashboard-section account-scheduler">
-      <div class="account-scheduler__head"><div class="dashboard-section__title">自动探测 / 签到</div><span>按计划检查账号状态并执行签到</span></div>
-      <div class="toolbar">
-        <div class="toolbar__left">
-          <el-switch v-model="probeScheduler.data.enabled" active-text="启用调度" inactive-text="暂停调度" />
-          <el-input v-model="probeScheduler.data.crontab" placeholder="0 4 * * *" :style="{ width: isMobile ? '100%' : '220px' }">
-            <template #append>
-              <el-button @click="cronPreviewVisible = true">预览</el-button>
-            </template>
-          </el-input>
-          <el-input v-model="probeScheduler.data.timezone" placeholder="Asia/Shanghai" :style="{ width: isMobile ? '100%' : '180px' }" />
-          <el-switch v-model="probeScheduler.data.enabled_only" active-text="仅启用账号" inactive-text="全部账号" />
-        </div>
-        <div class="toolbar__right">
-          <el-button :loading="probeScheduler.loading" @click="loadProbeScheduler">刷新</el-button>
-          <el-button type="primary" :loading="probeScheduler.saving" :disabled="!canWrite" @click="saveProbeScheduler">保存</el-button>
+    <details class="glass-panel account-scheduler">
+      <summary class="account-scheduler__summary">
+        <span class="account-scheduler__chevron" aria-hidden="true"><ArrowRight /></span>
+        <span class="account-scheduler__title">自动探测 / 签到</span>
+        <el-tag
+          size="small"
+          :type="probeScheduler.data.enabled ? 'success' : 'info'"
+          effect="plain"
+          disable-transitions
+        >
+          {{ probeScheduler.data.enabled ? '已开启' : '已暂停' }}
+        </el-tag>
+        <code class="account-scheduler__meta">{{ probeScheduler.data.crontab }} · {{ probeScheduler.data.timezone }}</code>
+        <span class="account-scheduler__action">配置调度</span>
+      </summary>
+      <div class="account-scheduler__body">
+        <div class="account-scheduler__hint">按计划检查账号状态并执行签到</div>
+        <div class="toolbar">
+          <div class="toolbar__left">
+            <el-switch v-model="probeScheduler.data.enabled" />
+            <span class="account-scheduler__label">启用调度</span>
+            <el-input v-model="probeScheduler.data.crontab" placeholder="0 4 * * *" :style="{ width: isMobile ? '100%' : '220px' }">
+              <template #append>
+                <el-button @click="cronPreviewVisible = true">预览</el-button>
+              </template>
+            </el-input>
+            <span class="account-scheduler__label account-scheduler__tz-label">时区</span>
+            <el-input v-model="probeScheduler.data.timezone" placeholder="Asia/Shanghai" :style="{ width: isMobile ? '100%' : '180px' }" />
+            <el-switch v-model="probeScheduler.data.enabled_only" />
+            <span class="account-scheduler__label">仅启用账号</span>
+          </div>
+          <div class="toolbar__right">
+            <el-button :loading="probeScheduler.loading" @click="loadProbeScheduler">刷新</el-button>
+            <el-button type="primary" :loading="probeScheduler.saving" :disabled="!canWrite" @click="saveProbeScheduler">保存</el-button>
+          </div>
         </div>
       </div>
-    </section>
+    </details>
 
     <section v-if="showInitialSkeleton" class="card-grid account-list" aria-hidden="true">
       <div v-for="i in 3" :key="`acc-card-sk-${i}`" class="glass-panel ui-skeleton-card">
@@ -637,19 +656,72 @@ onMounted(loadProbeScheduler)
 .drive-accounts-page .filter-strip :deep(.el-input__wrapper),
 .drive-accounts-page .filter-strip :deep(.el-select__wrapper) { min-height: 40px; }
 .account-scheduler { padding: 0; overflow: hidden; }
-.account-scheduler__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 16px 22px; border-bottom: 1px solid var(--panel-border); }
-.account-scheduler__head .dashboard-section__title { margin: 0; font-size: 15px; }
-.account-scheduler__head span { color: var(--el-text-color-secondary); font-size: 12px; }
-.account-scheduler .toolbar { padding: 18px 22px; }
-.account-scheduler .toolbar__left { gap: 12px; }
+.account-scheduler__summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-block-size: 48px;
+  padding: 10px 20px;
+  cursor: pointer;
+  user-select: none;
+}
+.account-scheduler__summary::-webkit-details-marker { display: none; }
+.account-scheduler[open] > .account-scheduler__summary { border-bottom: 1px solid var(--panel-border); }
+.account-scheduler__chevron {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+}
+.account-scheduler__chevron svg { width: 13px; height: 13px; }
+.account-scheduler[open] > .account-scheduler__summary .account-scheduler__chevron svg {
+  transform: rotate(90deg);
+  color: var(--brand);
+}
+.account-scheduler__title { font-size: 15px; font-weight: 700; color: var(--el-text-color-primary); }
+.account-scheduler__meta {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  color: var(--ink-2);
+}
+.account-scheduler__action { margin-inline-start: auto; font-size: 12.5px; font-weight: 500; color: var(--brand); }
+.account-scheduler__body { padding: 16px 20px 20px; display: grid; gap: 12px; }
+.account-scheduler__hint { color: var(--el-text-color-secondary); font-size: 12.5px; }
+.account-scheduler__label { font-size: 13px; color: var(--el-text-color-regular); white-space: nowrap; }
+.account-scheduler .toolbar { padding: 0; }
+.account-scheduler .toolbar__left { gap: 10px; }
 .account-scheduler :deep(.el-input__wrapper) { min-height: 40px; }
+@supports (interpolate-size: allow-keywords) {
+  @media (prefers-reduced-motion: no-preference) {
+    .account-scheduler__chevron svg { transition: transform 160ms ease; }
+    .account-scheduler::details-content {
+      block-size: 0;
+      opacity: 0;
+      overflow: hidden;
+      transition: block-size 0.2s ease, opacity 0.18s ease, content-visibility 0.2s ease;
+      transition-behavior: allow-discrete;
+    }
+    .account-scheduler[open]::details-content { block-size: auto; opacity: 1; }
+  }
+}
 .account-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 16px; }
 @media (max-width: 767px) {
   .drive-accounts-page > .section-header { min-height: 0; }
   .drive-accounts-page .section-header__title h2 { font-size: 19px; }
   .drive-accounts-page .metric-tile { min-height: 0; }
-  .account-scheduler__head { align-items: flex-start; flex-direction: column; }
-  .account-scheduler .toolbar { padding: 16px; }
+  .account-scheduler__summary { padding: 10px 14px; }
+  .account-scheduler__body { padding: 14px; }
+  .account-scheduler__tz-label { display: none; }
   .account-list { grid-template-columns: 1fr; }
 }
 .del__alert {

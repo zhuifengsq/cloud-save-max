@@ -41,8 +41,8 @@ async function clearLogs() {
     empty-text="暂无换链记录，手动或自动换源后会显示在这里。"
   >
     <template #actions>
-      <el-button v-if="auth.permissions.includes(TASK_WRITE)" text size="small" type="danger"
-        :loading="clearing" :disabled="!records.length" @click="clearLogs">
+      <el-button v-if="auth.permissions.includes(TASK_WRITE) && records.length" text size="small" type="danger"
+        :loading="clearing" @click="clearLogs">
         清除日志
       </el-button>
     </template>

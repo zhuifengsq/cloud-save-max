@@ -174,7 +174,8 @@ onMounted(() => {
             </div>
             <div class="toolbar__right">
               <el-button @click="resetFilters">清空筛选</el-button>
-              <el-button v-if="canWrite" type="danger" @click="handleDeleteAll">删除所有</el-button>
+              <span v-if="canWrite" class="toolbar-divider" aria-hidden="true" />
+              <el-button v-if="canWrite" type="danger" plain @click="handleDeleteAll">删除所有</el-button>
             </div>
           </div>
         </section>
@@ -198,40 +199,47 @@ onMounted(() => {
                 <div class="empty-state__desc">当前筛选条件下没有记录，可清空筛选后再试。</div>
               </div>
             </template>
-            <el-table-column label="时间" width="156">
+            <el-table-column label="时间" width="144">
               <template #default="{ row }">
                 <span class="audit-time">{{ formatDateTimeText(row.created_at) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="用户" width="110">
+            <el-table-column label="用户" width="96">
               <template #default="{ row }">
                 <span>{{ row.actor_username || (row.actor_user_id ? `#${row.actor_user_id}` : '—') }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" min-width="170">
+            <el-table-column label="操作" min-width="180">
               <template #default="{ row }">
-                <code class="audit-action-pill">{{ row.action }}</code>
+                <el-tooltip :content="row.action" placement="top" :trigger="['hover', 'focus']" :show-after="250">
+                  <code class="audit-action-pill" tabindex="0">{{ row.action }}</code>
+                </el-tooltip>
               </template>
             </el-table-column>
-            <el-table-column label="目标" min-width="135">
+            <el-table-column label="目标" min-width="120">
               <template #default="{ row }">
                 <span>{{ row.target_type || '—' }}</span>
                 <span v-if="row.target_id" class="muted">:{{ row.target_id }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="结果" width="90">
+            <el-table-column label="结果" width="78">
               <template #default="{ row }">
                 <el-tag :type="row.success ? 'success' : 'danger'" round>
                   {{ row.success ? '成功' : '失败' }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="IP" width="124">
+            <el-table-column label="IP" width="110">
               <template #default="{ row }">
                 <span class="audit-ip">{{ row.ip || '—' }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="detail" label="详情" min-width="200" show-overflow-tooltip />
+            <el-table-column label="详情" min-width="150" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="row.detail">{{ row.detail }}</span>
+                <span v-else class="muted">—</span>
+              </template>
+            </el-table-column>
           </el-table>
 
           <div class="pagination-bar">
@@ -309,6 +317,11 @@ onMounted(() => {
 
 .audit-action-pill {
   display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
   padding: 2px 8px;
   border-radius: 6px;
   background: var(--surface-muted);
@@ -316,6 +329,13 @@ onMounted(() => {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   color: var(--ink);
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--line-strong);
+  margin-inline: 4px;
 }
 
 .pagination-bar {

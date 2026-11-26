@@ -538,10 +538,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="toolbar__right">
-        <el-radio-group v-model="dramaDays" size="small">
-          <el-radio-button :value="7">近7天</el-radio-button>
-          <el-radio-button :value="30">近30天</el-radio-button>
-        </el-radio-group>
+        <el-segmented
+          v-model="dramaDays"
+          :options="[
+            { label: '近7天', value: 7 },
+            { label: '近30天', value: 30 },
+          ]"
+        />
         <el-button type="primary" :loading="dramaRefreshing" @click="handleRefreshDrama">刷新追剧数据</el-button>
       </div>
     </div>
@@ -674,11 +677,11 @@ onBeforeUnmount(() => {
       >
         <template #actions>
           <el-button
+            v-if="failures.length"
             size="small"
             text
             type="danger"
             :loading="clearingFailures"
-            :disabled="!failures.length"
             @click="clearFailures"
           >
             清理失败记录
@@ -796,7 +799,9 @@ onBeforeUnmount(() => {
               <span class="update-row__icon update-row__icon--calendar" aria-hidden="true">
                 <el-icon><Calendar /></el-icon>
               </span>
-              <span class="upcoming-row__name">{{ titleFromTask(it.task) }}</span>
+              <el-tooltip :content="titleFromTask(it.task)" placement="top" :trigger="['hover', 'focus']" :show-after="250">
+                <span class="upcoming-row__name" tabindex="0">{{ titleFromTask(it.task) }}</span>
+              </el-tooltip>
               <template v-if="it.predicted">
                 <span class="meta-dot">·</span>
                 <span class="upcoming-row__predicted">预计更新</span>
@@ -813,7 +818,7 @@ onBeforeUnmount(() => {
     </div>
 
     <el-dialog v-model="trendDialogVisible" title="任务趋势（成功数 / 失败数 / 成功率）" width="920">
-      <DramaTrend :points="trendPoints" />
+      <DramaTrend :points="trendPoints" bare />
     </el-dialog>
 
     <section class="glass-panel capacity-section">
@@ -970,7 +975,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(0, 0.85fr);
   gap: 20px;
-  align-items: stretch;
+  align-items: start;
   min-width: 0;
 }
 
@@ -1102,6 +1107,8 @@ onBeforeUnmount(() => {
 }
 
 .upcoming-row__left {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1110,10 +1117,11 @@ onBeforeUnmount(() => {
 }
 
 .upcoming-row__name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 360px;
 }
 
 .upcoming-row__predicted {
@@ -1210,10 +1218,6 @@ onBeforeUnmount(() => {
   .update-row__name {
     max-width: 260px;
   }
-
-  .upcoming-row__name {
-    max-width: 220px;
-  }
 }
 
 @media (max-width: 767px) {
@@ -1228,6 +1232,29 @@ onBeforeUnmount(() => {
 
   .dashboard-metrics .metric-tile:last-child:nth-child(odd) {
     grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 4px 12px;
+  }
+
+  .dashboard-metrics .metric-tile:last-child:nth-child(odd) .metric-tile__head {
+    grid-column: 1;
+    grid-row: 1;
+    justify-content: flex-start;
+  }
+
+  .dashboard-metrics .metric-tile:last-child:nth-child(odd) .metric-tile__hint {
+    grid-column: 1;
+    grid-row: 2;
+    margin-top: 0;
+  }
+
+  .dashboard-metrics .metric-tile:last-child:nth-child(odd) .metric-tile__value {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    margin-top: 0;
+    font-size: 26px;
   }
 
   .dashboard-metrics .metric-tile__label {

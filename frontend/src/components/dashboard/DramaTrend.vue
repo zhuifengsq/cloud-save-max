@@ -4,9 +4,15 @@ import { formatPercent } from '@/utils/capacity'
 import EChartsLineChart from '@/components/dashboard/EChartsLineChart.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 
-const props = defineProps<{
-  points: DramaTrendPoint[]
-}>()
+const props = withDefaults(
+  defineProps<{
+    points: DramaTrendPoint[]
+    bare?: boolean
+  }>(),
+  {
+    bare: false,
+  },
+)
 
 const isMobile = useIsMobile()
 
@@ -35,15 +41,17 @@ const chartSeries = computed(() => {
     {
       key: 'success',
       name: '成功数',
-      color: 'rgba(34, 197, 94, 0.9)',
+      color: 'rgba(34, 197, 94, 0.88)',
       axis: 'left' as const,
+      chartType: 'bar' as const,
       values: pts.map((p) => (Number(p.success) || 0) as number),
     },
     {
       key: 'failed',
       name: '失败数',
-      color: 'rgba(239, 68, 68, 0.9)',
+      color: 'rgba(239, 68, 68, 0.88)',
       axis: 'left' as const,
+      chartType: 'bar' as const,
       values: pts.map((p) => (Number(p.failed) || 0) as number),
     },
     {
@@ -51,6 +59,7 @@ const chartSeries = computed(() => {
       name: '成功率',
       color: 'rgba(37, 99, 235, 0.9)',
       axis: 'right' as const,
+      chartType: 'line' as const,
       dashed: true,
       values: pts.map((p) => {
         const s = Number(p.success) || 0
@@ -66,7 +75,7 @@ const chartHeight = computed(() => (isMobile.value ? 220 : 280))
 </script>
 
 <template>
-  <section class="glass-panel trend-card">
+  <section :class="bare ? 'trend-card trend-card--bare' : 'glass-panel trend-card'">
     <div class="section-header">
       <div class="section-header__title">
         <div class="section-header__eyebrow">Trend</div>
@@ -98,9 +107,16 @@ const chartHeight = computed(() => (isMobile.value ? 220 : 280))
   padding: 22px;
 }
 
+.trend-card--bare {
+  padding: 4px 0 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .trend-chart {
   padding-top: 14px;
-  overflow-x: auto;
+  overflow: hidden;
 }
 
 .sep-dot {

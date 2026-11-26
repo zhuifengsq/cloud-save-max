@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ArrowRight } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
 
@@ -1347,28 +1348,36 @@ watch(() => route.name, (name, previousName) => {
       </div>
     </div>
 
-    <section v-if="scheduler" class="glass-panel dashboard-section task-scheduler">
-      <div class="task-card-head task-card-head--scheduler">
-        <div class="task-card-head__title">全局调度</div>
+    <details v-if="scheduler" class="glass-panel task-scheduler">
+      <summary class="task-scheduler__summary">
+        <span class="task-scheduler__chevron" aria-hidden="true"><ArrowRight /></span>
+        <span class="task-card-head__title">全局调度</span>
+        <el-tag size="small" :type="scheduler.enabled ? 'success' : 'info'" effect="plain" disable-transitions>
+          {{ scheduler.enabled ? '已开启' : '未开启' }}
+        </el-tag>
+        <code class="task-scheduler__meta">{{ scheduler.crontab }} · {{ scheduler.timezone }}</code>
+        <span class="task-scheduler__action">配置调度</span>
+      </summary>
+      <div class="task-scheduler__body">
         <div class="task-card-head__hint">cron 定时触发全部启用任务</div>
-      </div>
-      <div class="toolbar">
-        <div class="toolbar__left">
-          <el-switch v-model="scheduler.enabled" />
-          <span class="task-scheduler__label">启用调度</span>
-          <el-input v-model="scheduler.crontab" placeholder="*/15 * * * *" :style="{ width: isMobile ? '100%' : '220px' }">
-            <template #append>
-              <el-button @click="cronPreviewVisible = true">预览</el-button>
-            </template>
-          </el-input>
-          <span class="task-scheduler__timezone-label">时区</span>
-          <el-input v-model="scheduler.timezone" placeholder="Asia/Shanghai" :style="{ width: isMobile ? '100%' : '216px' }" />
+        <div class="toolbar">
+          <div class="toolbar__left">
+            <el-switch v-model="scheduler.enabled" />
+            <span class="task-scheduler__label">启用调度</span>
+            <el-input v-model="scheduler.crontab" placeholder="*/15 * * * *" :style="{ width: isMobile ? '100%' : '220px' }">
+              <template #append>
+                <el-button @click="cronPreviewVisible = true">预览</el-button>
+              </template>
+            </el-input>
+            <span class="task-scheduler__timezone-label">时区</span>
+            <el-input v-model="scheduler.timezone" placeholder="Asia/Shanghai" :style="{ width: isMobile ? '100%' : '216px' }" />
+          </div>
+          <div class="toolbar__right">
+            <el-button type="primary" :loading="schedulerSaving" @click="saveScheduler">保存调度</el-button>
+          </div>
         </div>
-        <div class="toolbar__right">
-          <el-button type="primary" :loading="schedulerSaving" @click="saveScheduler">保存调度</el-button>
-        </div>
       </div>
-    </section>
+    </details>
 
     <section class="glass-panel filter-strip">
       <div class="toolbar">
@@ -1404,7 +1413,7 @@ watch(() => route.name, (name, previousName) => {
           <h2 class="task-card-head__title" id="drama-groups-title">任务列表</h2>
           <div class="task-card-head__hint">共 {{ total }} 部剧 · {{ taskTotal }} 个任务</div>
         </div>
-        <el-button v-if="total" size="small" @click="toggleTaskSort">{{ taskSortLabel }}</el-button>
+        <el-button v-if="total" size="small" class="task-sort-btn" @click="toggleTaskSort">{{ taskSortLabel }}</el-button>
       </div>
 
       <div v-if="facets.failed_count" class="task-alert">
@@ -1688,14 +1697,106 @@ watch(() => route.name, (name, previousName) => {
   margin: 0;
 }
 
-.task-scheduler .toolbar {
-  align-items: flex-end;
-  padding: 24px;
-}
-
 .task-scheduler {
   padding: 0;
   overflow: hidden;
+}
+
+.task-scheduler__summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-block-size: 48px;
+  padding: 10px 20px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.task-scheduler__summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-scheduler[open] > .task-scheduler__summary {
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.task-scheduler__chevron {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+}
+
+.task-scheduler__chevron svg {
+  width: 13px;
+  height: 13px;
+}
+
+.task-scheduler[open] > .task-scheduler__summary .task-scheduler__chevron svg {
+  transform: rotate(90deg);
+  color: var(--brand);
+}
+
+.task-scheduler__meta {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  color: var(--ink-2);
+}
+
+.task-scheduler__action {
+  margin-inline-start: auto;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--brand);
+}
+
+.task-scheduler__body {
+  padding: 16px 20px 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.task-scheduler .toolbar {
+  align-items: flex-end;
+  padding: 0;
+}
+
+@supports (interpolate-size: allow-keywords) {
+  @media (prefers-reduced-motion: no-preference) {
+    .task-scheduler__chevron svg {
+      transition: transform 160ms ease;
+    }
+
+    .task-scheduler::details-content {
+      block-size: 0;
+      opacity: 0;
+      overflow: hidden;
+      transition: block-size 0.2s ease, opacity 0.18s ease, content-visibility 0.2s ease;
+      transition-behavior: allow-discrete;
+    }
+
+    .task-scheduler[open]::details-content {
+      block-size: auto;
+      opacity: 1;
+    }
+  }
+}
+
+@media (pointer: coarse) {
+  .task-sort-btn {
+    min-block-size: 44px;
+    padding-inline: 14px;
+  }
 }
 
 .task-card-head {
@@ -1864,7 +1965,8 @@ watch(() => route.name, (name, previousName) => {
 @media (max-width: 767px) {
   .drama-task-page > .section-header { min-height: 0; }
   .drama-task-page .section-header__title h2 { font-size: 19px; }
-  .drama-task-page .task-scheduler .toolbar { padding: 16px; }
+  .task-scheduler__summary { padding: 10px 14px; }
+  .task-scheduler__body { padding: 14px; }
   .task-scheduler__timezone-label { display: none; }
 }
 

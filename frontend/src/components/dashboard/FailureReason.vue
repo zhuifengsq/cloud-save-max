@@ -21,5 +21,5 @@ const reason = computed(() => summarizeFailure(props.message))
 .failure-reason__summary { margin: 0; font-size: 13px; line-height: 1.6; color: var(--el-text-color-regular); overflow-wrap: anywhere; }
 .failure-reason__details { margin-top: 6px; font-size: 12px; color: var(--el-text-color-secondary); }
 .failure-reason__details summary { width: fit-content; cursor: pointer; padding: 3px 0; }
-.failure-reason__details pre { max-height: 180px; overflow: auto; margin: 8px 0 0; padding: 10px 12px; background: color-mix(in srgb, var(--el-color-danger) 6%, var(--surface-muted)); border: 1px solid color-mix(in srgb, var(--el-color-danger) 22%, var(--line)); border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.failure-reason__details pre { max-height: 180px; overflow: auto; margin: 8px 0 0; padding: 10px 12px; background: color-mix(in oklab, var(--el-color-danger) 6%, var(--surface-muted)); border: 1px solid color-mix(in oklab, var(--el-color-danger) 22%, var(--line)); border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>

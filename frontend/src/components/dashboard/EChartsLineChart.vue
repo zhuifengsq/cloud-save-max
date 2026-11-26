@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ComposeOption, ECharts } from 'echarts/core'
-import type { LineSeriesOption } from 'echarts/charts'
+import type { BarSeriesOption, LineSeriesOption } from 'echarts/charts'
 import type {
   GridComponentOption,
   LegendComponentOption,
@@ -8,7 +8,7 @@ import type {
 } from 'echarts/components'
 
 type ChartOption = ComposeOption<
-  LineSeriesOption | GridComponentOption | LegendComponentOption | TooltipComponentOption
+  BarSeriesOption | LineSeriesOption | GridComponentOption | LegendComponentOption | TooltipComponentOption
 >
 
 type AxisKey = 'left' | 'right'
@@ -18,6 +18,7 @@ type Series = {
   name: string
   color: string
   axis: AxisKey
+  chartType?: 'line' | 'bar'
   values: Array<number | null>
   dashed?: boolean
 }
@@ -62,13 +63,14 @@ function buildOption(): ChartOption {
 
   const leftSeries = props.series.filter((s) => s.axis === 'left')
   const rightSeries = props.series.filter((s) => s.axis === 'right')
+  const hasBars = props.series.some((s) => s.chartType === 'bar')
 
   const option: ChartOption = {
     grid: { left: 44, right: 54, top: 38, bottom: 34, containLabel: false },
     tooltip: {
       trigger: 'axis',
       axisPointer: {
-        type: 'line',
+        type: hasBars ? 'shadow' : 'line',
         lineStyle: { color: border },
         label: { backgroundColor: overlayBg, color: textPrimary, borderColor: borderLight },
       },
@@ -91,7 +93,7 @@ function buildOption(): ChartOption {
     },
     xAxis: {
       type: 'category',
-      boundaryGap: false,
+      boundaryGap: hasBars,
       data: props.xLabels,
       axisLabel: { color: textSecondary },
       axisLine: { lineStyle: { color: border } },
@@ -101,35 +103,51 @@ function buildOption(): ChartOption {
       {
         type: 'value',
         name: '',
+        min: 0,
+        minInterval: 1,
+        max: (val) => Math.max(4, Math.ceil(val.max * 1.15)),
         axisLabel: { color: textSecondary },
         splitLine: { lineStyle: { color: borderLight } },
       },
       {
         type: 'value',
         min: 0,
-        max: 1,
-        axisLabel: { color: textSecondary, formatter: (v: number) => `${Math.round(v * 100)}%` },
+        max: 1.1,
+        axisLabel: { color: textSecondary, formatter: (v: number) => (v > 1 ? '' : `${Math.round(v * 100)}%`) },
         splitLine: { show: false },
       },
     ],
     series: [
-      ...leftSeries.map((s) => ({
-        name: s.name,
-        type: 'line' as const,
-        yAxisIndex: 0,
-        smooth: true,
-        showSymbol: false,
-        emphasis: { focus: 'series' as const },
-        data: s.values,
-        lineStyle: { color: s.color, width: 2.6, type: (s.dashed ? 'dashed' : 'solid') as 'solid' | 'dashed' },
-        itemStyle: { color: s.color },
-        ...(s.dashed ? {} : { areaStyle: { opacity: 0.14 } }),
-      })),
+      ...leftSeries.map((s) =>
+        s.chartType === 'bar'
+          ? {
+              name: s.name,
+              type: 'bar' as const,
+              yAxisIndex: 0,
+              barMaxWidth: 16,
+              barGap: '20%',
+              emphasis: { focus: 'series' as const },
+              data: s.values,
+              itemStyle: { color: s.color, borderRadius: [4, 4, 0, 0] },
+            }
+          : {
+              name: s.name,
+              type: 'line' as const,
+              yAxisIndex: 0,
+              smooth: 0.25,
+              showSymbol: false,
+              emphasis: { focus: 'series' as const },
+              data: s.values,
+              lineStyle: { color: s.color, width: 2.6, type: (s.dashed ? 'dashed' : 'solid') as 'solid' | 'dashed' },
+              itemStyle: { color: s.color },
+              ...(s.dashed ? {} : { areaStyle: { opacity: 0.14 } }),
+            },
+      ),
       ...rightSeries.map((s) => ({
         name: s.name,
         type: 'line' as const,
         yAxisIndex: 1,
-        smooth: true,
+        smooth: 0.25,
         showSymbol: false,
         emphasis: { focus: 'series' as const },
         data: s.values,

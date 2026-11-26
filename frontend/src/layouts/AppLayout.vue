@@ -11,7 +11,6 @@ import {
   Moon,
   Sunny,
   SwitchButton,
-  User,
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -49,8 +48,6 @@ watch(
 const breadcrumbs = computed(() =>
   route.matched.filter((item) => item.meta?.title && item.meta?.breadcrumb !== false),
 )
-
-const currentTitle = computed(() => String(breadcrumbs.value.at(-1)?.meta?.title || '平台首页'))
 
 // 侧边导航分上下两段并带小标题：影视工作区（常用入口 + 链接整理）、系统管理（配置类入口）。
 // 段内仍按路由表的定义顺序展示，权限过滤沿用 auth.menuRoutes 的结果。
@@ -243,9 +240,16 @@ async function handleLogout() {
           </el-button>
           <div class="app-header__meta">
             <div class="app-header__eyebrow">控制台</div>
-            <div class="app-header__title">{{ currentTitle }}</div>
+            <div class="app-header__brand">
+              <img :src="logoCat" alt="" class="app-header__brand-logo" />
+              <span>追剧一体化平台</span>
+            </div>
             <el-breadcrumb :separator-icon="ArrowRight">
-              <el-breadcrumb-item v-for="item in breadcrumbs" :key="item.path">
+              <el-breadcrumb-item
+                v-for="(item, index) in breadcrumbs"
+                :key="item.path"
+                :to="index < breadcrumbs.length - 1 ? (item.path || '/') : undefined"
+              >
                 {{ item.meta?.title }}
               </el-breadcrumb-item>
             </el-breadcrumb>
@@ -266,8 +270,8 @@ async function handleLogout() {
           </div>
           <el-button type="primary" class="desktop-only" @click="handleLogout">退出登录</el-button>
           <el-dropdown class="mobile-only" @command="handleLogout">
-            <el-button type="primary" aria-label="账号菜单" class="app-header__user">
-              <el-icon><User /></el-icon>
+            <el-button text aria-label="账号菜单" class="app-header__user">
+              <span aria-hidden="true">{{ userInitial }}</span>
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>

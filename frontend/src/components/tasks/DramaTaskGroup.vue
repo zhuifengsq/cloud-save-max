@@ -370,7 +370,13 @@ function executionTagType(status: string): 'success' | 'danger' | 'warning' | 'i
 }
 
 .drama-group__pin[aria-pressed='false'] .drama-group__pin-icon {
-  opacity: 0.65;
+  color: var(--ink-2);
+  opacity: 0.82;
+}
+
+.drama-group__pin[aria-pressed='false']:hover .drama-group__pin-icon {
+  opacity: 1;
+  color: var(--brand);
 }
 
 .drama-group__pin[aria-pressed='true'] .drama-group__pin-icon,
@@ -448,8 +454,8 @@ summary:focus-visible {
   }
 
   .drama-group__pin {
-    inline-size: 36px;
-    block-size: 36px;
+    inline-size: 44px;
+    block-size: 44px;
   }
 }
 
