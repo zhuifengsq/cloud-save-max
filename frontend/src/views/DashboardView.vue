@@ -41,6 +41,7 @@ const DRAMA_REFRESH_MS = 60 * 1000
 const CAPACITY_REFRESH_MS = 5 * 60 * 1000
 const CHECK_TICK_MS = 60 * 1000
 const LIST_DISPLAY_LIMIT = 7
+const MOBILE_LIST_DISPLAY_LIMIT = 6
 
 const dramaDays = ref(30)
 const dramaLoading = ref(false)
@@ -338,6 +339,9 @@ const recentUpdates = computed(() => {
 })
 
 const isMobile = useIsMobile()
+const displayedRecentUpdates = computed(() => (
+  isMobile.value ? recentUpdates.value.slice(0, MOBILE_LIST_DISPLAY_LIMIT) : recentUpdates.value
+))
 const updatePosterFailed = reactive<Record<string, boolean>>({})
 
 function posterUrlByTmdbId(tmdbId?: number | null) {
@@ -508,6 +512,7 @@ const upcomingTomorrowCount = computed(() => {
 const displayedUpcomingAiring = computed(() => {
   const items = upcomingAiring.value
   if (!items.length) return []
+  if (isMobile.value) return items.slice(0, MOBILE_LIST_DISPLAY_LIMIT)
   const tomorrow = beijingDateStr(addDays(new Date(), 1))
   const tomorrowItems = items.filter((it) => it.air_date === tomorrow)
   if (tomorrowItems.length >= LIST_DISPLAY_LIMIT) return tomorrowItems
@@ -879,7 +884,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-else class="update-list">
           <router-link
-            v-for="item in recentUpdates"
+            v-for="item in displayedRecentUpdates"
             :key="`${item.task_id}-${item.started_at}`"
             :to="{ path: '/tasks/drama', query: { taskId: String(item.task_id) } }"
             class="update-row update-row--link"
