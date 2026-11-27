@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRight } from '@element-plus/icons-vue'
+import { ArrowRight, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute } from 'vue-router'
 
@@ -35,8 +35,8 @@ import { markTasksChanged, subscribeTasksChanged } from '@/utils/taskChangeBus'
 import type { TaskDetail, TaskExecutionSummary, TaskReadFilters, TaskFacets, TaskSummary as TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/tasks'
 import { describeCrontab, validateCrontab5, validateTimezone } from '@/utils/cron'
 import { copyText } from '@/utils/clipboard'
-import { detectDriveTypeByUrl } from '@/utils/driveType'
-import { readTaskRunError } from '@/utils/failureMessage'
+import { detectDriveTypeByUrl, DRIVE_TYPE_META } from '@/utils/driveType'
+import { failureStageLabel, readTaskRunError, summarizeFailure } from '@/utils/failureMessage'
 import { findGeneratedShareCheck } from '@/utils/generatedShareCheck'
 import type { DriveType } from '@/utils/driveType'
 
@@ -1267,22 +1267,142 @@ async function confirmStopCompleted() {
   }
 }
 
-const history = reactive({visible:false, loading:false, error:'', taskId:0, page:1, total:0, items:[] as TaskExecutionSummary[]})
+const history = reactive({
+  visible: false,
+  loading: false,
+  error: '',
+  taskId: 0,
+  taskName: '',
+  driveType: '',
+  filter: 'all' as 'all' | 'transferred' | 'failed',
+  page: 1,
+  total: 0,
+  items: [] as TaskExecutionSummary[],
+})
 let historyVersion = 0
+
+const HISTORY_STATUS_LABELS: Record<string, string> = {
+  success: '成功',
+  failed: '失败',
+  running: '执行中',
+  skipped: '已跳过',
+}
+
+const HISTORY_FILTER_OPTIONS = [
+  { label: '全部', value: 'all' },
+  { label: '有新存入', value: 'transferred' },
+  { label: '仅失败', value: 'failed' },
+]
+
+const historySubtitle = computed(() => {
+  const driveLabel = history.driveType
+    ? (DRIVE_TYPE_META[history.driveType as DriveType]?.label || history.driveType)
+    : ''
+  const countLabel = history.total > 0 ? `共 ${history.total} 条记录` : ''
+  return [history.taskName, driveLabel, countLabel].filter(Boolean).join(' · ')
+})
+
+const historyEmptyText = computed(() => {
+  if (history.filter === 'transferred') return '暂无有新文件存入的记录'
+  if (history.filter === 'failed') return '暂无失败的执行记录'
+  return '暂无执行记录'
+})
+
+function historyStatusLabel(status?: string | null) {
+  const key = String(status || '').trim()
+  if (!key) return '未知'
+  return HISTORY_STATUS_LABELS[key] || key
+}
+
+function historyStatusTagType(status?: string | null): 'success' | 'danger' | 'warning' | 'info' {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'running') return 'warning'
+  return 'info'
+}
+
+function historyTransferCount(execution: TaskExecutionSummary) {
+  const snap = execution.adapter_snapshot
+  const listLen = Array.isArray(snap?.new_files) ? snap.new_files.length : 0
+  return Math.max(0, Number(snap?.transfer_count) || 0, Number(snap?.new_files_count) || 0, listLen)
+}
+
+function historyNewFiles(execution: TaskExecutionSummary): string[] {
+  const files = execution.adapter_snapshot?.new_files
+  if (!Array.isArray(files)) return []
+  return files
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+}
+
+function historyHasNewFiles(execution: TaskExecutionSummary) {
+  return execution.status === 'success' && historyTransferCount(execution) > 0
+}
+
+function formatHistoryTime(value?: string | null) {
+  const raw = String(value || '').trim()
+  if (!raw) return '—'
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return raw
+  const pad = (input: number) => String(input).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function formatHistoryMessage(execution: TaskExecutionSummary) {
+  if (execution.status === 'failed') {
+    return summarizeFailure(execution.message).summary
+  }
+  const count = historyTransferCount(execution)
+  if (historyHasNewFiles(execution)) {
+    return `本次新转存 ${count} 项，点击查看目录树`
+  }
+  const msg = String(execution.message || '').trim()
+  if (
+    execution.status === 'success' &&
+    typeof execution.adapter_snapshot?.transfer_count === 'number' &&
+    execution.adapter_snapshot.transfer_count === 0 &&
+    (!msg || msg === '执行完成')
+  ) {
+    return '执行完成 · 无新文件'
+  }
+  if (msg) return msg
+  if (execution.status === 'success') return '执行完成'
+  if (execution.status === 'running') return '正在执行…'
+  return '—'
+}
+
 let logVersion = 0
-async function openHistory(taskId:number) {
-  history.taskId=taskId; history.page=1; history.items=[]; history.visible=true
+async function openHistory(taskId: number) {
+  const target = tasks.value.find((item) => item.id === taskId)
+  history.taskId = taskId
+  history.taskName = target?.taskname || ''
+  history.driveType = target?.drive_type || ''
+  history.filter = 'all'
+  history.page = 1
+  history.total = 0
+  history.items = []
+  history.visible = true
   await loadHistory()
 }
+function onHistoryFilterChange() {
+  history.page = 1
+  loadHistory()
+}
 async function loadHistory() {
-  const version=++historyVersion
-  history.loading=true; history.error=''
+  const version = ++historyVersion
+  history.loading = true
+  history.error = ''
   try {
-    const result=await fetchTaskExecutions(history.taskId,history.page)
-    if(version!==historyVersion) return
-    history.items=result.items; history.total=result.total
-  } catch { if(version===historyVersion) history.error='历史加载失败' }
-  finally { if(version===historyVersion) history.loading=false }
+    const result = await fetchTaskExecutions(history.taskId, history.page, history.filter)
+    if (version !== historyVersion) return
+    history.items = result.items
+    history.total = result.total
+  } catch {
+    if (version === historyVersion) history.error = '历史加载失败'
+  } finally {
+    if (version === historyVersion) history.loading = false
+  }
 }
 async function openExecution(taskId:number, executionId:number) {
   logVersion++
@@ -1507,26 +1627,154 @@ watch(() => route.name, (name, previousName) => {
         <el-pagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
+          background
           :page-sizes="[10, 20, 50]"
           :total="total"
-          :pager-count="5"
           layout="total, sizes, prev, pager, next"
         />
       </template>
     </ResponsivePagination>
-    <el-dialog v-if="isTaskRoute" v-model="history.visible" title="执行历史">
-      <el-alert v-if="history.error" :title="history.error" type="error"><el-button @click="loadHistory">重试</el-button></el-alert>
-      <div v-if="history.loading && !history.items.length" class="task-skeleton" aria-hidden="true">
-        <div v-for="i in 4" :key="`hist-sk-${i}`" class="task-skeleton__row">
-          <span class="task-skeleton__bar" style="width: 32%"></span>
-          <span class="task-skeleton__bar task-skeleton__bar--soft" style="width: 14%"></span>
-          <span class="ui-skeleton" style="flex: 1; height: 11px"></span>
+    <el-dialog
+      v-if="isTaskRoute"
+      v-model="history.visible"
+      :width="isMobile ? '94vw' : '640px'"
+      class="history-dialog"
+    >
+      <template #header>
+        <div class="history-dialog__header">
+          <div class="history-dialog__heading">
+            <h3 class="history-dialog__title">执行历史</h3>
+            <p v-if="historySubtitle" class="history-dialog__subtitle">{{ historySubtitle }}</p>
+          </div>
+          <el-button
+            class="history-dialog__refresh"
+            size="small"
+            :icon="Refresh"
+            :loading="history.loading"
+            plain
+            @click="loadHistory"
+          >
+            刷新
+          </el-button>
+        </div>
+      </template>
+
+      <div class="history-filter-bar">
+        <el-segmented
+          v-model="history.filter"
+          :options="HISTORY_FILTER_OPTIONS"
+          size="small"
+          :disabled="history.loading"
+          @change="onHistoryFilterChange"
+        />
+      </div>
+
+      <el-alert
+        v-if="history.error"
+        :title="history.error"
+        type="error"
+        :closable="false"
+        class="history-dialog__alert"
+      >
+        <el-button size="small" @click="loadHistory">重试</el-button>
+      </el-alert>
+
+      <div v-if="history.loading && !history.items.length" class="history-skeleton" aria-hidden="true">
+        <div v-for="i in 4" :key="`hist-sk-${i}`" class="history-skeleton__card">
+          <div class="history-skeleton__meta">
+            <span class="ui-skeleton" style="width: 46px; height: 20px; border-radius: 999px"></span>
+            <span class="ui-skeleton" style="width: 148px; height: 14px"></span>
+          </div>
+          <span class="ui-skeleton" style="width: 68%; height: 13px"></span>
         </div>
       </div>
-      <div v-else v-loading="history.loading && Boolean(history.items.length)">
-        <div v-for="execution in history.items" :key="execution.id"><el-button link @click="openExecution(history.taskId, execution.id)">{{ execution.started_at }} · {{ execution.status }}</el-button> {{ execution.message }}</div>
+
+      <div v-else-if="!history.error && !history.items.length" class="history-empty">
+        {{ historyEmptyText }}
       </div>
-      <el-pagination v-model:current-page="history.page" :page-size="20" :total="history.total" layout="prev,pager,next" @current-change="loadHistory" />
+
+      <div
+        v-else-if="history.items.length"
+        class="history-list"
+        v-loading="history.loading && Boolean(history.items.length)"
+      >
+        <button
+          v-for="execution in history.items"
+          :key="execution.id"
+          type="button"
+          class="history-row"
+          :class="{
+            'history-row--failed': execution.status === 'failed',
+            'history-row--transferred': historyHasNewFiles(execution),
+          }"
+          @click="openExecution(history.taskId, execution.id)"
+        >
+          <span class="history-row__main">
+            <span class="history-row__meta">
+              <el-tag
+                size="small"
+                :type="historyStatusTagType(execution.status)"
+                effect="light"
+                round
+                disable-transitions
+              >
+                {{ historyStatusLabel(execution.status) }}
+              </el-tag>
+              <span class="history-row__time">{{ formatHistoryTime(execution.started_at) }}</span>
+              <span v-if="historyHasNewFiles(execution)" class="history-row__new-badge">
+                +{{ historyTransferCount(execution) }} 新存入
+              </span>
+              <span v-if="execution.status === 'failed' && execution.stage" class="history-row__stage">
+                {{ failureStageLabel(execution.stage) }}
+              </span>
+            </span>
+            <span v-if="historyHasNewFiles(execution) && historyNewFiles(execution).length" class="history-row__files">
+              <span
+                v-for="(fileName, index) in historyNewFiles(execution)"
+                :key="`${execution.id}-file-${index}`"
+                class="history-row__file-chip"
+                :title="fileName"
+              >
+                {{ fileName }}
+              </span>
+              <span
+                v-if="historyTransferCount(execution) > historyNewFiles(execution).length"
+                class="history-row__file-more"
+              >
+                等共 {{ historyTransferCount(execution) }} 项
+              </span>
+            </span>
+            <span v-else class="history-row__message">{{ formatHistoryMessage(execution) }}</span>
+          </span>
+          <span class="history-row__action" aria-hidden="true">
+            <span>查看日志</span>
+            <ArrowRight class="history-row__arrow" />
+          </span>
+        </button>
+      </div>
+
+      <div v-if="history.total > 0" class="history-dialog__footer">
+        <ResponsivePagination
+          label="执行历史分页"
+          :current-page="history.page"
+          :page-size="20"
+          :total="history.total"
+          :mobile="isMobile"
+          :disabled="history.loading"
+          @current-change="(v) => ((history.page = v), loadHistory())"
+        >
+          <template #desktop>
+            <el-pagination
+              v-model:current-page="history.page"
+              background
+              :page-size="20"
+              :total="history.total"
+              layout="total, prev, pager, next"
+              @current-change="loadHistory"
+            />
+          </template>
+        </ResponsivePagination>
+      </div>
     </el-dialog>
     <DramaTaskDrawer
       v-if="isTaskRoute || (route.name === 'TaskCopywriting' && drawerVisible)"
@@ -2100,6 +2348,244 @@ watch(() => route.name, (name, previousName) => {
   max-height: 28vh;
 }
 
+.history-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 26px;
+}
+
+.history-dialog__heading {
+  min-width: 0;
+}
+
+.history-dialog__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.history-dialog__subtitle {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+.history-dialog__refresh {
+  flex: none;
+}
+
+.history-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.history-dialog__alert {
+  margin-bottom: 12px;
+}
+
+.history-skeleton {
+  display: grid;
+  gap: 10px;
+}
+
+.history-skeleton__card {
+  display: grid;
+  gap: 10px;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.history-skeleton__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-empty {
+  display: grid;
+  place-items: center;
+  min-height: 140px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.history-list {
+  display: grid;
+  gap: 9px;
+  max-height: 56vh;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.history-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+  padding: 12px 15px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.history-row:hover {
+  transform: translateY(-1px);
+  border-color: rgba(53, 102, 232, 0.36);
+  background: var(--surface);
+  box-shadow: 0 6px 16px -10px rgba(15, 23, 42, 0.22);
+}
+
+.history-row:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.history-row--failed {
+  border-left: 3px solid var(--el-color-danger);
+}
+
+.history-row--failed:hover {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.history-row--transferred {
+  border-left: 3px solid var(--el-color-success);
+  background: color-mix(in srgb, var(--el-color-success) 6%, var(--surface));
+}
+
+.history-row--transferred:hover {
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.history-row__main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.history-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-row__new-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--el-color-success) 34%, transparent);
+  background: color-mix(in srgb, var(--el-color-success) 13%, transparent);
+  color: var(--el-color-success);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-row__time {
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.history-row__stage {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.history-row__files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.history-row__file-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-row__file-more {
+  font-size: 12px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.history-row__message {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+.history-row--failed .history-row__message {
+  color: var(--ink);
+}
+
+.history-row__action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--brand);
+  white-space: nowrap;
+  opacity: 0.88;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.history-row:hover .history-row__action {
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+.history-row__arrow {
+  width: 13px;
+  height: 13px;
+}
+
+.history-dialog__footer {
+  margin-top: 16px;
+}
+
 @media (max-width: 767px) {
   .filter-strip .toolbar__left {
     width: 100%;
@@ -2108,6 +2594,17 @@ watch(() => route.name, (name, previousName) => {
   .task-drive-filter,
   .task-category-filter {
     overflow-x: auto;
+  }
+
+  .history-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 12px 13px;
+  }
+
+  .history-row__action {
+    justify-content: flex-end;
   }
 }
 

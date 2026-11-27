@@ -422,3 +422,52 @@ def test_overview_success_batch_query_count_is_independent_of_task_count(db):
     db.info.clear()
     overview_tasks(db)
     assert len(statements)<=baseline
+
+
+def test_execution_projection_exposes_bounded_new_files_and_filters(db):
+    import json
+    from app.application.queries.task_executions import execution_page
+    from app.infrastructure.persistence.repositories.task_executions import read_recent_summaries
+
+    db.get(TaskExecution, 1).adapter_snapshot = json.dumps(
+        {
+            'transfer_count': 4,
+            'new_files': ['01.mp4', '02.mp4', '03.mp4', '04.mp4'],
+            'secret': 'ignored',
+        }
+    )
+    db.add(
+        TaskExecution(
+            id=3,
+            task_id=1,
+            status='success',
+            adapter_snapshot=json.dumps({'transfer_count': 0, 'new_files': []}),
+        )
+    )
+    db.commit()
+
+    statements = []
+    event.listen(db.bind, 'before_cursor_execute', lambda c, cu, s, p, co, m: statements.append(s))
+
+    all_page = execution_page(db, 1, page=1, page_size=20)
+    by_id = {item['id']: item for item in all_page['items']}
+    assert by_id[1]['adapter_snapshot']['transfer_count'] == 4
+    assert by_id[1]['adapter_snapshot']['new_files_count'] == 4
+    assert by_id[1]['adapter_snapshot']['new_files'] == ['01.mp4', '02.mp4', '03.mp4']
+    assert 'secret' not in by_id[1]['adapter_snapshot']
+    assert by_id[3]['adapter_snapshot']['transfer_count'] == 0
+    assert 'new_files' not in by_id[3]['adapter_snapshot']
+
+    transferred_page = execution_page(db, 1, page=1, page_size=20, filter_mode='transferred')
+    assert [item['id'] for item in transferred_page['items']] == [1]
+    assert transferred_page['total'] == 1
+
+    failed_page = execution_page(db, 1, page=1, page_size=20, filter_mode='failed')
+    assert [item['id'] for item in failed_page['items']] == [2]
+    assert failed_page['total'] == 1
+
+    recent = read_recent_summaries(db, [1], limit=3)
+    recent_first = next(item for item in recent[1] if item['id'] == 1)
+    assert recent_first['adapter_snapshot']['transfer_count'] == 4
+    assert recent_first['adapter_snapshot']['new_files'] == ['01.mp4', '02.mp4', '03.mp4']
+    assert not any('task_executions.adapter_snapshot,' in sql for sql in statements)

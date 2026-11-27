@@ -363,8 +363,14 @@ export async function fetchTaskOverview(): Promise<TaskOverview[]> {
 export async function fetchTaskDetail(taskId: number): Promise<TaskDetail> {
   return (await http.get<TaskDetail>(`/tasks/${taskId}`)).data
 }
-export async function fetchTaskExecutions(taskId: number, page = 1): Promise<TaskExecutionPage> {
-  return (await http.get<TaskExecutionPage>(`/tasks/${taskId}/executions`, {params: {page, page_size: 20}})).data
+export async function fetchTaskExecutions(
+  taskId: number,
+  page = 1,
+  filter: 'all' | 'transferred' | 'failed' = 'all',
+): Promise<TaskExecutionPage> {
+  const params: { page: number; page_size: number; filter?: 'transferred' | 'failed' } = { page, page_size: 20 }
+  if (filter !== 'all') params.filter = filter
+  return (await http.get<TaskExecutionPage>(`/tasks/${taskId}/executions`, { params })).data
 }
 export async function fetchTaskExecutionDetail(taskId: number, executionId: number, log_offset = 0): Promise<TaskExecutionDetail> {
   return (await http.get<TaskExecutionDetail>(`/tasks/${taskId}/executions/${executionId}`, {params: {log_offset, log_limit: 65536}})).data

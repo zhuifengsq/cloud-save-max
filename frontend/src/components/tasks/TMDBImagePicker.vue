@@ -109,7 +109,7 @@ watch(activeType, () => {imagePage.value = 1})
       </div>
       <el-pagination
         v-if="currentImages.length > pageSize" v-model:current-page="imagePage" :page-size="pageSize"
-        :total="currentImages.length" layout="prev, pager, next" :pager-count="5" size="small" class="image-picker__pagination"
+        background :total="currentImages.length" layout="prev, pager, next" :pager-count="5" size="small" class="image-picker__pagination"
       />
     </template>
     <template #footer><el-button @click="emit('update:modelValue', false)">取消</el-button></template>

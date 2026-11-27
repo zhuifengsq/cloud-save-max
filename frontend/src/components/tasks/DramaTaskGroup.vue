@@ -82,6 +82,12 @@ function executionTagType(status: string): 'success' | 'danger' | 'warning' | 'i
   if (status === 'running') return 'warning'
   return 'info'
 }
+
+function executionTransferCount(execution: { adapter_snapshot?: Record<string, any> }) {
+  const snap = execution.adapter_snapshot
+  const listLen = Array.isArray(snap?.new_files) ? snap.new_files.length : 0
+  return Math.max(0, Number(snap?.transfer_count) || 0, Number(snap?.new_files_count) || 0, listLen)
+}
 </script>
 
 <template>
@@ -275,6 +281,16 @@ function executionTagType(status: string): 'success' | 'danger' | 'warning' | 'i
                     {{ formatDateTimeText(execution.started_at) }}
                   </el-button>
                   <span>{{ execution.message }}</span>
+                  <el-tag
+                    v-if="execution.status === 'success' && executionTransferCount(execution) > 0"
+                    size="small"
+                    type="success"
+                    effect="plain"
+                    round
+                    disable-transitions
+                  >
+                    +{{ executionTransferCount(execution) }} 新存入
+                  </el-tag>
                 </span>
                 <el-button link type="primary" @click="emit('execution', task.id, execution.id)">查看日志与目录树</el-button>
               </li>

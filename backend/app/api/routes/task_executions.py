@@ -1,5 +1,7 @@
 """On-demand execution history and bounded UTF-8 log chunks."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.api.deps import require_permissions
@@ -21,11 +23,12 @@ def page(
     task_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    filter: Literal["all", "transferred", "failed"] = Query("all"),
     db: Session = Depends(get_db),
 ):
     if not task_exists(db, task_id):
         raise not_found("execution_not_found", "执行记录不存在")
-    return execution_page(db, task_id, page=page, page_size=page_size)
+    return execution_page(db, task_id, page=page, page_size=page_size, filter_mode=filter)
 
 
 @router.get(

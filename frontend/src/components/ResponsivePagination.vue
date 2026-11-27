@@ -72,7 +72,8 @@ const selectedPage = computed({
   display: flex;
 }
 
-.responsive-pagination__desktop {
+.responsive-pagination__desktop,
+.responsive-pagination :deep(.el-pagination) {
   margin-inline-start: auto;
 }
 

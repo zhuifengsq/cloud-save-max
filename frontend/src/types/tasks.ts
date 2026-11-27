@@ -66,6 +66,9 @@ export type TaskExecutionItem = {
   stage?: string | null
   run_log?: string | null
   adapter_snapshot: Record<string, any> & {
+    transfer_count?: number
+    new_files?: string[]
+    new_files_count?: number
     generated_share_check?: {
       share_id: string
       saved_at: string

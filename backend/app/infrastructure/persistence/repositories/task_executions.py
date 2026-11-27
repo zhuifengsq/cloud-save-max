@@ -114,7 +114,7 @@ def delete_failed_drama_executions(
 
 
 # B2 read projections: never materialize execution log/snapshot ORM columns.
-from sqlalchemy import LargeBinary, cast, case, func, literal
+from sqlalchemy import Integer, LargeBinary, cast, case, func, literal
 
 _READ_SNAPSHOT_KEYS = (
     "generated_share_check",
@@ -123,7 +123,9 @@ _READ_SNAPSHOT_KEYS = (
     "active",
     "execution_log",
     "tree_truncated",
+    "transfer_count",
 )
+_NEW_FILES_PREVIEW_LIMIT = 3
 
 
 def _safe_json(column):
@@ -133,10 +135,25 @@ def _safe_json(column):
 def _snapshot_columns():
     source = _safe_json(TaskExecution.adapter_snapshot)
     return [
-        func.substr(func.json_extract(source, "$." + key), 1, 4096).label(
-            "snapshot_" + key
-        )
-        for key in _READ_SNAPSHOT_KEYS
+        *[
+            func.substr(func.json_extract(source, "$." + key), 1, 4096).label(
+                "snapshot_" + key
+            )
+            for key in _READ_SNAPSHOT_KEYS
+        ],
+        case(
+            (
+                func.json_type(source, "$.new_files") == "array",
+                func.json_array_length(source, "$.new_files"),
+            ),
+            else_=0,
+        ).label("snapshot_new_files_count"),
+        *[
+            func.substr(func.json_extract(source, f"$.new_files[{idx}]"), 1, 256).label(
+                f"snapshot_new_file_{idx}"
+            )
+            for idx in range(_NEW_FILES_PREVIEW_LIMIT)
+        ],
     ]
 
 
@@ -153,11 +170,22 @@ def _read_columns():
     ]
 
 
+def _safe_nonneg_int(value) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(0, parsed)
+
+
 def _summary_mapping(row):
     import json
 
     result = dict(row)
     snapshot = {}
+    raw_transfer_count = None
     for key in _READ_SNAPSHOT_KEYS:
         value = result.pop("snapshot_" + key, None)
         if value is None:
@@ -171,17 +199,49 @@ def _summary_mapping(row):
                 continue
         if key in ("active", "tree_truncated"):
             value = bool(int(value)) if str(value) in ("0", "1") else False
+        if key == "transfer_count":
+            raw_transfer_count = _safe_nonneg_int(value)
+            continue
         snapshot[key] = value
+    new_files_count = _safe_nonneg_int(result.pop("snapshot_new_files_count", 0)) or 0
+    preview_files = []
+    for idx in range(_NEW_FILES_PREVIEW_LIMIT):
+        item = result.pop(f"snapshot_new_file_{idx}", None)
+        if item is not None:
+            text = str(item).strip()
+            if text:
+                preview_files.append(text)
+    if raw_transfer_count is not None or new_files_count > 0 or preview_files:
+        snapshot["transfer_count"] = max(
+            raw_transfer_count or 0, new_files_count, len(preview_files)
+        )
+    if new_files_count > 0:
+        snapshot["new_files_count"] = new_files_count
+    if preview_files:
+        snapshot["new_files"] = preview_files
     result["adapter_snapshot"] = snapshot
     return result
 
 
-def read_page(db, task_id, *, page, page_size):
-    condition = TaskExecution.task_id == task_id
-    total = db.scalar(select(func.count()).select_from(TaskExecution).where(condition))
+def read_page(db, task_id, *, page, page_size, filter_mode: str = "all"):
+    conditions = [TaskExecution.task_id == task_id]
+    if filter_mode == "failed":
+        conditions.append(TaskExecution.status == "failed")
+    elif filter_mode == "transferred":
+        source = _safe_json(TaskExecution.adapter_snapshot)
+        has_transfer_count = (
+            func.coalesce(cast(func.json_extract(source, "$.transfer_count"), Integer), 0)
+            > 0
+        )
+        has_new_files = (func.json_type(source, "$.new_files") == "array") & (
+            func.coalesce(func.json_array_length(source, "$.new_files"), 0) > 0
+        )
+        conditions.append(TaskExecution.status == "success")
+        conditions.append(has_transfer_count | has_new_files)
+    total = db.scalar(select(func.count()).select_from(TaskExecution).where(*conditions))
     rows = db.execute(
         select(*_read_columns())
-        .where(condition)
+        .where(*conditions)
         .order_by(TaskExecution.started_at.desc(), TaskExecution.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)

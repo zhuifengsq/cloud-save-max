@@ -336,6 +336,40 @@ const recentUpdates = computed(() => {
   })
 })
 
+const updatePosterFailed = reactive<Record<string, boolean>>({})
+
+function updatePosterUrl(task: TaskOverview) {
+  const tmdbId = Number(task.tmdb_id || 0)
+  if (!tmdbId) return ''
+  const path = String(tmdbDetailsById[tmdbId]?.data?.poster_path || '').trim()
+  if (!path) return ''
+  const url = `https://image.tmdb.org/t/p/w185${path}`
+  if (updatePosterFailed[url]) return ''
+  return url
+}
+
+function onUpdatePosterError(task: TaskOverview) {
+  const tmdbId = Number(task.tmdb_id || 0)
+  const path = String(tmdbDetailsById[tmdbId]?.data?.poster_path || '').trim()
+  if (!path) return
+  updatePosterFailed[`https://image.tmdb.org/t/p/w185${path}`] = true
+}
+
+function updateTransferCount(item: { transfer_count?: number; new_files?: string[] }) {
+  const listLen = Array.isArray(item.new_files) ? item.new_files.length : 0
+  return Math.max(0, Number(item.transfer_count) || 0, listLen)
+}
+
+function updateFilesSummary(item: { transfer_count?: number; new_files?: string[] }) {
+  const files = Array.isArray(item.new_files) ? item.new_files.filter(Boolean) : []
+  const count = updateTransferCount(item)
+  if (files.length) {
+    return count > 1 ? `${files[0]} 等 ${count} 项` : files[0]
+  }
+  if (count > 0) return `新存入 ${count} 项`
+  return '已转存新文件'
+}
+
 const upcomingAiring = computed(() => {
   const today = beijingDateStr(new Date())
   const maxDate = beijingDateStr(addDays(new Date(), 7))
@@ -708,10 +742,10 @@ onBeforeUnmount(() => {
           </div>
           <div class="toolbar__right">
             <router-link to="/tasks/drama">
-              <el-button>追剧任务</el-button>
+              <el-button text>追剧任务</el-button>
             </router-link>
             <router-link to="/tasks/calendar">
-              <el-button>追剧日历</el-button>
+              <el-button text>追剧日历</el-button>
             </router-link>
             <el-button @click="trendDialogVisible = true">任务趋势</el-button>
           </div>
@@ -719,12 +753,14 @@ onBeforeUnmount(() => {
 
         <div v-if="showDramaSkeleton" class="update-list" aria-hidden="true">
           <div v-for="i in 4" :key="`upd-sk-${i}`" class="update-row">
-            <div style="flex: 1; display: grid; gap: 8px">
-              <div style="display: flex; align-items: center; gap: 10px">
-                <span class="ui-skeleton" style="width: 26px; height: 26px"></span>
-                <span class="ui-skeleton" style="width: 44%; height: 16px"></span>
-              </div>
-              <span class="ui-skeleton" style="width: 58%; height: 12px"></span>
+            <span class="ui-skeleton" style="width: 36px; height: 50px; border-radius: 8px; flex: none"></span>
+            <div style="flex: 1; display: grid; gap: 8px; min-width: 0">
+              <span class="ui-skeleton" style="width: 48%; height: 15px"></span>
+              <span class="ui-skeleton" style="width: 68%; height: 12px"></span>
+            </div>
+            <div style="display: grid; justify-items: end; gap: 6px; flex: none">
+              <span class="ui-skeleton" style="width: 64px; height: 20px; border-radius: 999px"></span>
+              <span class="ui-skeleton" style="width: 46px; height: 12px"></span>
             </div>
           </div>
         </div>
@@ -733,26 +769,44 @@ onBeforeUnmount(() => {
           <div class="empty-state__desc">暂无新文件转存记录。</div>
         </div>
         <div v-else class="update-list">
-          <div v-for="item in recentUpdates" :key="`${item.task_id}-${item.started_at}`" class="update-row">
+          <router-link
+            v-for="item in recentUpdates"
+            :key="`${item.task_id}-${item.started_at}`"
+            :to="{ path: '/tasks/drama', query: { taskId: String(item.task_id) } }"
+            class="update-row update-row--link"
+          >
+            <img
+              v-if="updatePosterUrl(item.task)"
+              :src="updatePosterUrl(item.task)"
+              :alt="titleFromTask(item.task)"
+              class="update-row__poster"
+              loading="lazy"
+              @error="onUpdatePosterError(item.task)"
+            />
+            <span v-else class="update-row__poster-fallback" aria-hidden="true">
+              <el-icon><VideoPlay /></el-icon>
+            </span>
+
             <div class="update-row__main">
               <div class="update-row__title">
-                <span class="update-row__icon" aria-hidden="true">
-                  <el-icon><VideoPlay /></el-icon>
-                </span>
                 <span class="update-row__name">{{ titleFromTask(item.task) }}</span>
-              </div>
-              <div class="update-row__desc">
-                <span>{{ timeAgoFromIso(item.started_at) }}</span>
-                <span class="meta-dot">·</span>
                 <span class="update-row__drive">
-                  <DriveTypeIcon v-if="item.drive_type" :type="item.drive_type" :size="15" />
+                  <DriveTypeIcon v-if="item.drive_type" :type="item.drive_type" :size="14" />
                   <span>{{ DRIVE_TYPE_META[item.drive_type as DriveType]?.label || item.drive_type || item.task.account_name || '自动网盘' }}</span>
                 </span>
-                <span class="meta-dot">·</span>
-                <el-tag size="small" type="success">成功</el-tag>
+              </div>
+              <div class="update-row__files" :title="updateFilesSummary(item)">
+                {{ updateFilesSummary(item) }}
               </div>
             </div>
-          </div>
+
+            <div class="update-row__aside">
+              <span v-if="updateTransferCount(item) > 0" class="update-row__count">
+                +{{ updateTransferCount(item) }} 新存入
+              </span>
+              <span class="update-row__time">{{ timeAgoFromIso(item.started_at) }}</span>
+            </div>
+          </router-link>
         </div>
       </section>
 
@@ -994,13 +1048,25 @@ onBeforeUnmount(() => {
 .update-row {
   flex-shrink: 0;
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 14px;
+  gap: 12px;
+  padding: 12px 14px;
   border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.update-row--link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.update-row--link:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -1009,12 +1075,49 @@ onBeforeUnmount(() => {
     border-color: var(--line-strong);
     background: var(--el-fill-color-lighter);
   }
+
+  .update-row--link:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px -12px rgba(15, 23, 42, 0.25);
+  }
+}
+
+.update-row__poster,
+.update-row__poster-fallback {
+  flex: none;
+  width: 36px;
+  height: 50px;
+  border-radius: 8px;
+}
+
+.update-row__poster {
+  display: block;
+  object-fit: cover;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--surface-muted);
+}
+
+.update-row__poster-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  font-size: 16px;
+}
+
+.update-row__main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
 }
 
 .update-row__title {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-width: 0;
   font-weight: 700;
 }
 
@@ -1037,20 +1140,58 @@ onBeforeUnmount(() => {
 }
 
 .update-row__name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 420px;
+  font-size: 14.5px;
 }
 
-.update-row__desc {
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
+.update-row__drive {
+  flex: none;
+  display: inline-flex;
   align-items: center;
-  gap: 0;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+
+.update-row__files {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-row__aside {
+  flex: none;
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  text-align: right;
+}
+
+.update-row__count {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--el-color-success) 34%, transparent);
+  background: color-mix(in srgb, var(--el-color-success) 13%, transparent);
+  color: var(--el-color-success);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.update-row__time {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .dashboard-log-grid {
@@ -1291,10 +1432,6 @@ onBeforeUnmount(() => {
   .updates-card .empty-state,
   .upcoming-card .empty-state {
     flex: none;
-  }
-
-  .update-row__name {
-    max-width: 260px;
   }
 }
 

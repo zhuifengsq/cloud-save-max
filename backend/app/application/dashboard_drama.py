@@ -205,11 +205,16 @@ def build_drama_overview(db: Session, *, days: int = 30, include_shareurl_logs: 
                 names = data.get("new_files")
                 if not isinstance(names, list):
                     names = extract_root_new_files((legacy_tree or "").partition("\n")[2])
-                if names or (type(count) is int and count > 0):
+                clean_names = [str(x).strip() for x in names if str(x or "").strip()]
+                raw_count = count if type(count) is int and count > 0 else 0
+                effective_count = max(raw_count, len(clean_names))
+                if clean_names or effective_count > 0:
                     recent_updates[drama_key] = {
                         "task_id": task_id,
                         "started_at": started_at,
                         "drive_type": str(data.get("drive_type") or "") or None,
+                        "transfer_count": effective_count,
+                        "new_files": clean_names[:2],
                     }
 
         if len(recent_failures) < 12 and status == "failed":

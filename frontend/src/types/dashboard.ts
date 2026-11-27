@@ -56,6 +56,8 @@ export type DramaUpdateItem = {
   task_id: number
   started_at: string
   drive_type?: string | null
+  transfer_count?: number
+  new_files?: string[]
 }
 
 export type DramaShareurlUpdateLog = ShareurlUpdateLog & {

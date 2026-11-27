@@ -83,6 +83,8 @@ class DramaUpdateItemOut(BaseModel):
     task_id: int
     started_at: datetime
     drive_type: str | None = None
+    transfer_count: int = 0
+    new_files: list[str] = Field(default_factory=list)
 
 
 class DramaShareurlUpdateLogOut(BaseModel):
