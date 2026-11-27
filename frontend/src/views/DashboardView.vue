@@ -856,9 +856,6 @@ onBeforeUnmount(() => {
             <router-link to="/tasks/drama">
               <el-button text>追剧任务</el-button>
             </router-link>
-            <router-link to="/tasks/calendar">
-              <el-button text>追剧日历</el-button>
-            </router-link>
             <el-button @click="trendDialogVisible = true">任务趋势</el-button>
           </div>
         </div>
@@ -1000,6 +997,14 @@ onBeforeUnmount(() => {
                 {{ formatShortAirDate(it.air_date) }}
               </span>
             </div>
+          </router-link>
+        </div>
+        <div v-if="!showDramaSkeleton" class="updates-card__footer">
+          <router-link to="/tasks/calendar" class="updates-card__more-link">
+            <el-button text type="primary" size="small" class="updates-card__more-btn">
+              <span>查看追剧日历</span>
+              <el-icon class="el-icon--right"><ArrowRight /></el-icon>
+            </el-button>
           </router-link>
         </div>
       </section>
@@ -1334,6 +1339,7 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
   padding-right: 2px;
 }
 
@@ -1509,7 +1515,50 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
   padding-right: 2px;
+}
+
+.updates-card:hover .update-list,
+.update-list:hover,
+.update-list:has(:focus-visible),
+.upcoming-card:hover .upcoming-list,
+.upcoming-list:hover,
+.upcoming-list:has(:focus-visible) {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+@supports not (scrollbar-color: auto) {
+  .update-list,
+  .upcoming-list {
+    scrollbar-width: auto;
+  }
+
+  .update-list::-webkit-scrollbar,
+  .upcoming-list::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .update-list::-webkit-scrollbar-thumb,
+  .upcoming-list::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+  }
+
+  .updates-card:hover .update-list::-webkit-scrollbar-thumb,
+  .update-list:hover::-webkit-scrollbar-thumb,
+  .update-list:has(:focus-visible)::-webkit-scrollbar-thumb,
+  .upcoming-card:hover .upcoming-list::-webkit-scrollbar-thumb,
+  .upcoming-list:hover::-webkit-scrollbar-thumb,
+  .upcoming-list:has(:focus-visible)::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+  }
+
+  .update-list::-webkit-scrollbar-track,
+  .upcoming-list::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
 .upcoming-row {
@@ -1858,6 +1907,10 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding-top: 4px;
   border-top: 1px solid var(--el-border-color-extra-light);
+}
+
+.updates-card__more-link {
+  text-decoration: none;
 }
 
 .updates-card__more-btn {
