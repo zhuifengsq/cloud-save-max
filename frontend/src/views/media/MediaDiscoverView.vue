@@ -640,7 +640,7 @@ watch(() => route.name, (name, previousName) => {
       </div>
     </div>
 
-    <el-card class="page__card search-card" shadow="never">
+    <section class="glass-panel discover-bar">
       <div class="search-card__controls">
         <el-input v-model="searchState.q" class="search-card__input" placeholder="搜索 TMDB 剧集或电影" clearable @keydown.enter="!isImeComposing($event) && doSearch()">
           <template #prefix>
@@ -650,10 +650,8 @@ watch(() => route.name, (name, previousName) => {
         <el-button class="search-card__button" type="primary" :loading="searchState.loading" @click="doSearch">搜索</el-button>
       </div>
       <div class="search-card__hint" v-if="searchState.checked && !searchState.configured">未配置 TMDB：无法搜索。</div>
-    </el-card>
 
-    <template v-if="isTmdbMode">
-      <section class="discover-section">
+      <div v-if="isTmdbMode" class="discover-bar__sub">
         <div class="discover-toolbar">
           <el-button size="small" :icon="ArrowLeft" @click="backToDouban">返回影视发现</el-button>
           <div id="discover-results-heading" tabindex="-1" class="toolbar__title">搜索结果</div>
@@ -665,6 +663,29 @@ watch(() => route.name, (name, previousName) => {
             </span>
           </div>
         </div>
+      </div>
+
+      <div v-else class="discover-bar__sub">
+        <div class="discover-toolbar">
+          <div id="discover-filter-heading" tabindex="-1" class="toolbar__title">筛选</div>
+          <div class="toolbar__content">
+            <el-select v-model="filters.main" size="small" class="discover-filter-select" :disabled="categoriesLoading" @change="onCategoryChange">
+              <el-option v-for="c in categories" :key="c.key" :label="c.label" :value="c.key" />
+            </el-select>
+            <el-select v-model="filters.sub" size="small" class="discover-filter-select" :disabled="categoriesLoading" @change="onCategoryChange">
+              <el-option v-for="s in subOptions" :key="s.key" :label="s.label" :value="s.key" />
+            </el-select>
+          </div>
+          <div v-if="Boolean(listState.notice && listState.notice.trim()) || listState.isMockData" class="discover-bar__notice">
+            <span v-if="listState.notice && listState.notice.trim()">{{ listState.notice }}</span>
+            <span v-if="listState.isMockData">当前为模拟数据：{{ listState.mockReason || '豆瓣接口不可用' }}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <template v-if="isTmdbMode">
+      <section class="discover-section">
         <div v-if="showSearchSkeleton" class="poster-grid" aria-hidden="true">
           <div v-for="i in discoverSkeletonCount" :key="`tmdb-sk-${i}`" class="poster-card poster-card--skeleton">
             <div class="poster-card__cover">
@@ -725,7 +746,7 @@ watch(() => route.name, (name, previousName) => {
               </div>
             </div>
             <div class="poster-card__meta">
-              <div class="poster-card__title" :title="bestTitle(row) || ''">{{ bestTitle(row) || '-' }}</div>
+              <div class="poster-card__title" :title="bestTitle(row) || ''">{{ bestTitle(row) || '—' }}</div>
               <div class="poster-card__sub">
                 {{ row.media_type === 'movie' ? row.release_date || '' : row.first_air_date || '' }}
               </div>
@@ -753,23 +774,7 @@ watch(() => route.name, (name, previousName) => {
     </template>
 
     <template v-else>
-      <div v-if="Boolean(listState.notice && listState.notice.trim()) || listState.isMockData" class="page__hint">
-        <div v-if="listState.notice && listState.notice.trim()">{{ listState.notice }}</div>
-        <div v-if="listState.isMockData">当前为模拟数据：{{ listState.mockReason || '豆瓣接口不可用' }}</div>
-      </div>
-
       <section class="discover-section">
-        <div class="discover-toolbar">
-          <div id="discover-filter-heading" tabindex="-1" class="toolbar__title">筛选</div>
-          <div class="toolbar__content">
-            <el-select v-model="filters.main" size="small" class="discover-filter-select" :disabled="categoriesLoading" @change="onCategoryChange">
-              <el-option v-for="c in categories" :key="c.key" :label="c.label" :value="c.key" />
-            </el-select>
-            <el-select v-model="filters.sub" size="small" class="discover-filter-select" :disabled="categoriesLoading" @change="onCategoryChange">
-              <el-option v-for="s in subOptions" :key="s.key" :label="s.label" :value="s.key" />
-            </el-select>
-          </div>
-        </div>
         <div v-if="showDoubanSkeleton" class="poster-grid" aria-hidden="true">
           <div v-for="i in discoverSkeletonCount" :key="`douban-sk-${i}`" class="poster-card poster-card--skeleton">
             <div class="poster-card__cover">
@@ -957,7 +962,7 @@ watch(() => route.name, (name, previousName) => {
         <div class="existing-task-card">
           <div class="existing-task-card__name">{{ existingTaskDialog.target?.taskname || '' }}</div>
           <div class="existing-task-card__meta">
-            最近更新：{{ existingTaskDialog.target?.updated_at || '-' }}
+            最近更新：{{ existingTaskDialog.target?.updated_at || '—' }}
           </div>
         </div>
         <div class="existing-task-body__hint">
@@ -1003,7 +1008,7 @@ watch(() => route.name, (name, previousName) => {
             </template>
           </el-table-column>
           <el-table-column label="评分" :width="isMobile ? 70 : 90">
-            <template #default="{ row }">{{ row.vote_average != null ? Number(row.vote_average).toFixed(1) : '-' }}</template>
+            <template #default="{ row }">{{ row.vote_average != null ? Number(row.vote_average).toFixed(1) : '—' }}</template>
           </el-table-column>
           <el-table-column v-if="!isMobile" label="简介" min-width="260" show-overflow-tooltip>
             <template #default="{ row }">{{ row.overview || '' }}</template>
@@ -1068,13 +1073,31 @@ watch(() => route.name, (name, previousName) => {
 .page__card--compact :deep(.el-card__header) {
   padding: 10px 12px;
 }
-.search-card {
-  margin-bottom: 0;
+.discover-bar {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.search-card :deep(.el-card__body) {
-  padding: 10px 12px;
+.discover-bar__sub {
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
 }
+
+.discover-bar__notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-inline-start: auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
 .search-card__controls {
   display: flex;
   align-items: center;
@@ -1147,8 +1170,8 @@ watch(() => route.name, (name, previousName) => {
 }
 .poster-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  gap: 16px;
   min-height: 120px;
 }
 .poster-card {
@@ -1160,7 +1183,7 @@ watch(() => route.name, (name, previousName) => {
   flex-direction: column;
   gap: 8px;
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
   height: 100%;
 }
 .poster-card:nth-child(n + 9) {
@@ -1169,8 +1192,13 @@ watch(() => route.name, (name, previousName) => {
 }
 .poster-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
-  border-color: rgba(148, 163, 184, 0.4);
+  box-shadow: var(--shadow-hover);
+  border-color: var(--line-strong);
+}
+@media (hover: hover) and (pointer: fine) {
+  .poster-card:hover .poster-card__img {
+    transform: scale(1.03);
+  }
 }
 .poster-card__cover {
   position: relative;
@@ -1182,6 +1210,7 @@ watch(() => route.name, (name, previousName) => {
 .poster-card__img {
   width: 100%;
   height: 100%;
+  transition: transform 0.24s ease;
 }
 .poster-card--skeleton {
   cursor: default;
