@@ -14,3 +14,8 @@ class TaskSchedulerSettingUpdateIn(BaseModel):
     crontab: str | None = Field(default=None, max_length=64)
     timezone: str | None = Field(default=None, max_length=64)
 
+
+class TaskSchedulerStatusOut(BaseModel):
+    running: bool
+    started_at: str | None = None
+

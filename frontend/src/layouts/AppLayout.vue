@@ -16,6 +16,7 @@ import {
 import { useRoute, useRouter } from 'vue-router'
 
 import NavMenu from '@/layouts/NavMenu.vue'
+import { useSchedulerStatus } from '@/composables/useSchedulerStatus'
 import { useTheme } from '@/composables/useTheme'
 import { resetDynamicRoutes } from '@/router'
 import { useAuthStore } from '@/stores/auth'
@@ -102,6 +103,8 @@ const mobileQuickTabs = computed(() =>
 
 const mobileNavVisible = ref(false)
 const { isDark } = useTheme()
+const { running: schedulerRunning, tooltip: schedulerTooltip } = useSchedulerStatus()
+const runningNavNames = computed(() => (schedulerRunning.value ? ['DramaTasks'] : []))
 const userInitial = computed(() => String(auth.user?.username || 'A').slice(0, 1).toUpperCase())
 
 function collectRouteNames(routes: any[]) {
@@ -156,7 +159,13 @@ async function handleLogout() {
         <nav class="app-nav-sections" aria-label="主导航">
           <div class="app-nav-section">
             <div class="app-nav-section__title">影视工作区</div>
-            <NavMenu :items="primaryNav" :active-path="route.path" :collapse="sidebarCollapsed" />
+            <NavMenu
+              :items="primaryNav"
+              :active-path="route.path"
+              :collapse="sidebarCollapsed"
+              :running-route-names="runningNavNames"
+              :running-tooltip="schedulerTooltip"
+            />
           </div>
           <div class="app-nav-section">
             <div class="app-nav-section__title">系统管理</div>
@@ -224,6 +233,8 @@ async function handleLogout() {
             class="app-menu--drawer"
             :items="primaryNav"
             :active-path="route.path"
+            :running-route-names="runningNavNames"
+            :running-tooltip="schedulerTooltip"
             @select="handleMenuSelect"
           />
         </div>
@@ -263,6 +274,16 @@ async function handleLogout() {
           </div>
         </div>
         <div class="app-header__right">
+          <router-link
+            v-if="schedulerRunning"
+            to="/tasks/drama"
+            class="header-running-pill mobile-only"
+            :title="schedulerTooltip"
+            aria-label="定时任务执行中，点击查看追剧任务"
+          >
+            <span class="nav-running-pill__dot" aria-hidden="true"></span>
+            <span>执行中</span>
+          </router-link>
           <el-switch
             v-model="isDark"
             inline-prompt
@@ -312,7 +333,14 @@ async function handleLogout() {
         class="mobile-tabbar__item"
         :class="{ 'is-active': route.path === tab.to }"
       >
-        <el-icon><component :is="tab.icon" /></el-icon>
+        <span class="nav-icon-wrap">
+          <el-icon><component :is="tab.icon" /></el-icon>
+          <span
+            v-if="schedulerRunning && tab.name === 'DramaTasks'"
+            class="nav-running-dot"
+            aria-hidden="true"
+          />
+        </span>
         <span>{{ tab.label }}</span>
       </router-link>
       <button type="button" class="mobile-tabbar__item" @click="mobileNavVisible = true">

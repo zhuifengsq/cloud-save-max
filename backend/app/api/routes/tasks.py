@@ -24,7 +24,7 @@ from app.application.container import task_admission_service as _acc_task_admiss
 from app.schemas.task_magic_regex import MagicRegexOut, MagicRegexRuleOut
 from app.schemas.drama_transfer_recovery import DramaTransferRecoveryAction, DramaTransferRecoveryOut
 from app.core.errors import ApiError, bad_request
-from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn
+from app.schemas.task_scheduler import TaskSchedulerSettingOut, TaskSchedulerSettingUpdateIn, TaskSchedulerStatusOut
 from app.schemas.task import (
     DramaPinIn,
     StopCompletedDramaTasksOut,
@@ -252,6 +252,11 @@ def patch_task_scheduler_setting(request: Request, payload: TaskSchedulerSetting
     db.refresh(setting)
     task_scheduler_manager.reload()
     return scheduler_out(scheduler_view(setting))
+
+
+@router.get('/scheduler/status', response_model=TaskSchedulerStatusOut)
+def get_task_scheduler_status(_current: CurrentUser = Depends(get_current_user)):
+    return TaskSchedulerStatusOut(**task_scheduler_manager.get_drama_run_status())
 
 
 # 拆出去的子路由：分享预览/验证、网盘浏览/建目录/删除（路径与响应保持不变）

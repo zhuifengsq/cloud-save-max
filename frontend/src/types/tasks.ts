@@ -146,6 +146,11 @@ export type TaskSchedulerSetting = {
   timezone: string
 }
 
+export type TaskSchedulerStatus = {
+  running: boolean
+  started_at?: string | null
+}
+
 export type StopCompletedDramaTasksResponse = {
   checked: number
   matched: number

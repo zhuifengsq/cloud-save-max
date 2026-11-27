@@ -10,6 +10,7 @@ import type {
   TaskExecutionItem,
   TaskItem,
   TaskSchedulerSetting,
+  TaskSchedulerStatus,
   TaskShareLink,
   SavedProgressCorrection,
   DramaTransferRecovery,
@@ -374,4 +375,11 @@ export async function fetchTaskExecutions(
 }
 export async function fetchTaskExecutionDetail(taskId: number, executionId: number, log_offset = 0): Promise<TaskExecutionDetail> {
   return (await http.get<TaskExecutionDetail>(`/tasks/${taskId}/executions/${executionId}`, {params: {log_offset, log_limit: 65536}})).data
+}
+
+export async function fetchTaskSchedulerStatus() {
+  const { data } = await http.get<TaskSchedulerStatus>('/tasks/scheduler/status', {
+    headers: { 'X-Silent-Toast': '1' },
+  })
+  return data
 }

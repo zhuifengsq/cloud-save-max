@@ -617,6 +617,89 @@ html:root[data-theme='dark'] .glass-panel {
   font-size: 19px;
 }
 
+.nav-icon-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.nav-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav-running-dot {
+  position: absolute;
+  top: -1px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--brand);
+  box-shadow: 0 0 0 2px var(--card);
+  animation: scheduler-pulse 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.app-menu.el-menu--collapse .nav-running-dot,
+.mobile-tabbar__item .nav-running-dot {
+  right: -2px;
+}
+
+.app-menu.el-menu--collapse .nav-icon-wrap {
+  width: auto;
+  height: auto;
+  visibility: visible;
+  overflow: visible;
+  display: inline-flex;
+}
+
+.nav-running-pill,
+.header-running-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--brand);
+  background: color-mix(in oklab, var(--brand) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--brand) 24%, transparent);
+  white-space: nowrap;
+}
+
+.app-menu .el-menu-item .nav-running-pill {
+  margin-left: auto;
+}
+
+.nav-running-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--brand);
+  flex-shrink: 0;
+  animation: scheduler-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes scheduler-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.48;
+    transform: scale(0.84);
+  }
+}
+
 .app-menu .el-menu--inline {
   margin-left: 16px;
   border-left: 1px solid var(--line);
@@ -2264,10 +2347,25 @@ pre {
     padding: 0 0 14px;
     border-bottom: 1px solid var(--line);
     align-items: center;
+    gap: 8px;
+  }
+
+  .app-header__left {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .app-header__meta {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .app-header .app-header__menu {
     display: inline-flex;
+    flex-shrink: 0;
     min-width: 44px;
     min-height: 44px;
     width: 44px;
@@ -2275,16 +2373,19 @@ pre {
   }
 
   .app-header__brand {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    max-width: 100%;
     min-width: 0;
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--ink);
   }
 
   .app-header__brand span {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2296,7 +2397,13 @@ pre {
 
   .app-header__right {
     display: flex;
-    gap: 8px;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .app-header__theme {
+    margin-right: 0;
   }
 
   .app-header .app-header__user,

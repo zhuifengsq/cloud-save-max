@@ -22,9 +22,15 @@ defineProps<{
   items: RouteRecordRaw[]
   activePath: string
   collapse?: boolean
+  runningRouteNames?: string[]
+  runningTooltip?: string
 }>()
 
 const emit = defineEmits(['select'])
+
+function isRouteRunning(propsNames: string[] | undefined, item: RouteRecordRaw) {
+  return Boolean(propsNames?.includes(String(item?.name || '')))
+}
 
 const iconMap = {
   ArrowRight,
@@ -89,11 +95,34 @@ function menuRouteIndex(route: any, parent?: any) {
         </el-menu-item>
       </el-sub-menu>
       <el-menu-item v-else :index="routeIndex(item.path)">
-        <el-icon>
-          <component :is="iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
-        </el-icon>
+        <span class="nav-icon-wrap">
+          <el-icon>
+            <component :is="iconMap[item.meta?.icon as keyof typeof iconMap] || User" />
+          </el-icon>
+          <span
+            v-if="collapse && isRouteRunning(runningRouteNames, item)"
+            class="nav-running-dot"
+            aria-hidden="true"
+          />
+        </span>
         <template #title>
-          <span>{{ item.meta?.title }}</span>
+          <span class="nav-item-label">{{ item.meta?.title }}</span>
+          <span
+            v-if="collapse && isRouteRunning(runningRouteNames, item)"
+            class="visually-hidden-collapsed-suffix"
+          >
+            · {{ runningTooltip || '定时任务执行中' }}
+          </span>
+          <el-tooltip
+            v-else-if="!collapse && isRouteRunning(runningRouteNames, item)"
+            :content="runningTooltip || '定时任务执行中'"
+            placement="right"
+          >
+            <span class="nav-running-pill" aria-label="定时任务执行中">
+              <span class="nav-running-pill__dot" aria-hidden="true" />
+              <span>执行中</span>
+            </span>
+          </el-tooltip>
         </template>
       </el-menu-item>
     </template>
