@@ -524,12 +524,9 @@ onMounted(refreshAll)
     <div class="section-header">
       <div class="section-header__title">
         <h1>TMDB 缓存管理</h1>
-        <div class="section-header__desc">管理 TMDB 详情缓存（含演员表）：定时刷新、TTL、清理与强制更新。</div>
+        <div class="section-header__desc">管理 TMDB 详情与演员表缓存（删除缓存会一并移除主演），支持定时刷新、TTL 调整与冷数据清理。</div>
       </div>
       <div class="toolbar__right">
-        <el-tag :type="list.configured ? 'success' : 'warning'" effect="plain" round>
-          {{ list.configured ? 'TMDB 已配置' : 'TMDB 未配置' }}
-        </el-tag>
         <el-button type="primary" :loading="loadingAll" @click="refreshAll">刷新全部</el-button>
       </div>
     </div>
@@ -543,7 +540,7 @@ onMounted(refreshAll)
           </span>
         </div>
         <div class="metric-tile__value metric-tile__value--tag">
-          <el-tag :type="list.configured ? 'success' : 'warning'" effect="plain" round size="large">
+          <el-tag :type="list.configured ? 'success' : 'warning'" effect="plain" round size="large" disable-transitions>
             {{ list.configured ? '已配置' : '未配置' }}
           </el-tag>
         </div>
@@ -569,7 +566,7 @@ onMounted(refreshAll)
           </span>
         </div>
         <div class="metric-tile__value metric-tile__value--tag">
-          <el-tag :type="scheduler.data.enabled ? 'success' : 'info'" effect="plain" round size="large">
+          <el-tag :type="scheduler.data.enabled ? 'success' : 'info'" effect="plain" round size="large" disable-transitions>
             {{ scheduler.data.enabled ? '已开启' : '未开启' }}
           </el-tag>
         </div>
@@ -590,48 +587,40 @@ onMounted(refreshAll)
       </div>
     </section>
 
-    <el-alert
-      class="page__alert"
-      title="这里管理的是 TMDB 详情缓存（用于任务统计/追剧信息复用），演员表与详情存在同一条目里：删除缓存会连主演一起删掉。可配置定时刷新、批量刷新任务关联条目、清理冷数据，并对单条缓存设置 TTL/强制刷新/删除。"
-      type="info"
-      show-icon
-      :closable="false"
-    />
-
-    <section class="glass-panel table-panel">
-      <el-tabs v-model="activeTab" class="tmdb-tabs" :stretch="!isMobile">
-        <el-tab-pane label="缓存列表" name="list">
-          <section class="glass-panel filter-strip">
-            <div class="toolbar">
-              <div class="toolbar__left">
-                <el-select v-model="query.mediaType" placeholder="类型" clearable :style="{ width: isMobile ? '100%' : '136px' }">
-                  <el-option label="全部" value="" />
-                  <el-option label="剧集 (tv)" value="tv" />
-                  <el-option label="电影 (movie)" value="movie" />
-                </el-select>
-                <el-input
-                  v-model="query.keyword"
-                  placeholder="标题关键词"
-                  clearable
-                  :style="{ width: isMobile ? '100%' : '230px' }"
-                  @keydown.enter="!isImeComposing($event) && onSearch()"
-                />
-                <el-input
-                  v-model="query.status"
-                  placeholder="status（如 Returning Series）"
-                  clearable
-                  :style="{ width: isMobile ? '100%' : '220px' }"
-                  @keydown.enter="!isImeComposing($event) && onSearch()"
-                />
-                <el-checkbox v-model="query.expiredOnly">仅过期</el-checkbox>
-              </div>
-              <div class="toolbar__right">
-                <el-button type="primary" :loading="list.loading" @click="onSearch">查询</el-button>
-                <el-button :disabled="list.loading" @click="resetFilters">重置</el-button>
-              </div>
+    <el-tabs v-model="activeTab" class="tmdb-tabs">
+      <el-tab-pane label="缓存列表" name="list">
+        <section class="glass-panel filter-strip">
+          <div class="toolbar">
+            <div class="toolbar__left">
+              <el-select v-model="query.mediaType" placeholder="类型" clearable :style="{ width: isMobile ? '100%' : '136px' }">
+                <el-option label="全部" value="" />
+                <el-option label="剧集 (tv)" value="tv" />
+                <el-option label="电影 (movie)" value="movie" />
+              </el-select>
+              <el-input
+                v-model="query.keyword"
+                placeholder="标题关键词"
+                clearable
+                :style="{ width: isMobile ? '100%' : '230px' }"
+                @keydown.enter="!isImeComposing($event) && onSearch()"
+              />
+              <el-input
+                v-model="query.status"
+                placeholder="状态（如 Returning Series）"
+                clearable
+                :style="{ width: isMobile ? '100%' : '220px' }"
+                @keydown.enter="!isImeComposing($event) && onSearch()"
+              />
+              <el-checkbox v-model="query.expiredOnly">仅过期</el-checkbox>
             </div>
-          </section>
+            <div class="toolbar__right">
+              <el-button type="primary" :loading="list.loading" @click="onSearch">查询</el-button>
+              <el-button :disabled="list.loading" @click="resetFilters">重置</el-button>
+            </div>
+          </div>
+        </section>
 
+        <section class="glass-panel table-panel">
           <div v-if="list.loading && !list.items.length" class="tmdb-table-skeleton" aria-hidden="true">
             <div v-for="i in 6" :key="`tmdb-sk-${i}`" class="tmdb-table-skeleton__row">
               <span class="ui-skeleton ui-skeleton--pill" style="width: 48px; height: 22px"></span>
@@ -640,6 +629,69 @@ onMounted(refreshAll)
               <span class="ui-skeleton" style="width: 56px; height: 14px"></span>
               <span class="ui-skeleton" style="width: 132px; height: 14px"></span>
             </div>
+          </div>
+
+          <div v-else-if="isMobile" class="mobile-record-list" v-loading="list.loading && Boolean(list.items.length)">
+            <div v-if="!list.items.length" class="empty-state empty-state--compact">
+              <div class="empty-state__title">暂无匹配的 TMDB 缓存</div>
+              <div class="empty-state__desc">调整筛选条件，或等待任务关联剧集自动写入缓存。</div>
+            </div>
+            <article v-for="row in list.items" :key="`${row.media_type}:${row.tmdb_id}`" class="mobile-record-card">
+              <header class="mobile-record-card__head">
+                <div class="mobile-record-card__head-main">
+                  <div class="title__main">{{ row.display_title || '—' }}</div>
+                  <div v-if="row.original_title && row.original_title !== row.display_title" class="title__sub">{{ row.original_title }}</div>
+                </div>
+                <el-tag :type="row.media_type === 'tv' ? 'primary' : 'success'" effect="plain" round size="small" disable-transitions>
+                  {{ row.media_type === 'tv' ? '剧集' : row.media_type === 'movie' ? '电影' : row.media_type }}
+                </el-tag>
+              </header>
+              <dl class="mobile-record-dl">
+                <div class="mobile-record-dl__row">
+                  <dt>TMDB ID</dt>
+                  <dd><code class="mono-pill">{{ row.tmdb_id }}</code></dd>
+                </div>
+                <div class="mobile-record-dl__row">
+                  <dt>年份</dt>
+                  <dd class="num-cell" :class="{ muted: !row.year }">{{ row.year || '—' }}</dd>
+                </div>
+                <div class="mobile-record-dl__row">
+                  <dt>状态</dt>
+                  <dd>
+                    <el-tag v-if="row.status" size="small" :type="row.status === 'Ended' || row.status === 'Canceled' ? 'info' : 'primary'" effect="plain" disable-transitions>
+                      {{ row.status }}
+                    </el-tag>
+                    <span v-else class="muted">—</span>
+                  </dd>
+                </div>
+                <div class="mobile-record-dl__row">
+                  <dt>主演</dt>
+                  <dd>
+                    <el-tag v-if="row.credits_cached" size="small" type="success" effect="plain" round disable-transitions>已缓存</el-tag>
+                    <span v-else class="muted">—</span>
+                  </dd>
+                </div>
+                <div class="mobile-record-dl__row">
+                  <dt>过期时间</dt>
+                  <dd class="num-cell" :class="{ 'time-expired': isExpired(row.expires_at) }">
+                    {{ fmtTime(row.expires_at || null) }}
+                  </dd>
+                </div>
+                <div class="mobile-record-dl__row">
+                  <dt>失败</dt>
+                  <dd>
+                    <el-tag v-if="row.fail_count" size="small" type="danger" effect="plain" disable-transitions>{{ row.fail_count }}</el-tag>
+                    <span v-else class="muted num-cell">0</span>
+                  </dd>
+                </div>
+              </dl>
+              <footer class="mobile-record-card__actions">
+                <el-button link type="primary" @click="openDrawer(row)">详情</el-button>
+                <el-button link type="primary" :disabled="!canWrite" @click="refreshRow(row)">刷新</el-button>
+                <el-button link :disabled="!canWrite" @click="openTTLDialog(row)">TTL</el-button>
+                <el-button link type="danger" :disabled="!canWrite" @click="openDeleteDialog(row)">删除</el-button>
+              </footer>
+            </article>
           </div>
 
           <el-table
@@ -657,75 +709,63 @@ onMounted(refreshAll)
                 <div class="empty-state__desc">调整筛选条件，或等待任务关联剧集自动写入缓存。</div>
               </div>
             </template>
-            <el-table-column label="类型" width="74">
+            <el-table-column label="类型" width="78">
               <template #default="{ row }">
-                <el-tag :type="row.media_type === 'tv' ? 'primary' : 'success'" effect="plain" round size="small">
+                <el-tag :type="row.media_type === 'tv' ? 'primary' : 'success'" effect="plain" round size="small" disable-transitions>
                   {{ row.media_type === 'tv' ? '剧集' : row.media_type === 'movie' ? '电影' : row.media_type }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="TMDB ID" width="92">
+            <el-table-column label="TMDB ID" width="96">
               <template #default="{ row }">
                 <code class="mono-pill">{{ row.tmdb_id }}</code>
               </template>
             </el-table-column>
-            <el-table-column label="标题" min-width="180">
+            <el-table-column label="标题" min-width="140">
               <template #default="{ row }">
                 <div class="title__main">{{ row.display_title || '—' }}</div>
                 <div v-if="row.original_title && row.original_title !== row.display_title" class="title__sub">{{ row.original_title }}</div>
               </template>
             </el-table-column>
-            <el-table-column label="年份" width="64">
+            <el-table-column label="年份" width="62">
               <template #default="{ row }">
                 <span class="num-cell">{{ row.year || '—' }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="124">
+            <el-table-column label="状态" width="140">
               <template #default="{ row }">
-                <el-tag v-if="row.status" size="small" :type="row.status === 'Ended' || row.status === 'Canceled' ? 'info' : 'primary'" effect="plain">
+                <el-tag v-if="row.status" size="small" :type="row.status === 'Ended' || row.status === 'Canceled' ? 'info' : 'primary'" effect="plain" disable-transitions>
                   {{ row.status }}
                 </el-tag>
                 <span v-else class="muted">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="主演" width="78">
+            <el-table-column label="主演" width="76">
               <template #default="{ row }">
-                <el-tag v-if="row.credits_cached" size="small" type="success" effect="plain" round>已缓存</el-tag>
+                <el-tag v-if="row.credits_cached" size="small" type="success" effect="plain" round disable-transitions>已缓存</el-tag>
                 <span v-else class="muted">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="过期时间" width="176">
+            <el-table-column label="过期时间" width="162">
               <template #default="{ row }">
                 <span class="num-cell" :class="{ 'time-expired': isExpired(row.expires_at) }">
                   {{ fmtTime(row.expires_at || null) }}
                 </span>
               </template>
             </el-table-column>
-            <el-table-column label="失败" width="58" align="right">
+            <el-table-column label="失败" width="64" align="right">
               <template #default="{ row }">
-                <el-tag v-if="row.fail_count" size="small" type="danger" effect="plain">{{ row.fail_count }}</el-tag>
+                <el-tag v-if="row.fail_count" size="small" type="danger" effect="plain" disable-transitions>{{ row.fail_count }}</el-tag>
                 <span v-else class="muted num-cell">0</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" :width="isMobile ? 110 : 196">
+            <el-table-column label="操作" width="176">
               <template #default="{ row }">
                 <div class="op">
                   <el-button link type="primary" @click="openDrawer(row)">详情</el-button>
-                  <template v-if="!isMobile">
-                    <el-button link type="primary" :disabled="!canWrite" @click="refreshRow(row)">刷新</el-button>
-                    <el-button link :disabled="!canWrite" @click="openTTLDialog(row)">TTL</el-button>
-                    <el-button link type="danger" :disabled="!canWrite" @click="openDeleteDialog(row)">删除</el-button>
-                  </template>
-                  <el-dropdown v-else trigger="click">
-                    <el-button link type="primary">更多</el-button>
-                    <template #dropdown>
-                      <el-dropdown-menu>
-                        <el-dropdown-item :disabled="!canWrite" @click="refreshRow(row)">刷新</el-dropdown-item>
-                        <el-dropdown-item :disabled="!canWrite" @click="openTTLDialog(row)">设置 TTL</el-dropdown-item>
-                        <el-dropdown-item :disabled="!canWrite" @click="openDeleteDialog(row)">删除</el-dropdown-item>
-                      </el-dropdown-menu>
-                    </template>
-                  </el-dropdown>
+                  <el-button link type="primary" :disabled="!canWrite" @click="refreshRow(row)">刷新</el-button>
+                  <el-button link :disabled="!canWrite" @click="openTTLDialog(row)">TTL</el-button>
+                  <el-button link type="danger" :disabled="!canWrite" @click="openDeleteDialog(row)">删除</el-button>
                 </div>
               </template>
             </el-table-column>
@@ -734,7 +774,7 @@ onMounted(refreshAll)
           <div class="pager">
             <el-pagination
               background
-              layout="total, sizes, prev, pager, next"
+              :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next'"
               :page-size="list.pageSize"
               :page-sizes="[10, 20, 50, 100, 200]"
               :current-page="list.page"
@@ -743,138 +783,137 @@ onMounted(refreshAll)
               @update:current-page="(v) => ((list.page = v), loadList())"
             />
           </div>
-        </el-tab-pane>
+        </section>
+      </el-tab-pane>
 
-        <el-tab-pane label="工具" name="tools">
-          <div class="tools-stack">
-            <section class="glass-panel tool-card">
-              <div class="section__title">刷新任务关联缓存</div>
-              <div class="section__desc">从追剧任务中提取已关联的 TMDB 条目并批量刷新其详情缓存。</div>
-              <div class="tool-grid">
-                <div class="tool-field tool-field--check">
-                  <el-checkbox v-model="tools.enabledOnly">仅启用任务</el-checkbox>
-                </div>
-                <div class="tool-field">
-                  <div class="tool-field__label">最多条目</div>
-                  <el-input-number v-model="tools.maxItems" :min="1" :max="2000" />
-                </div>
-                <div class="tool-field tool-field--check">
-                  <el-checkbox v-model="tools.force">强制刷新</el-checkbox>
-                </div>
-                <div class="tool-field tool-field--action">
-                  <el-button type="primary" :loading="tools.refreshingLinked" :disabled="!canWrite" @click="runRefreshLinkedTasks">执行</el-button>
-                </div>
-              </div>
-            </section>
-
-            <section class="glass-panel tool-card">
-              <div class="section__title">清理冷数据</div>
-              <div class="section__desc">删除长期未访问的缓存条目（详情与主演一起清理，保留近 N 天）。</div>
-              <div class="tool-grid">
-                <div class="tool-field">
-                  <div class="tool-field__label">保留天数</div>
-                  <el-input-number v-model="tools.retentionDays" :min="1" :max="3650" />
-                </div>
-                <div class="tool-field tool-field--action">
-                  <el-button type="danger" :loading="tools.purging" :disabled="!canWrite" @click="runPurge">清理</el-button>
-                </div>
-              </div>
-            </section>
-
-            <section class="glass-panel tool-card">
-              <div class="section__title">快速定位（按 tmdb_id）</div>
-              <div class="section__desc">用于排查单个条目的缓存状态，支持查询与强制刷新。</div>
-              <div class="tool-grid">
-                <div class="tool-field">
-                  <div class="tool-field__label">类型</div>
-                  <el-select v-model="quick.mediaType" style="width: 160px">
-                    <el-option label="剧集 (tv)" value="tv" />
-                    <el-option label="电影 (movie)" value="movie" />
-                  </el-select>
-                </div>
-                <div class="tool-field">
-                  <div class="tool-field__label">tmdb_id</div>
-                  <el-input-number v-model="quick.tmdbId" :min="1" :step="1" />
-                </div>
-                <div class="tool-field tool-field--action">
-                  <el-button :loading="quick.loading" @click="quickQuery">查询</el-button>
-                  <el-button type="primary" :loading="quick.loading" :disabled="!canWrite" @click="quickRefresh">强刷</el-button>
-                </div>
-              </div>
-              <el-descriptions v-if="quick.status" :column="isMobile ? 1 : 2" border class="quick-status-desc">
-                <el-descriptions-item label="存在状态">
-                  <el-tag :type="quick.status.exists ? 'success' : 'info'" effect="plain" size="small">
-                    {{ quick.status.exists ? '已缓存' : '未缓存' }}
-                  </el-tag>
-                </el-descriptions-item>
-                <el-descriptions-item label="TMDB 配置">
-                  {{ quick.status.configured ? '已配置' : '未配置' }}
-                </el-descriptions-item>
-                <el-descriptions-item v-if="quick.status.display_title" label="标题">
-                  {{ quick.status.display_title }}（{{ quick.status.year || '—' }}）
-                </el-descriptions-item>
-                <el-descriptions-item label="过期时间">
-                  <span class="num-cell">{{ fmtTime(quick.status.expires_at) }}</span>
-                </el-descriptions-item>
-                <el-descriptions-item label="主演缓存">
-                  {{ quick.status.credits_cached ? '已缓存' : '未缓存' }}
-                  <template v-if="quick.status.credits_expires_at">（至 {{ fmtTime(quick.status.credits_expires_at) }}）</template>
-                </el-descriptions-item>
-                <el-descriptions-item v-if="quick.status.last_error" label="最近错误">
-                  <span class="kv__v--error">{{ quick.status.last_error }}</span>
-                </el-descriptions-item>
-              </el-descriptions>
-            </section>
-          </div>
-        </el-tab-pane>
-
-        <el-tab-pane label="定时刷新" name="scheduler">
+      <el-tab-pane label="工具" name="tools">
+        <div class="tools-stack">
           <section class="glass-panel tool-card">
-            <div class="card__header card__header--flat">
-              <div class="card__title-group">
-                <div class="section__title">定时刷新设置</div>
-                <el-tag :type="scheduler.data.enabled ? 'success' : 'info'" effect="plain" round size="small">
-                  {{ scheduler.data.enabled ? '已启用' : '未启用' }}
-                </el-tag>
+            <div class="section__title">刷新任务关联缓存</div>
+            <div class="section__desc">从追剧任务中提取已关联的 TMDB 条目并批量刷新其详情缓存。</div>
+            <div class="tool-row">
+              <div class="tool-field">
+                <div class="tool-field__label">最多条目</div>
+                <el-input-number v-model="tools.maxItems" :min="1" :max="2000" />
               </div>
-              <div class="card__headerRight">
-                <el-button text :loading="scheduler.loading" @click="loadScheduler">刷新</el-button>
-                <el-button type="primary" :loading="scheduler.saving" :disabled="!canWrite" @click="saveScheduler">保存</el-button>
+              <div class="tool-checks">
+                <el-checkbox v-model="tools.enabledOnly">仅启用任务</el-checkbox>
+                <el-checkbox v-model="tools.force">强制刷新</el-checkbox>
+              </div>
+              <div class="tool-row__action">
+                <el-button type="primary" :loading="tools.refreshingLinked" :disabled="!canWrite" @click="runRefreshLinkedTasks">执行</el-button>
               </div>
             </div>
-
-            <el-form label-position="top" :disabled="scheduler.loading">
-              <el-form-item label="启用">
-                <el-switch v-model="scheduler.data.enabled" :disabled="!canWrite" />
-              </el-form-item>
-              <div class="form__row">
-                <el-form-item label="crontab">
-                  <el-input v-model="scheduler.data.crontab" placeholder="0 */6 * * *">
-                    <template #append>
-                      <el-button @click="cronPreviewVisible = true">预览</el-button>
-                    </template>
-                  </el-input>
-                </el-form-item>
-                <el-form-item label="timezone">
-                  <el-input v-model="scheduler.data.timezone" placeholder="Asia/Shanghai" />
-                </el-form-item>
-              </div>
-              <div class="form__row">
-                <el-form-item label="每次最多刷新条目">
-                  <el-input-number v-model="scheduler.data.max_items_per_run" :min="1" :max="2000" />
-                </el-form-item>
-                <el-form-item label="仅刷新任务关联条目">
-                  <el-switch v-model="scheduler.data.only_refresh_linked_tasks" :disabled="!canWrite" />
-                </el-form-item>
-              </div>
-              <el-form-item label="冷数据保留天数">
-                <el-input-number v-model="scheduler.data.retention_days" :min="1" :max="3650" />
-              </el-form-item>
-            </el-form>
           </section>
-        </el-tab-pane>
-      </el-tabs>
-    </section>
+
+          <section class="glass-panel tool-card">
+            <div class="section__title">清理冷数据</div>
+            <div class="section__desc">删除长期未访问的缓存条目（详情与主演一起清理，保留近 N 天）。</div>
+            <div class="tool-row">
+              <div class="tool-field">
+                <div class="tool-field__label">保留天数</div>
+                <el-input-number v-model="tools.retentionDays" :min="1" :max="3650" />
+              </div>
+              <div class="tool-row__action">
+                <el-button type="danger" plain :loading="tools.purging" :disabled="!canWrite" @click="runPurge">清理</el-button>
+              </div>
+            </div>
+          </section>
+
+          <section class="glass-panel tool-card">
+            <div class="section__title">快速定位（按 TMDB ID）</div>
+            <div class="section__desc">用于排查单个条目的缓存状态，支持查询与强制刷新。</div>
+            <div class="tool-row">
+              <div class="tool-field">
+                <div class="tool-field__label">类型</div>
+                <el-select v-model="quick.mediaType" :style="{ width: isMobile ? '100%' : '160px' }">
+                  <el-option label="剧集 (tv)" value="tv" />
+                  <el-option label="电影 (movie)" value="movie" />
+                </el-select>
+              </div>
+              <div class="tool-field">
+                <div class="tool-field__label">TMDB ID</div>
+                <el-input-number v-model="quick.tmdbId" :min="1" :step="1" />
+              </div>
+              <div class="tool-row__action">
+                <el-button :loading="quick.loading" @click="quickQuery">查询</el-button>
+                <el-button type="primary" :loading="quick.loading" :disabled="!canWrite" @click="quickRefresh">强刷</el-button>
+              </div>
+            </div>
+            <el-descriptions v-if="quick.status" :column="isMobile ? 1 : 2" border class="quick-status-desc">
+              <el-descriptions-item label="存在状态">
+                <el-tag :type="quick.status.exists ? 'success' : 'info'" effect="plain" size="small" disable-transitions>
+                  {{ quick.status.exists ? '已缓存' : '未缓存' }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="TMDB 配置">
+                {{ quick.status.configured ? '已配置' : '未配置' }}
+              </el-descriptions-item>
+              <el-descriptions-item v-if="quick.status.display_title" label="标题">
+                {{ quick.status.display_title }}（{{ quick.status.year || '—' }}）
+              </el-descriptions-item>
+              <el-descriptions-item label="过期时间">
+                <span class="num-cell">{{ fmtTime(quick.status.expires_at) }}</span>
+              </el-descriptions-item>
+              <el-descriptions-item label="主演缓存">
+                {{ quick.status.credits_cached ? '已缓存' : '未缓存' }}
+                <template v-if="quick.status.credits_expires_at">（至 {{ fmtTime(quick.status.credits_expires_at) }}）</template>
+              </el-descriptions-item>
+              <el-descriptions-item v-if="quick.status.last_error" label="最近错误">
+                <span class="kv__v--error">{{ quick.status.last_error }}</span>
+              </el-descriptions-item>
+            </el-descriptions>
+          </section>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="定时刷新" name="scheduler">
+        <section class="glass-panel tool-card">
+          <div class="card__header card__header--flat">
+            <div class="card__title-group">
+              <div class="section__title">定时刷新设置</div>
+              <el-tag :type="scheduler.data.enabled ? 'success' : 'info'" effect="plain" round size="small" disable-transitions>
+                {{ scheduler.data.enabled ? '已启用' : '未启用' }}
+              </el-tag>
+            </div>
+            <div class="card__headerRight">
+              <el-button text :loading="scheduler.loading" @click="loadScheduler">刷新</el-button>
+              <el-button type="primary" :loading="scheduler.saving" :disabled="!canWrite" @click="saveScheduler">保存</el-button>
+            </div>
+          </div>
+
+          <el-form label-position="top" :disabled="scheduler.loading">
+            <el-form-item label="启用">
+              <el-switch v-model="scheduler.data.enabled" :disabled="!canWrite" />
+            </el-form-item>
+            <div class="form__row">
+              <el-form-item label="执行计划（Cron）">
+                <el-input v-model="scheduler.data.crontab" placeholder="0 */6 * * *">
+                  <template #append>
+                    <el-button @click="cronPreviewVisible = true">预览</el-button>
+                  </template>
+                </el-input>
+                <div class="form__hint">{{ schedulerSummaryText }}</div>
+              </el-form-item>
+              <el-form-item label="时区">
+                <el-input v-model="scheduler.data.timezone" placeholder="Asia/Shanghai" />
+              </el-form-item>
+            </div>
+            <div class="form__row">
+              <el-form-item label="每次最多刷新条目">
+                <el-input-number v-model="scheduler.data.max_items_per_run" :min="1" :max="2000" />
+              </el-form-item>
+              <el-form-item label="仅刷新任务关联条目">
+                <el-switch v-model="scheduler.data.only_refresh_linked_tasks" :disabled="!canWrite" />
+              </el-form-item>
+            </div>
+            <el-form-item label="冷数据保留天数">
+              <el-input-number v-model="scheduler.data.retention_days" :min="1" :max="3650" />
+            </el-form-item>
+          </el-form>
+        </section>
+      </el-tab-pane>
+    </el-tabs>
 
     <el-drawer v-model="drawer.visible" title="缓存详情" :size="isMobile ? '100%' : '720px'">
       <div v-if="!drawer.row" class="mini">未选择条目</div>
@@ -886,7 +925,7 @@ onMounted(refreshAll)
         <div class="detail__actions">
           <el-button size="small" :disabled="!canWrite" @click="refreshRow(drawer.row)">强制刷新</el-button>
           <el-button size="small" :disabled="!canWrite" @click="openTTLDialog(drawer.row)">设置 TTL</el-button>
-          <el-button size="small" type="danger" :disabled="!canWrite" @click="openDeleteDialog(drawer.row)">删除</el-button>
+          <el-button size="small" type="danger" plain :disabled="!canWrite" @click="openDeleteDialog(drawer.row)">删除</el-button>
         </div>
 
         <el-divider />
@@ -990,15 +1029,15 @@ onMounted(refreshAll)
           </el-descriptions-item>
           <el-descriptions-item label="标题">
             <div class="del__title">
-              <div>{{ deleteDialog.row.display_title || '-' }}</div>
+              <div>{{ deleteDialog.row.display_title || '—' }}</div>
               <div class="del__sub">{{ deleteDialog.row.original_title || '' }}</div>
             </div>
           </el-descriptions-item>
           <el-descriptions-item label="有效期">
             <div class="del__time">
-              <div>fetched_at：{{ fmtTime(deleteDialog.row.fetched_at || null) }}</div>
-              <div>expires_at：{{ fmtTime(deleteDialog.row.expires_at || null) }}</div>
-              <div>last_accessed_at：{{ fmtTime(deleteDialog.row.last_accessed_at || null) }}</div>
+              <div>最近抓取：{{ fmtTime(deleteDialog.row.fetched_at || null) }}</div>
+              <div>过期时间：{{ fmtTime(deleteDialog.row.expires_at || null) }}</div>
+              <div>最近访问：{{ fmtTime(deleteDialog.row.last_accessed_at || null) }}</div>
               <div>主演缓存：{{ deleteDialog.row.credits_cached ? '已缓存' : '未缓存' }}</div>
             </div>
           </el-descriptions-item>
@@ -1053,16 +1092,16 @@ onMounted(refreshAll)
   min-height: 36px;
 }
 
-.page__alert {
-  margin-bottom: 4px;
-}
-
 .table-panel {
   padding: 18px;
 }
 
 .tmdb-tabs :deep(.el-tabs__header) {
-  margin-bottom: 18px;
+  margin-bottom: 16px;
+}
+
+.tmdb-tabs .filter-strip {
+  margin-bottom: 16px;
 }
 
 .tmdb-table-skeleton {
@@ -1148,6 +1187,13 @@ onMounted(refreshAll)
   gap: 12px;
 }
 
+.form__hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
+}
+
 .section__title {
   font-size: 15px;
   font-weight: 600;
@@ -1160,12 +1206,12 @@ onMounted(refreshAll)
   font-size: 12.5px;
 }
 
-.tool-grid {
-  margin-top: 12px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  align-items: end;
+.tool-row {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px 20px;
 }
 
 .tool-field {
@@ -1180,15 +1226,19 @@ onMounted(refreshAll)
   line-height: 1.2;
 }
 
-.tool-field--check {
-  justify-content: flex-end;
+.tool-checks {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
 }
 
-.tool-field--action {
-  flex-direction: row;
+.tool-row__action {
+  margin-inline-start: auto;
+  display: flex;
   align-items: center;
   gap: 10px;
-  justify-content: flex-end;
 }
 
 .pager {
@@ -1342,9 +1392,6 @@ onMounted(refreshAll)
   .form__row {
     grid-template-columns: 1fr;
   }
-  .tool-grid {
-    grid-template-columns: 1fr 1fr;
-  }
 }
 
 @media (max-width: 767px) {
@@ -1352,8 +1399,18 @@ onMounted(refreshAll)
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
   }
-  .tool-grid {
-    grid-template-columns: 1fr;
+  .table-panel {
+    padding: 14px;
+  }
+  .tool-card {
+    padding: 16px;
+  }
+  .tool-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .tool-row__action {
+    margin-inline-start: 0;
   }
   .ttl__row {
     grid-template-columns: 1fr;
