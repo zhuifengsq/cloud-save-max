@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Calendar, CircleCheck, CirclePlus, Collection, Film, Odometer, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowRight, Calendar, CircleCheck, CirclePlus, Collection, Film, Odometer, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
 import { DRIVE_TYPE_META, type DriveType } from '@/utils/driveType'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -10,8 +10,9 @@ import DashboardLogList from '@/components/dashboard/DashboardLogList.vue'
 import DramaTrend from '@/components/dashboard/DramaTrend.vue'
 import ShareLinkHistory from '@/components/dashboard/ShareLinkHistory.vue'
 import FailureReason from '@/components/dashboard/FailureReason.vue'
+import { useIsMobile } from '@/composables/useIsMobile'
 import { failureStageLabel } from '@/utils/failureMessage'
-import { clearDramaFailures, fetchCapacityOverview, fetchDramaOverview } from '@/api/dashboard'
+import { clearDramaFailures, fetchCapacityOverview, fetchDramaOverview, fetchDramaUpdates } from '@/api/dashboard'
 import { refreshDriveAccountProfiles } from '@/api/extensions'
 import { loadSharedTasks } from '@/stores/taskCache'
 import {
@@ -22,7 +23,7 @@ import {
   tmdbDetailsById,
 } from '@/stores/tmdbDetailCache'
 import { getTasksVersion, subscribeTasksChanged } from '@/utils/taskChangeBus'
-import type { CapacityOverview, DramaOverview } from '@/types/dashboard'
+import type { CapacityOverview, DramaOverview, DramaUpdateGroup, DramaUpdatesRange, DramaUpdatesResponse } from '@/types/dashboard'
 import type { TaskOverview } from '@/types/tasks'
 import { formatBytes, formatDateTime, formatPercent } from '@/utils/capacity'
 import { findUpcomingAiring } from '@/utils/dramaSchedule'
@@ -336,23 +337,33 @@ const recentUpdates = computed(() => {
   })
 })
 
+const isMobile = useIsMobile()
 const updatePosterFailed = reactive<Record<string, boolean>>({})
 
-function updatePosterUrl(task: TaskOverview) {
-  const tmdbId = Number(task.tmdb_id || 0)
-  if (!tmdbId) return ''
-  const path = String(tmdbDetailsById[tmdbId]?.data?.poster_path || '').trim()
+function posterUrlByTmdbId(tmdbId?: number | null) {
+  const id = Number(tmdbId || 0)
+  if (!id) return ''
+  const path = String(tmdbDetailsById[id]?.data?.poster_path || '').trim()
   if (!path) return ''
   const url = `https://image.tmdb.org/t/p/w185${path}`
   if (updatePosterFailed[url]) return ''
   return url
 }
 
-function onUpdatePosterError(task: TaskOverview) {
-  const tmdbId = Number(task.tmdb_id || 0)
-  const path = String(tmdbDetailsById[tmdbId]?.data?.poster_path || '').trim()
+function onPosterErrorByTmdbId(tmdbId?: number | null) {
+  const id = Number(tmdbId || 0)
+  if (!id) return
+  const path = String(tmdbDetailsById[id]?.data?.poster_path || '').trim()
   if (!path) return
   updatePosterFailed[`https://image.tmdb.org/t/p/w185${path}`] = true
+}
+
+function updatePosterUrl(task: TaskOverview) {
+  return posterUrlByTmdbId(task.tmdb_id)
+}
+
+function onUpdatePosterError(task: TaskOverview) {
+  onPosterErrorByTmdbId(task.tmdb_id)
 }
 
 function updateTransferCount(item: { transfer_count?: number; new_files?: string[] }) {
@@ -368,6 +379,95 @@ function updateFilesSummary(item: { transfer_count?: number; new_files?: string[
   }
   if (count > 0) return `新存入 ${count} 项`
   return '已转存新文件'
+}
+
+function formatShortAirDate(dateStr?: string | null) {
+  const raw = String(dateStr || '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw.slice(5, 10)
+  return raw
+}
+
+const UPDATES_RANGE_OPTIONS: { label: string; value: DramaUpdatesRange }[] = [
+  { label: '今天', value: 'today' },
+  { label: '近 24 小时', value: '24h' },
+  { label: '近 7 天', value: '7d' },
+  { label: '近 30 天', value: '30d' },
+]
+
+const UPDATES_RANGE_TITLES: Record<DramaUpdatesRange, string> = {
+  today: '今天（00:00 至今）',
+  '24h': '近 24 小时',
+  '7d': '近 7 天',
+  '30d': '近 30 天',
+}
+
+const updatesDialog = reactive({
+  visible: false,
+  loading: false,
+  error: '',
+  range: 'today' as DramaUpdatesRange,
+  data: null as DramaUpdatesResponse | null,
+})
+let updatesDialogVersion = 0
+
+const updatesDialogSubtitle = computed(() => {
+  const rangeTitle = UPDATES_RANGE_TITLES[updatesDialog.range]
+  const data = updatesDialog.data
+  if (!data || updatesDialog.loading && !data) return rangeTitle
+  if (data.drama_count <= 0) return `${rangeTitle} · 暂无新存入`
+  return `${rangeTitle} · 共 ${data.drama_count} 部剧 · ${data.drive_update_count} 个网盘 · 新增 ${data.total_transfer_count} 项`
+})
+
+const updatesDialogEmptyText = computed(() => `${UPDATES_RANGE_TITLES[updatesDialog.range]}暂无新文件存入`)
+
+function openUpdatesDialog() {
+  updatesDialog.range = 'today'
+  updatesDialog.visible = true
+  void loadDramaUpdates()
+}
+
+async function loadDramaUpdates() {
+  const version = ++updatesDialogVersion
+  updatesDialog.loading = true
+  updatesDialog.error = ''
+  try {
+    const result = await fetchDramaUpdates(updatesDialog.range)
+    if (version !== updatesDialogVersion) return
+    updatesDialog.data = result
+  } catch {
+    if (version === updatesDialogVersion) updatesDialog.error = '更新明细加载失败'
+  } finally {
+    if (version === updatesDialogVersion) updatesDialog.loading = false
+  }
+}
+
+function groupTitle(group: DramaUpdateGroup) {
+  const tmdbId = Number(group.tmdb_id || 0)
+  if (tmdbId > 0) {
+    const detail = tmdbDetailsById[tmdbId]?.data
+    const title = String(detail?.title || detail?.name || '').trim()
+    if (title) return title
+  }
+  return group.title
+}
+
+function formatUpdatesTime(value?: string | null, range: DramaUpdatesRange = 'today') {
+  const raw = String(value || '').trim()
+  if (!raw) return '—'
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return raw
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const hm = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  if (range === 'today') return hm
+  const now = new Date()
+  if (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  ) {
+    return `今天 ${hm}`
+  }
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hm}`
 }
 
 const upcomingAiring = computed(() => {
@@ -808,6 +908,12 @@ onBeforeUnmount(() => {
             </div>
           </router-link>
         </div>
+        <div v-if="!showDramaSkeleton" class="updates-card__footer">
+          <el-button text type="primary" size="small" class="updates-card__more-btn" @click="openUpdatesDialog">
+            <span>查看更多更新</span>
+            <el-icon class="el-icon--right"><ArrowRight /></el-icon>
+          </el-button>
+        </div>
       </section>
 
       <section class="glass-panel upcoming-card" v-loading="dramaLoading && !showDramaSkeleton">
@@ -825,11 +931,15 @@ onBeforeUnmount(() => {
 
         <div v-if="showDramaSkeleton" class="upcoming-list" aria-hidden="true">
           <div v-for="i in 4" :key="`upc-sk-${i}`" class="upcoming-row">
-            <div class="upcoming-row__left" style="flex: 1">
-              <span class="ui-skeleton" style="width: 26px; height: 26px"></span>
+            <span class="ui-skeleton" style="width: 36px; height: 50px; border-radius: 8px; flex: none"></span>
+            <div style="flex: 1; display: grid; gap: 8px; min-width: 0">
               <span class="ui-skeleton" style="width: 56%; height: 15px"></span>
+              <span class="ui-skeleton" style="width: 34%; height: 12px"></span>
             </div>
-            <span class="ui-skeleton" style="width: 46px; height: 13px"></span>
+            <div style="display: grid; justify-items: end; gap: 6px; flex: none">
+              <span class="ui-skeleton" style="width: 48px; height: 20px; border-radius: 999px"></span>
+              <span class="ui-skeleton" style="width: 40px; height: 12px"></span>
+            </div>
           </div>
         </div>
         <div v-else-if="!upcomingAiring.length" class="empty-state empty-state--compact">
@@ -837,33 +947,199 @@ onBeforeUnmount(() => {
           <div class="empty-state__desc">未来 7 天暂无已识别的更新日。</div>
         </div>
         <div v-else class="upcoming-list">
-          <div v-for="it in displayedUpcomingAiring" :key="`${it.task.id}-${it.air_date}`" class="upcoming-row">
-            <div class="upcoming-row__left">
-              <span class="update-row__icon update-row__icon--calendar" aria-hidden="true">
-                <el-icon><Calendar /></el-icon>
-              </span>
+          <router-link
+            v-for="it in displayedUpcomingAiring"
+            :key="`${it.task.id}-${it.air_date}`"
+            :to="{ path: '/tasks/drama', query: { taskId: String(it.task.id) } }"
+            class="upcoming-row upcoming-row--link"
+          >
+            <img
+              v-if="updatePosterUrl(it.task)"
+              :src="updatePosterUrl(it.task)"
+              :alt="titleFromTask(it.task)"
+              class="update-row__poster"
+              loading="lazy"
+              @error="onUpdatePosterError(it.task)"
+            />
+            <span v-else class="update-row__poster-fallback update-row__poster-fallback--calendar" aria-hidden="true">
+              <el-icon><Calendar /></el-icon>
+            </span>
+
+            <div class="upcoming-row__main">
               <el-tooltip :content="titleFromTask(it.task)" placement="top" :trigger="['hover', 'focus']" :show-after="250">
                 <span class="upcoming-row__name" tabindex="0">{{ titleFromTask(it.task) }}</span>
               </el-tooltip>
-              <template v-if="it.predicted">
-                <span class="meta-dot">·</span>
-                <span class="upcoming-row__predicted">预计更新</span>
-              </template>
-              <template v-else-if="it.episode">
-                <span class="meta-dot">·</span>
-                <span>{{ it.episode }}</span>
-              </template>
+              <div class="upcoming-row__sub">
+                <span v-if="it.predicted" class="upcoming-row__predicted">预计更新</span>
+                <span v-else-if="it.episode" class="upcoming-row__ep">{{ it.episode }}</span>
+                <span v-else class="upcoming-row__predicted">即将更新</span>
+              </div>
             </div>
-            <div class="upcoming-row__right" :class="{ 'is-today': relativeDayLabel(it.air_date) === '今天' }">
-              {{ relativeDayLabel(it.air_date) }}
+
+            <div class="upcoming-row__aside">
+              <span class="upcoming-row__day" :class="{ 'is-today': relativeDayLabel(it.air_date) === '今天' }">
+                {{ relativeDayLabel(it.air_date) }}
+              </span>
+              <span v-if="formatShortAirDate(it.air_date)" class="upcoming-row__date">
+                {{ formatShortAirDate(it.air_date) }}
+              </span>
             </div>
-          </div>
+          </router-link>
         </div>
       </section>
     </div>
 
     <el-dialog v-model="trendDialogVisible" title="任务趋势（成功数 / 失败数 / 成功率）" width="920">
       <DramaTrend :points="trendPoints" bare />
+    </el-dialog>
+
+    <el-dialog
+      v-model="updatesDialog.visible"
+      :width="isMobile ? '94vw' : '700px'"
+      class="updates-dialog"
+    >
+      <template #header>
+        <div class="updates-dialog__header">
+          <div class="updates-dialog__heading">
+            <h3 class="updates-dialog__title">更新明细</h3>
+            <p class="updates-dialog__subtitle">{{ updatesDialogSubtitle }}</p>
+          </div>
+          <el-button
+            class="updates-dialog__refresh"
+            size="small"
+            :icon="Refresh"
+            :loading="updatesDialog.loading"
+            plain
+            @click="loadDramaUpdates"
+          >
+            刷新
+          </el-button>
+        </div>
+      </template>
+
+      <div class="updates-dialog__toolbar">
+        <el-segmented
+          v-model="updatesDialog.range"
+          :options="UPDATES_RANGE_OPTIONS"
+          size="small"
+          :disabled="updatesDialog.loading"
+          @change="loadDramaUpdates"
+        />
+      </div>
+
+      <el-alert
+        v-if="updatesDialog.error"
+        :title="updatesDialog.error"
+        type="error"
+        :closable="false"
+        class="updates-dialog__alert"
+      >
+        <el-button size="small" @click="loadDramaUpdates">重试</el-button>
+      </el-alert>
+
+      <div v-if="updatesDialog.loading && !updatesDialog.data" class="updates-group-list" aria-hidden="true">
+        <div v-for="i in 3" :key="`upd-dlg-sk-${i}`" class="updates-group updates-group--skeleton">
+          <div class="updates-group__head">
+            <span class="ui-skeleton" style="width: 36px; height: 50px; border-radius: 8px; flex: none"></span>
+            <div style="flex: 1; display: grid; gap: 6px">
+              <span class="ui-skeleton" style="width: 42%; height: 15px"></span>
+              <span class="ui-skeleton" style="width: 28%; height: 12px"></span>
+            </div>
+          </div>
+          <div class="updates-group__drives">
+            <span class="ui-skeleton" style="width: 100%; height: 48px; border-radius: 10px"></span>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="!updatesDialog.error && !(updatesDialog.data?.groups.length)" class="updates-dialog__empty">
+        <p>{{ updatesDialogEmptyText }}</p>
+        <div v-if="updatesDialog.range === 'today'" class="updates-dialog__empty-actions">
+          <el-button size="small" plain @click="updatesDialog.range = '7d'; loadDramaUpdates()">查看近 7 天</el-button>
+          <el-button size="small" plain @click="updatesDialog.range = '30d'; loadDramaUpdates()">查看近 30 天</el-button>
+        </div>
+      </div>
+
+      <div
+        v-else-if="updatesDialog.data?.groups.length"
+        class="updates-group-list"
+        v-loading="updatesDialog.loading"
+      >
+        <article v-for="group in updatesDialog.data.groups" :key="group.drama_key" class="updates-group">
+          <header class="updates-group__head">
+            <img
+              v-if="posterUrlByTmdbId(group.tmdb_id)"
+              :src="posterUrlByTmdbId(group.tmdb_id)"
+              :alt="groupTitle(group)"
+              class="update-row__poster"
+              loading="lazy"
+              @error="onPosterErrorByTmdbId(group.tmdb_id)"
+            />
+            <span v-else class="update-row__poster-fallback" aria-hidden="true">
+              <el-icon><VideoPlay /></el-icon>
+            </span>
+
+            <div class="updates-group__info">
+              <div class="updates-group__title">{{ groupTitle(group) }}</div>
+              <div class="updates-group__meta">
+                <span>{{ group.drives.length }} 个网盘有更新</span>
+                <span class="meta-dot">·</span>
+                <span>最近 {{ formatUpdatesTime(group.latest_at, updatesDialog.range) }}</span>
+              </div>
+            </div>
+
+            <span v-if="group.total_transfer_count > 0" class="update-row__count">
+              +{{ group.total_transfer_count }} 新存入
+            </span>
+          </header>
+
+          <div class="updates-group__drives">
+            <router-link
+              v-for="drive in group.drives"
+              :key="drive.task_id"
+              :to="{ path: '/tasks/drama', query: { taskId: String(drive.task_id) } }"
+              class="updates-drive-row"
+              @click="updatesDialog.visible = false"
+            >
+              <div class="updates-drive-row__top">
+                <span class="updates-drive-row__brand">
+                  <DriveTypeIcon v-if="drive.drive_type" :type="drive.drive_type" :size="15" />
+                  <span class="updates-drive-row__label">
+                    {{ DRIVE_TYPE_META[drive.drive_type as DriveType]?.label || drive.drive_type || '网盘任务' }}
+                  </span>
+                  <span v-if="drive.account_name" class="updates-drive-row__account">{{ drive.account_name }}</span>
+                </span>
+
+                <span class="updates-drive-row__stats">
+                  <span class="updates-drive-row__time">{{ formatUpdatesTime(drive.started_at, updatesDialog.range) }}</span>
+                  <span v-if="drive.transfer_count > 0" class="updates-drive-row__badge">+{{ drive.transfer_count }} 项</span>
+                  <span class="updates-drive-row__go" aria-hidden="true">
+                    <span>查看任务</span>
+                    <ArrowRight class="updates-drive-row__arrow" />
+                  </span>
+                </span>
+              </div>
+
+              <div v-if="drive.new_files.length" class="updates-drive-row__files">
+                <span
+                  v-for="(fileName, index) in drive.new_files.slice(0, 3)"
+                  :key="`${drive.task_id}-f-${index}`"
+                  class="updates-drive-row__chip"
+                  :title="fileName"
+                >
+                  {{ fileName }}
+                </span>
+                <span v-if="drive.transfer_count > Math.min(3, drive.new_files.length)" class="updates-drive-row__more">
+                  等共 {{ drive.transfer_count }} 项
+                </span>
+              </div>
+              <div v-else class="updates-drive-row__fallback">
+                本次新存入 {{ drive.transfer_count }} 项
+              </div>
+            </router-link>
+          </div>
+        </article>
+      </div>
     </el-dialog>
 
     <section class="capacity-section">
@@ -1058,13 +1334,15 @@ onBeforeUnmount(() => {
   transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
 }
 
-.update-row--link {
+.update-row--link,
+.upcoming-row--link {
   color: inherit;
   text-decoration: none;
   cursor: pointer;
 }
 
-.update-row--link:focus-visible {
+.update-row--link:focus-visible,
+.upcoming-row--link:focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
@@ -1076,7 +1354,8 @@ onBeforeUnmount(() => {
     background: var(--el-fill-color-lighter);
   }
 
-  .update-row--link:hover {
+  .update-row--link:hover,
+  .upcoming-row--link:hover {
     transform: translateY(-1px);
     box-shadow: 0 6px 16px -12px rgba(15, 23, 42, 0.25);
   }
@@ -1106,6 +1385,11 @@ onBeforeUnmount(() => {
   font-size: 16px;
 }
 
+.update-row__poster-fallback--calendar {
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
+}
+
 .update-row__main {
   flex: 1;
   min-width: 0;
@@ -1119,24 +1403,6 @@ onBeforeUnmount(() => {
   gap: 8px;
   min-width: 0;
   font-weight: 700;
-}
-
-.update-row__icon {
-  flex: none;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
-  font-size: 14px;
-}
-
-.update-row__icon--calendar {
-  background: var(--el-color-success-light-9);
-  color: var(--el-color-success);
 }
 
 .update-row__name {
@@ -1222,7 +1488,7 @@ onBeforeUnmount(() => {
 .upcoming-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -1235,12 +1501,12 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 14px;
-  padding: 14px;
+  gap: 12px;
+  padding: 12px 14px;
   border-radius: var(--panel-radius);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .updates-card .empty-state,
@@ -1251,44 +1517,74 @@ onBeforeUnmount(() => {
   justify-content: center;
 }
 
-.upcoming-row__left {
+.upcoming-row__main {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 650;
-  overflow: hidden;
+  display: grid;
+  gap: 5px;
 }
 
 .upcoming-row__name {
-  flex: 0 1 auto;
   min-width: 0;
+  font-size: 14.5px;
+  font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.upcoming-row__sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
+}
+
+.upcoming-row__ep {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .upcoming-row__predicted {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--el-text-color-secondary);
   white-space: nowrap;
 }
 
-.upcoming-row__right {
-  font-size: 12px;
+.upcoming-row__aside {
+  flex: none;
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  text-align: right;
+}
+
+.upcoming-row__day {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-muted);
   color: var(--el-text-color-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
-.upcoming-row__right.is-today {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--el-color-success-light-9);
+.upcoming-row__day.is-today {
+  border-color: color-mix(in srgb, var(--el-color-success) 34%, transparent);
+  background: color-mix(in srgb, var(--el-color-success) 13%, transparent);
   color: var(--el-color-success);
-  font-weight: 600;
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--el-color-success) 24%, transparent);
+}
+
+.upcoming-row__date {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .capacity-section {
@@ -1533,6 +1829,273 @@ onBeforeUnmount(() => {
 @media (max-width: 560px) {
   .capacity-skeleton__metrics {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.updates-card__footer {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+  border-top: 1px solid var(--el-border-color-extra-light);
+}
+
+.updates-card__more-btn {
+  font-weight: 500;
+}
+
+.updates-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 26px;
+}
+
+.updates-dialog__heading {
+  min-width: 0;
+}
+
+.updates-dialog__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.updates-dialog__subtitle {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+.updates-dialog__refresh {
+  flex: none;
+}
+
+.updates-dialog__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+
+.updates-dialog__alert {
+  margin-bottom: 12px;
+}
+
+.updates-dialog__empty {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 12px;
+  min-height: 170px;
+  padding: 20px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  background: var(--surface-muted);
+  color: var(--ink-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.updates-dialog__empty p {
+  margin: 0;
+}
+
+.updates-dialog__empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.updates-group-list {
+  display: grid;
+  gap: 12px;
+  max-height: 58vh;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.updates-group {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface-muted);
+}
+
+.updates-group__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.updates-group__info {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.updates-group__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.updates-group__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.updates-group__drives {
+  display: grid;
+  gap: 8px;
+}
+
+.updates-drive-row {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.updates-drive-row:hover {
+  transform: translateY(-1px);
+  border-color: rgba(53, 102, 232, 0.36);
+  box-shadow: 0 6px 16px -12px rgba(15, 23, 42, 0.24);
+}
+
+.updates-drive-row:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.updates-drive-row__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.updates-drive-row__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.updates-drive-row__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.updates-drive-row__account {
+  font-size: 12px;
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+
+.updates-drive-row__stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.updates-drive-row__time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.updates-drive-row__badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--el-color-success) 34%, transparent);
+  background: color-mix(in srgb, var(--el-color-success) 13%, transparent);
+  color: var(--el-color-success);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.updates-drive-row__go {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--brand);
+}
+
+.updates-drive-row__arrow {
+  width: 12px;
+  height: 12px;
+}
+
+.updates-drive-row__files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.updates-drive-row__chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--surface-muted);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.updates-drive-row__more,
+.updates-drive-row__fallback {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+@media (max-width: 767px) {
+  .updates-drive-row__top {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .updates-drive-row__stats {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 </style>

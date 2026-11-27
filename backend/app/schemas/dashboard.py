@@ -87,6 +87,34 @@ class DramaUpdateItemOut(BaseModel):
     new_files: list[str] = Field(default_factory=list)
 
 
+class DramaUpdateDriveItemOut(BaseModel):
+    task_id: int
+    drive_type: str | None = None
+    account_name: str | None = None
+    started_at: datetime
+    transfer_count: int = 0
+    new_files: list[str] = Field(default_factory=list)
+    execution_count: int = 1
+
+
+class DramaUpdateGroupOut(BaseModel):
+    drama_key: str
+    tmdb_id: int | None = None
+    title: str
+    latest_at: datetime
+    total_transfer_count: int = 0
+    drives: list[DramaUpdateDriveItemOut] = Field(default_factory=list)
+
+
+class DramaUpdatesResponseOut(BaseModel):
+    range: Literal["today", "24h", "7d", "30d"]
+    since: datetime
+    drama_count: int = 0
+    drive_update_count: int = 0
+    total_transfer_count: int = 0
+    groups: list[DramaUpdateGroupOut] = Field(default_factory=list)
+
+
 class DramaShareurlUpdateLogOut(BaseModel):
     task_id: int
     taskname: str

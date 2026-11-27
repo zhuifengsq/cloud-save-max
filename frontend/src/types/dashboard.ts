@@ -60,6 +60,36 @@ export type DramaUpdateItem = {
   new_files?: string[]
 }
 
+export type DramaUpdatesRange = 'today' | '24h' | '7d' | '30d'
+
+export type DramaUpdateDriveItem = {
+  task_id: number
+  drive_type?: string | null
+  account_name?: string | null
+  started_at: string
+  transfer_count: number
+  new_files: string[]
+  execution_count: number
+}
+
+export type DramaUpdateGroup = {
+  drama_key: string
+  tmdb_id?: number | null
+  title: string
+  latest_at: string
+  total_transfer_count: number
+  drives: DramaUpdateDriveItem[]
+}
+
+export type DramaUpdatesResponse = {
+  range: DramaUpdatesRange
+  since: string
+  drama_count: number
+  drive_update_count: number
+  total_transfer_count: number
+  groups: DramaUpdateGroup[]
+}
+
 export type DramaShareurlUpdateLog = ShareurlUpdateLog & {
   task_id: number
   taskname: string

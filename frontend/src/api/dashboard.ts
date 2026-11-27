@@ -1,5 +1,5 @@
 import { http } from '@/api/http'
-import type { CapacityOverview, DramaOverview } from '@/types/dashboard'
+import type { CapacityOverview, DramaOverview, DramaUpdatesRange, DramaUpdatesResponse } from '@/types/dashboard'
 
 export async function fetchCapacityOverview() {
   const { data } = await http.get<CapacityOverview>('/dashboard/capacity-overview')
@@ -8,6 +8,11 @@ export async function fetchCapacityOverview() {
 
 export async function fetchDramaOverview(days = 30) {
   const { data } = await http.get<DramaOverview>('/dashboard/drama-overview', { params: { days } })
+  return data
+}
+
+export async function fetchDramaUpdates(range: DramaUpdatesRange = 'today') {
+  const { data } = await http.get<DramaUpdatesResponse>('/dashboard/drama-updates', { params: { range } })
   return data
 }
 

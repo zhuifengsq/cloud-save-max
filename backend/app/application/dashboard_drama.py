@@ -293,3 +293,139 @@ def build_drama_overview(db: Session, *, days: int = 30, include_shareurl_logs: 
         ] if include_shareurl_logs else [],
         "updated_at": now_utc,
     }
+
+
+def _clean_task_display_title(raw_title: object, task_id: int) -> str:
+    text = str(raw_title or "").strip()
+    if not text:
+        return f"任务 #{task_id}"
+    return text.split(" · ", 1)[0].strip() or text
+
+
+def build_drama_updates(db: Session, *, range_key: str = "today") -> dict:
+    from app.application.container import drive_accounts_repo
+
+    normalized_range = range_key if range_key in {"today", "24h", "7d", "30d"} else "today"
+    now = datetime.now()
+    if normalized_range == "today":
+        since = datetime(now.year, now.month, now.day)
+    elif normalized_range == "24h":
+        since = now - timedelta(hours=24)
+    elif normalized_range == "7d":
+        since = now - timedelta(days=7)
+    else:
+        since = now - timedelta(days=30)
+
+    tasks = tasks_repo().list_drama_tasks(db)
+    tasks_by_id = {int(task.id): task for task in tasks}
+    account_drive_cache: dict[str, str | None] = {}
+    executions = list(tasks_repo().list_drama_execution_rows(db, since=since))
+    executions.sort(key=lambda row: row[1], reverse=True)
+
+    groups_by_key: dict[str, dict] = {}
+    for status, started_at, _finished_at, task_id, _stage, _message, snapshot, taskname, legacy_tree in executions:
+        if str(status or "").strip().lower() != "success":
+            continue
+        data = _safe_json_object(snapshot)
+        count = data.get("transfer_count")
+        names = data.get("new_files")
+        if not isinstance(names, list):
+            names = extract_root_new_files((legacy_tree or "").partition("\n")[2])
+        clean_names = [str(x).strip() for x in names if str(x or "").strip()]
+        raw_count = count if type(count) is int and count > 0 else 0
+        effective_count = max(raw_count, len(clean_names))
+        if not clean_names and effective_count <= 0:
+            continue
+
+        task_id_int = int(task_id)
+        task = tasks_by_id.get(task_id_int)
+        tmdb_id_val = getattr(task, "tmdb_id", None) if task is not None else None
+        tmdb_id = int(tmdb_id_val) if tmdb_id_val is not None and int(tmdb_id_val) > 0 else None
+        title = _clean_task_display_title(getattr(task, "taskname", None) or taskname, task_id_int)
+        if tmdb_id is not None:
+            drama_key = f"tmdb:{tmdb_id}"
+        elif title:
+            drama_key = f"name:{title.lower()}"
+        else:
+            drama_key = f"task:{task_id_int}"
+
+        drive_type = str(data.get("drive_type") or "").strip() or None
+        account_name = str(getattr(task, "account_name", "") or "").strip() or None
+        if not drive_type and account_name:
+            if account_name not in account_drive_cache:
+                resolved = drive_accounts_repo().get_drive_type_by_name(db, name=account_name)
+                account_drive_cache[account_name] = str(resolved or "").strip() or None
+            drive_type = account_drive_cache[account_name]
+
+        group = groups_by_key.get(drama_key)
+        if group is None:
+            group = {
+                "drama_key": drama_key,
+                "tmdb_id": tmdb_id,
+                "title": title,
+                "latest_at": started_at,
+                "total_transfer_count": 0,
+                "_drives": {},
+            }
+            groups_by_key[drama_key] = group
+        elif started_at > group["latest_at"]:
+            group["latest_at"] = started_at
+
+        drive_entry = group["_drives"].get(task_id_int)
+        if drive_entry is None:
+            drive_entry = {
+                "task_id": task_id_int,
+                "drive_type": drive_type,
+                "account_name": account_name,
+                "started_at": started_at,
+                "transfer_count": 0,
+                "new_files": [],
+                "_seen_files": set(),
+                "execution_count": 0,
+            }
+            group["_drives"][task_id_int] = drive_entry
+        else:
+            if started_at > drive_entry["started_at"]:
+                drive_entry["started_at"] = started_at
+            if not drive_entry["drive_type"] and drive_type:
+                drive_entry["drive_type"] = drive_type
+
+        drive_entry["transfer_count"] += effective_count
+        drive_entry["execution_count"] += 1
+        group["total_transfer_count"] += effective_count
+        for fname in clean_names:
+            if len(drive_entry["new_files"]) >= 6:
+                break
+            if fname not in drive_entry["_seen_files"]:
+                drive_entry["_seen_files"].add(fname)
+                drive_entry["new_files"].append(fname)
+
+    groups: list[dict] = []
+    drive_update_count = 0
+    total_transfer_count = 0
+    for group in sorted(groups_by_key.values(), key=lambda g: g["latest_at"], reverse=True):
+        drives = []
+        for entry in sorted(group["_drives"].values(), key=lambda d: d["started_at"], reverse=True):
+            entry.pop("_seen_files", None)
+            drives.append(entry)
+        drive_update_count += len(drives)
+        total_transfer_count += int(group["total_transfer_count"])
+        groups.append(
+            {
+                "drama_key": group["drama_key"],
+                "tmdb_id": group["tmdb_id"],
+                "title": group["title"],
+                "latest_at": group["latest_at"],
+                "total_transfer_count": group["total_transfer_count"],
+                "drives": drives,
+            }
+        )
+
+    return {
+        "range": normalized_range,
+        "since": since,
+        "drama_count": len(groups),
+        "drive_update_count": drive_update_count,
+        "total_transfer_count": total_transfer_count,
+        "groups": groups,
+    }

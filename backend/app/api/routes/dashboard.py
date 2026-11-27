@@ -1,14 +1,20 @@
 from datetime import datetime, timedelta
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, get_current_user, require_permissions
 from app.core.permissions import TASK_READ, TASK_WRITE
 from app.application.container import get_db, transaction
-from app.schemas.dashboard import CapacityOverviewOut, DramaOverviewOut
+from app.schemas.dashboard import CapacityOverviewOut, DramaOverviewOut, DramaUpdatesResponseOut
 from app.application import audit
-from app.application.dashboard_drama import build_drama_overview, clear_drama_failures as clear_drama_failures_use_case
+from app.application.dashboard_drama import (
+    build_drama_overview,
+    build_drama_updates,
+    clear_drama_failures as clear_drama_failures_use_case,
+)
 from app.application.drive_accounts import build_capacity_overview
 from app.application.shareurl_update_logs import clear_drama_shareurl_update_logs
 
@@ -29,6 +35,15 @@ def get_drama_overview(
     return DramaOverviewOut(**build_drama_overview(
         db, days=days, include_shareurl_logs=TASK_READ in _current.permissions,
     ))
+
+
+@router.get('/drama-updates', response_model=DramaUpdatesResponseOut)
+def get_drama_updates(
+    range: Literal['today', '24h', '7d', '30d'] = Query(default='today'),
+    _current: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return DramaUpdatesResponseOut(**build_drama_updates(db, range_key=range))
 
 @router.post('/drama/clear-failures', dependencies=[Depends(require_permissions(TASK_WRITE))])
 def clear_drama_failures(
