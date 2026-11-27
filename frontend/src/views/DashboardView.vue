@@ -56,17 +56,6 @@ const capacityOverview = ref<CapacityOverview | null>(null)
 const showDramaSkeleton = computed(() => dramaLoading.value && !dramaOverview.value)
 const showCapacitySkeleton = computed(() => capacityLoading.value && !capacityOverview.value)
 
-const accountGroups = computed(() => {
-  const groups = new Map<string, CapacityOverview['accounts']>()
-  for (const account of capacityOverview.value?.accounts || []) {
-    const key = account.profile?.drive_name || account.drive_type
-    const current = groups.get(key) || []
-    current.push(account)
-    groups.set(key, current)
-  }
-  return Array.from(groups.entries()).map(([name, accounts]) => ({ name, accounts }))
-})
-
 const hasAccounts = computed(() => Boolean(capacityOverview.value?.summary.account_count))
 const hasCapacityData = computed(() => Boolean(capacityOverview.value?.summary.capacity_account_count))
 
@@ -821,21 +810,26 @@ onBeforeUnmount(() => {
       <DramaTrend :points="trendPoints" bare />
     </el-dialog>
 
-    <section class="glass-panel capacity-section">
+    <section class="capacity-section">
       <div class="capacity-title">
         <div class="capacity-title__left">
           <div class="section-header__eyebrow">Capacity</div>
-          <div class="capacity-title__name">容量管理</div>
+          <div class="capacity-title__row">
+            <h2>容量管理</h2>
+            <span class="capacity-title__meta">
+              <span :class="{ 'is-warn': Boolean(capacityOverview?.warning_accounts.length) }">
+                预警 {{ capacityOverview?.warning_accounts.length || 0 }}
+              </span>
+              <span class="meta-dot">·</span>
+              <span>最近刷新 {{ formatDateTime(capacityOverview?.updated_at) }}</span>
+            </span>
+          </div>
         </div>
         <div class="capacity-title__right">
-          <span class="status-pill" :class="capacityOverview?.warning_accounts.length ? 'status-pill--danger' : 'status-pill--success'">
-            预警 {{ capacityOverview?.warning_accounts.length || 0 }}
-          </span>
-          <span class="status-pill">最近刷新 {{ formatDateTime(capacityOverview?.updated_at) }}</span>
           <router-link to="/extensions/drives">
-            <el-button size="small">账号管理</el-button>
+            <el-button>账号管理</el-button>
           </router-link>
-          <el-button type="primary" size="small" :loading="capacityRefreshing" @click="handleRefreshCapacity">刷新容量</el-button>
+          <el-button type="primary" :loading="capacityRefreshing" @click="handleRefreshCapacity">刷新容量</el-button>
         </div>
       </div>
 
@@ -849,10 +843,10 @@ onBeforeUnmount(() => {
         </div>
         <div class="glass-panel capacity-overview-card">
           <span class="ui-skeleton" style="width: 120px; height: 18px"></span>
-          <span class="ui-skeleton ui-skeleton--pill" style="width: 100%; height: 12px; margin-top: 16px"></span>
+          <span class="ui-skeleton ui-skeleton--pill" style="width: 100%; height: 10px; margin-top: 12px"></span>
         </div>
-        <div class="card-grid">
-          <div v-for="i in 3" :key="`cap-card-sk-${i}`" class="glass-panel dashboard-log-skeleton__entry">
+        <div class="capacity-account-grid">
+          <div v-for="i in 2" :key="`cap-card-sk-${i}`" class="glass-panel dashboard-log-skeleton__entry">
             <span class="ui-skeleton" style="width: 52%; height: 16px"></span>
             <span class="ui-skeleton" style="width: 78%; height: 12px"></span>
             <span class="ui-skeleton ui-skeleton--pill" style="width: 100%; height: 8px"></span>
@@ -864,23 +858,18 @@ onBeforeUnmount(() => {
         <CapacityHero v-if="capacityOverview" :summary="capacityOverview.summary" />
 
         <section class="glass-panel capacity-overview-card">
-          <div class="section-header">
-            <div class="section-header__title">
-              <div class="section-header__eyebrow">Overview</div>
-              <h2>总体占比</h2>
-              <div class="section-header__desc">基于所有支持容量统计的账号进行汇总，不支持容量的账号会在下方单独列出。</div>
-            </div>
-            <div v-if="hasCapacityData && capacityOverview" class="capacity-overview-summary">
-              <span class="capacity-overview-summary__ratio">{{ formatPercent(capacityOverview.summary.usage_ratio) }}</span>
-              <span class="capacity-overview-summary__detail">{{ capacitySpaceText }}</span>
-            </div>
-          </div>
-
           <template v-if="hasCapacityData && capacityOverview">
+            <div class="capacity-overview-head">
+              <h3>总体空间占比</h3>
+              <div class="capacity-overview-summary">
+                <span class="capacity-overview-summary__detail">{{ capacitySpaceText }}</span>
+                <span class="capacity-overview-summary__ratio">{{ formatPercent(capacityOverview.summary.usage_ratio) }}</span>
+              </div>
+            </div>
             <el-progress
               class="capacity-overview-progress"
               :percentage="Math.round((capacityOverview.summary.usage_ratio || 0) * 100)"
-              :stroke-width="12"
+              :stroke-width="10"
               :show-text="false"
               :status="(capacityOverview.summary.usage_ratio || 0) >= 0.85 ? 'exception' : 'success'"
             />
@@ -891,40 +880,34 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section v-if="capacityOverview" class="glass-panel dashboard-section">
+        <section v-if="capacityOverview?.warning_accounts.length" class="group-stack">
           <div class="group-stack__title">
             <h3>预警账号</h3>
-            <span class="status-pill" :class="capacityOverview.warning_accounts.length ? 'status-pill--danger' : 'status-pill--success'">
+            <span class="status-pill status-pill--danger">
               {{ capacityOverview.warning_accounts.length }} 个账号
             </span>
           </div>
-          <div v-if="capacityOverview.warning_accounts.length" class="card-grid" style="margin-top: 18px">
+          <div class="capacity-account-grid">
             <CapacityAccountCard v-for="item in capacityOverview.warning_accounts" :key="item.id" :account="item" />
-          </div>
-          <div v-else class="empty-state empty-state--compact">
-            <div class="empty-state__title">暂无容量预警</div>
-            <div class="empty-state__desc">所有账号当前空间使用率均处于设定阈值之内。</div>
           </div>
         </section>
 
-        <template v-if="hasAccounts">
-          <section v-for="group in accountGroups" :key="group.name" class="group-stack">
-            <div class="group-stack__title">
-              <h3>{{ group.name }}</h3>
-              <span class="status-pill">{{ group.accounts.length }} 个账号</span>
-            </div>
-            <div class="card-grid">
-              <CapacityAccountCard v-for="item in group.accounts" :key="item.id" :account="item" />
-            </div>
-          </section>
-        </template>
+        <section v-if="capacityOverview?.accounts.length" class="group-stack">
+          <div class="group-stack__title">
+            <h3>网盘账号</h3>
+            <span class="status-pill">{{ capacityOverview.accounts.length }} 个账号</span>
+          </div>
+          <div class="capacity-account-grid">
+            <CapacityAccountCard v-for="item in capacityOverview.accounts" :key="item.id" :account="item" />
+          </div>
+        </section>
 
-        <section v-if="capacityOverview?.unsupported_accounts.length" class="glass-panel dashboard-section">
+        <section v-if="capacityOverview?.unsupported_accounts.length" class="group-stack">
           <div class="group-stack__title">
             <h3>未支持容量的账号</h3>
             <span class="status-pill">{{ capacityOverview.unsupported_accounts.length }} 个账号</span>
           </div>
-          <div class="card-grid" style="margin-top: 18px">
+          <div class="capacity-account-grid">
             <CapacityAccountCard
               v-for="item in capacityOverview.unsupported_accounts"
               :key="`unsupported-${item.id}`"
@@ -1157,7 +1140,11 @@ onBeforeUnmount(() => {
 }
 
 .capacity-section {
-  padding: 12px 16px;
+  padding: 16px 0 0;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
   content-visibility: auto;
   contain-intrinsic-size: auto none auto 320px;
 }
@@ -1165,6 +1152,24 @@ onBeforeUnmount(() => {
 .group-stack {
   content-visibility: auto;
   contain-intrinsic-size: auto none auto 320px;
+}
+
+.capacity-overview-card {
+  padding: 18px 22px;
+}
+
+.capacity-overview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.capacity-overview-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .capacity-overview-summary {
@@ -1175,7 +1180,7 @@ onBeforeUnmount(() => {
 }
 
 .capacity-overview-summary__ratio {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
@@ -1188,14 +1193,14 @@ onBeforeUnmount(() => {
 }
 
 .capacity-overview-progress {
-  margin-top: 16px;
+  margin-top: 12px;
 }
 
 .capacity-title {
   width: 100%;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-end;
   gap: 14px;
   flex-wrap: wrap;
 }
@@ -1203,12 +1208,30 @@ onBeforeUnmount(() => {
 .capacity-title__left {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
-.capacity-title__name {
-  font-size: 16px;
+.capacity-title__row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.capacity-title__row h2 {
+  margin: 0;
+  font-size: 20px;
   font-weight: 700;
+}
+
+.capacity-title__meta {
+  font-size: 12.5px;
+  color: var(--el-text-color-secondary);
+}
+
+.capacity-title__meta .is-warn {
+  color: var(--el-color-danger);
+  font-weight: 600;
 }
 
 .capacity-title__right {
@@ -1221,8 +1244,14 @@ onBeforeUnmount(() => {
 .capacity-body {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 8px 0 10px;
+  gap: 18px;
+  padding: 0;
+}
+
+.capacity-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
+  gap: 18px;
 }
 
 @media (max-width: 1100px) {

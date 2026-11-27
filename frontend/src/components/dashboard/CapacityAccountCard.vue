@@ -50,7 +50,6 @@ const runtimeStatusLabel = computed(() => {
         <div class="account-card__title-row">
           <DriveTypeIcon :type="account.drive_type" :size="22" />
           <h3>{{ account.name }}</h3>
-          <el-tag v-if="account.is_default && !$slots.controls" type="success" effect="plain" round disable-transitions>默认账号</el-tag>
         </div>
         <div class="account-card__meta">
           <span>{{ account.profile?.nickname || account.profile?.username || '未命名账号' }}</span>（<span>{{ account.profile?.drive_name || account.drive_type }}</span>）
@@ -60,11 +59,11 @@ const runtimeStatusLabel = computed(() => {
       <slot name="controls" />
 
       <div class="account-card__status">
-        <el-tag v-if="account.is_default && $slots.controls" type="success" effect="plain" round size="small" disable-transitions>默认账号</el-tag>
-        <el-tag :type="account.enabled ? 'success' : 'info'" :size="$slots.controls ? 'small' : undefined" effect="plain" round disable-transitions>
+        <el-tag v-if="account.is_default" type="success" effect="plain" round size="small" disable-transitions>默认账号</el-tag>
+        <el-tag :type="account.enabled ? 'success' : 'info'" size="small" effect="plain" round disable-transitions>
           {{ account.enabled ? '启用' : '禁用' }}
         </el-tag>
-        <el-tag :type="runtimeTag" :size="$slots.controls ? 'small' : undefined" effect="plain" round disable-transitions>
+        <el-tag :type="runtimeTag" size="small" effect="plain" round disable-transitions>
           {{ runtimeStatusLabel }}
         </el-tag>
       </div>
@@ -107,6 +106,10 @@ const runtimeStatusLabel = computed(() => {
 </template>
 
 <style scoped>
+.account-card:not(.account-card--managed) .account-card__header {
+  align-items: flex-start;
+}
+
 .account-card__actions {
   display: flex;
   align-items: center;
