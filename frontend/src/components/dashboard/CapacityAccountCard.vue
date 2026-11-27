@@ -189,6 +189,11 @@ const runtimeStatusLabel = computed(() => {
   margin-top: auto;
 }
 
+.account-card--managed .account-card__actions {
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
 .account-card--managed .account-card__actions :slotted(.el-button) {
   padding-inline: 12px;
 }

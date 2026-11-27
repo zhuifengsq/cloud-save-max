@@ -454,7 +454,7 @@ onMounted(loadProbeScheduler)
           />
         </div>
         <div class="toolbar__right">
-          <el-switch v-model="filters.warnings_only" active-text="仅看预警" inactive-text="全部账号" />
+          <el-switch v-model="filters.warnings_only" active-text="仅看预警" />
         </div>
       </div>
     </section>
@@ -502,7 +502,7 @@ onMounted(loadProbeScheduler)
     </details>
 
     <section v-if="showInitialSkeleton" class="card-grid account-list" aria-hidden="true">
-      <div v-for="i in 3" :key="`acc-card-sk-${i}`" class="glass-panel ui-skeleton-card">
+      <div v-for="i in 2" :key="`acc-card-sk-${i}`" class="glass-panel ui-skeleton-card">
         <div class="ui-skeleton-card__head">
           <div style="display: flex; align-items: center; gap: 10px; flex: 1">
             <span class="ui-skeleton ui-skeleton--circle" style="width: 34px; height: 34px"></span>
@@ -653,7 +653,6 @@ onMounted(loadProbeScheduler)
 .drive-accounts-page { gap: 18px; }
 .drive-accounts-page > .section-header { min-height: 0; margin-bottom: 2px; }
 .drive-accounts-page .section-header__title { gap: 0; }
-.drive-accounts-page .section-header__title h2 { margin-top: 3px; font-size: 22px; }
 .drive-accounts-page .section-header__desc { margin-top: 6px; }
 .drive-accounts-page > .section-header .toolbar__right { gap: 8px; }
 .drive-accounts-page > .section-header .el-button { margin: 0; }
@@ -721,10 +720,9 @@ onMounted(loadProbeScheduler)
     .account-scheduler[open]::details-content { block-size: auto; opacity: 1; }
   }
 }
-.account-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 16px; }
+.account-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 18px; }
 @media (max-width: 767px) {
   .drive-accounts-page > .section-header { min-height: 0; }
-  .drive-accounts-page .section-header__title h2 { font-size: 19px; }
   .drive-accounts-page .metric-tile { min-height: 0; }
   .account-scheduler__summary { padding: 10px 14px; }
   .account-scheduler__body { padding: 14px; }
