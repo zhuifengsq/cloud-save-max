@@ -21,7 +21,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { isImeComposing } from '@/utils/ime'
 import type { TMDBCacheItem, TMDBCacheListItem, TMDBCacheSchedulerSetting, TMDBCacheStatus } from '@/types/tmdbCache'
-import { validateCrontab5, validateTimezone } from '@/utils/cron'
+import { describeCrontab, validateCrontab5, validateTimezone } from '@/utils/cron'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.permissions.includes(TASK_WRITE))
@@ -74,6 +74,10 @@ const scheduler = reactive({
 })
 
 const cronPreviewVisible = ref(false)
+const schedulerSummaryText = computed(() => {
+  const expr = scheduler.data.crontab || ''
+  return describeCrontab(expr) || expr || '—'
+})
 
 const tools = reactive({
   refreshingLinked: false,
@@ -569,7 +573,9 @@ onMounted(refreshAll)
             {{ scheduler.data.enabled ? '已开启' : '未开启' }}
           </el-tag>
         </div>
-        <div class="metric-tile__hint">计划：<code>{{ scheduler.data.crontab || '—' }}</code></div>
+        <div class="metric-tile__hint" :title="`${scheduler.data.crontab || ''} · ${scheduler.data.timezone || ''}`">
+          {{ schedulerSummaryText }}
+        </div>
       </div>
 
       <div class="glass-panel metric-tile">
@@ -1045,11 +1051,6 @@ onMounted(refreshAll)
   display: flex;
   align-items: center;
   min-height: 36px;
-}
-
-.metric-tile__hint code {
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
 }
 
 .page__alert {

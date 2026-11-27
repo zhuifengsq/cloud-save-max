@@ -33,7 +33,7 @@ import { loadTaskPage, loadTaskOrderIndex, dropSharedTasks } from '@/stores/task
 import { ensureTmdbDetails, tmdbDetailsById } from '@/stores/tmdbDetailCache'
 import { markTasksChanged, subscribeTasksChanged } from '@/utils/taskChangeBus'
 import type { TaskDetail, TaskExecutionSummary, TaskReadFilters, TaskFacets, TaskSummary as TaskItem, TaskSchedulerSetting, TaskShareLink } from '@/types/tasks'
-import { validateCrontab5, validateTimezone } from '@/utils/cron'
+import { describeCrontab, validateCrontab5, validateTimezone } from '@/utils/cron'
 import { copyText } from '@/utils/clipboard'
 import { detectDriveTypeByUrl } from '@/utils/driveType'
 import { readTaskRunError } from '@/utils/failureMessage'
@@ -55,6 +55,10 @@ const accounts = ref<DriveAccountItem[]>([])
 const scheduler = ref<TaskSchedulerSetting | null>(null)
 const schedulerSaving = ref(false)
 const cronPreviewVisible = ref(false)
+const schedulerSummaryText = computed(() => {
+  const expr = scheduler.value?.crontab || ''
+  return describeCrontab(expr) || expr || '—'
+})
 const stopCompletedSaving = ref(false)
 
 const drawerVisible = ref(false)
@@ -1358,7 +1362,10 @@ watch(() => route.name, (name, previousName) => {
         <el-tag size="small" :type="scheduler.enabled ? 'success' : 'info'" effect="plain" disable-transitions>
           {{ scheduler.enabled ? '已开启' : '未开启' }}
         </el-tag>
-        <code class="task-scheduler__meta">{{ scheduler.crontab }} · {{ scheduler.timezone }}</code>
+        <span
+          class="task-scheduler__meta"
+          :title="`${scheduler.crontab} · ${scheduler.timezone}`"
+        >{{ schedulerSummaryText }}</span>
         <span class="task-scheduler__action">配置调度</span>
       </summary>
       <div class="task-scheduler__body">
@@ -1747,9 +1754,9 @@ watch(() => route.name, (name, previousName) => {
 }
 
 .task-scheduler__meta {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  padding: 2px 8px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  padding: 3px 10px;
   border-radius: 6px;
   background: var(--surface-muted);
   border: 1px solid var(--line-soft);
@@ -1758,6 +1765,7 @@ watch(() => route.name, (name, previousName) => {
 
 .task-scheduler__action {
   margin-inline-start: auto;
+  flex-shrink: 0;
   font-size: 12.5px;
   font-weight: 500;
   color: var(--brand);

@@ -25,7 +25,7 @@ import { DRIVE_ACCOUNT_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { useIsMobile } from '@/composables/useIsMobile'
 import type { ConfigFieldItem, DriveAccountItem, DriveTypeItem } from '@/types/extensions'
-import { validateCrontab5, validateTimezone } from '@/utils/cron'
+import { describeCrontab, validateCrontab5, validateTimezone } from '@/utils/cron'
 
 const auth = useAuthStore()
 const canWrite = computed(() => auth.permissions.includes(DRIVE_ACCOUNT_WRITE))
@@ -71,6 +71,10 @@ const probeScheduler = reactive({
 })
 
 const cronPreviewVisible = ref(false)
+const probeSchedulerSummaryText = computed(() => {
+  const expr = String(probeScheduler.data.crontab || '')
+  return describeCrontab(expr) || expr || '—'
+})
 
 const filters = reactive({
   keyword: '',
@@ -467,7 +471,10 @@ onMounted(loadProbeScheduler)
         >
           {{ probeScheduler.data.enabled ? '已开启' : '已暂停' }}
         </el-tag>
-        <code class="account-scheduler__meta">{{ probeScheduler.data.crontab }} · {{ probeScheduler.data.timezone }}</code>
+        <span
+          class="account-scheduler__meta"
+          :title="`${probeScheduler.data.crontab} · ${probeScheduler.data.timezone}`"
+        >{{ probeSchedulerSummaryText }}</span>
         <span class="account-scheduler__action">配置调度</span>
       </summary>
       <div class="account-scheduler__body">
@@ -686,15 +693,15 @@ onMounted(loadProbeScheduler)
 }
 .account-scheduler__title { font-size: 15px; font-weight: 700; color: var(--el-text-color-primary); }
 .account-scheduler__meta {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  padding: 2px 8px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  padding: 3px 10px;
   border-radius: 6px;
   background: var(--surface-muted);
   border: 1px solid var(--line-soft);
   color: var(--ink-2);
 }
-.account-scheduler__action { margin-inline-start: auto; font-size: 12.5px; font-weight: 500; color: var(--brand); }
+.account-scheduler__action { margin-inline-start: auto; flex-shrink: 0; font-size: 12.5px; font-weight: 500; color: var(--brand); }
 .account-scheduler__body { padding: 16px 20px 20px; display: grid; gap: 12px; }
 .account-scheduler__hint { color: var(--el-text-color-secondary); font-size: 12.5px; }
 .account-scheduler__label { font-size: 13px; color: var(--el-text-color-regular); white-space: nowrap; }
