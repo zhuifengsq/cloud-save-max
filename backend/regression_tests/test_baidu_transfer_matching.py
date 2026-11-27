@@ -1,16 +1,22 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from email.message import Message
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.response import HTTPResponse
 
 from app.domain.drive_types import DriveFile, TransferRequest
 from app.infrastructure.drive.adapters.baidu_adapter import BaiduAdapter
 from app.infrastructure.drive.gateway import gateway_for_adapter
+from app.infrastructure.execution.drama_executor import DramaTaskExecutor
+from app.infrastructure.execution.task_executor import TaskExecutor
+from app.infrastructure.persistence.models.task import Task
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +100,121 @@ def test_baidu_transfer_sends_only_current_share_cookie(monkeypatch):
     assert transfer_cookies == ['BDCLND=refreshed']
     assert result['code'] == 0
     assert result['data']['save_as_top_fids'] == ['/dest/A.mp4']
+
+
+@pytest.mark.parametrize('endpoint', ['/share/list', '/share/transfer'])
+def test_baidu_concurrent_shares_keep_their_own_cookies(monkeypatch, endpoint):
+    adapter = BaiduAdapter(cookie='BDUSS=fake; BDCLND=imported')
+    monkeypatch.setattr(adapter, '_throttle_request', lambda: None)
+    monkeypatch.setattr(adapter, 'ls_dir_complete', lambda path: listing([]))
+    monkeypatch.setattr(adapter, '_confirm_saved_file_ids', lambda *args: ['/dest/A.mp4'])
+    reached, verified_other = Event(), Event()
+    prepared_cookies = []
+    original_request = adapter._request
+
+    def request(method, url, **kwargs):
+        if urlsplit(url).path == endpoint:
+            reached.set()
+            assert verified_other.wait(5)
+        return original_request(method, url, **kwargs)
+
+    def send(http_adapter, request, **kwargs):
+        url = urlsplit(request.url)
+        headers = Message()
+        cookies = request.headers.get('Cookie', '').split('; ')
+        assert 'BDUSS=fake' in cookies
+        if url.path == '/share/verify':
+            share = parse_qs(url.query)['surl'][0]
+            headers.add_header('Set-Cookie', f'BDCLND={share}; Domain=.pan.baidu.com; Path=/')
+            body = {'errno': 0}
+        elif url.path == '/s/1alpha':
+            body = {'errno': 0, 'share_uk': 1, 'shareid': 2, 'file_list': [
+                {'fs_id': 123, 'isdir': 1, 'path': '/show', 'server_filename': 'show'},
+            ]}
+        else:
+            assert url.path == endpoint
+            prepared_cookies.extend(cookie for cookie in cookies if cookie.startswith('BDCLND='))
+            body = {'errno': 0, 'list': []}
+        payload = json.dumps(body)
+        if url.path == '/s/1alpha':
+            payload = f'<script>{payload}</script>'
+        raw = HTTPResponse(status=200, original_response=SimpleNamespace(msg=headers))
+        response = http_adapter.build_response(request, raw)
+        response._content = payload.encode()
+        return response
+
+    monkeypatch.setattr(adapter, '_request', request)
+    monkeypatch.setattr(HTTPAdapter, 'send', send)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        if endpoint == '/share/list':
+            future = pool.submit(adapter.get_detail, '1alpha', '1alpha:1111', '123')
+        else:
+            future = pool.submit(adapter.save_file, ['1'], ['1'], '/dest', '1alpha',
+                                 '1alpha:1111', file_names=['A.mp4'])
+        try:
+            assert reached.wait(5)
+            assert adapter.get_stoken('1beta', '1111')['code'] == 0
+        finally:
+            verified_other.set()
+        assert future.result(timeout=5)['code'] == 0
+    assert prepared_cookies == ['BDCLND=alpha']
+    assert all(cookie.name != 'BDCLND' for cookie in adapter._session.cookies)
+
+
+@pytest.mark.parametrize(('case', 'stage', 'reason'), [
+    ('verify', 'get_stoken', '百度 /share/verify errno=4'),
+    ('list', 'fetch_share_items', '百度 /share/list errno=-9（第 1 页）'),
+    ('prewrite_verify', 'save_file', '百度 /share/verify errno=4'),
+    ('transfer', 'save_file', '百度 /share/transfer errno=4'),
+    ('timeout', 'save_file', '百度 /share/transfer：请求超时'),
+])
+def test_baidu_failed_task_log_identifies_the_endpoint(monkeypatch, case, stage, reason):
+    adapter = BaiduAdapter(cookie='BDUSS=fake')
+    adapter.is_active = True
+    folder = '#/list/share/123' if case == 'list' else ''
+    task = Task(id=0, task_type='drama', taskname='测试', enabled=True, savepath='/dest',
+                shareurl=f'https://pan.baidu.com/s/1share?pwd=1111{folder}')
+    verify_error = {'errno': 4, 'errmsg': 'opaque-cookie-canary'}
+    verify = Mock(return_value={'errno': 0})
+    if case == 'verify':
+        verify.return_value = verify_error
+    if case == 'prewrite_verify':
+        verify.side_effect = [{'errno': 0}, {'errno': 0}, verify_error]
+    monkeypatch.setattr(adapter, '_api_access_shared', verify)
+    monkeypatch.setattr(adapter, '_api_shared_paths', lambda _: {
+        'errno': 0, 'share_uk': 1, 'shareid': 2, 'file_list': [
+            {'fs_id': 123, 'isdir': int(case == 'list'), 'path': '/show', 'server_filename': 'A.mp4'},
+        ],
+    })
+    monkeypatch.setattr(adapter, '_api_list_shared_paths', Mock(return_value={'errno': -9}))
+    monkeypatch.setattr(DramaTaskExecutor, '_ensure_dest_dir_fid', lambda *args: '/dest')
+    monkeypatch.setattr(adapter, 'ls_dir', lambda path: listing([]))
+    monkeypatch.setattr(adapter, 'ls_dir_complete', lambda path: listing([]))
+    monkeypatch.setattr(adapter, '_throttle_request', lambda: None)
+    transfer = Mock(return_value={'errno': '4', 'errmsg': 'opaque-cookie-canary'})
+    if case == 'timeout':
+        transfer.side_effect = requests.Timeout('opaque-cookie-canary')
+    monkeypatch.setattr(adapter, '_api_transfer_shared_paths', transfer)
+    recover = Mock(return_value=False)
+    result = TaskExecutor(None).run_task(
+        task, persist_execution=False, manual_run=True, init_account_for_task=False,
+        account_manager=SimpleNamespace(get_adapter_for_task=lambda task_data: adapter),
+        recover=recover,
+        _generated_share_check={'message': '分享目录可以正常打开'},
+    )
+    expected_status = 'skipped' if case == 'timeout' else 'failed'
+    assert result.stage == stage and result.status == expected_status, result.run_log
+    assert '===============检测已生成的分享链接===============\n' in result.run_log
+    failure = result.run_log.split('===============异常===============')[-1]
+    assert reason in failure
+    assert 'opaque-cookie-canary' not in result.run_log
+    if case == 'verify':
+        assert 'stoken 获取成功' not in result.run_log
+    if case in ('verify', 'list', 'prewrite_verify'):
+        transfer.assert_not_called()
+    else:
+        transfer.assert_called_once()
+    recover.assert_not_called()
 
 
 def test_baidu_normalized_name_is_verified_and_associated(monkeypatch):

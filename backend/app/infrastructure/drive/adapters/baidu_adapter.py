@@ -10,6 +10,8 @@ import time
 import random
 import logging
 import hashlib
+from contextvars import ContextVar
+from functools import wraps
 from typing import Dict, List, Tuple, Optional, Any
 from urllib.parse import urlparse, unquote
 from base64 import standard_b64encode
@@ -21,6 +23,56 @@ from app.infrastructure.drive.adapters.lead_in_support import DramaLeadInMixin
 
 
 logger = logging.getLogger(__name__)
+
+_SHARE_VERIFY = "/share/verify"
+_SHARE_PAGE = "/s/…"
+_SHARE_LIST = "/share/list"
+_SHARE_TRANSFER = "/share/transfer"
+
+
+class _ShareError(ValueError):
+    def __init__(self, endpoint: str, reason: str, *, errno: int | None = None, page: int | None = None):
+        self.endpoint = endpoint
+        self.errno = errno
+        code = f" errno={errno}" if errno is not None else ""
+        location = f"（第 {page} 页）" if page is not None else ""
+        super().__init__(f"百度 {endpoint}{code}{location}：{reason}")
+
+    @classmethod
+    def from_request_error(cls, endpoint: str, exc: Exception):
+        if isinstance(exc, requests.Timeout):
+            reason = "请求超时"
+        elif isinstance(exc, requests.ConnectionError):
+            reason = "连接失败"
+        else:
+            reason = f"请求处理失败（{type(exc).__name__}）"
+        return cls(endpoint, reason)
+
+    def failure(self, data: dict) -> dict:
+        result = {"code": self.errno if self.errno is not None else 1, "message": str(self),
+                  "endpoint": self.endpoint, "data": data}
+        if self.errno is not None:
+            result["errno"] = self.errno
+        return result
+
+
+def _isolated_share_operation(method):
+    @wraps(method)
+    def run(self, *args, **kwargs):
+        if not self._session:
+            return method(self, *args, **kwargs)
+        with requests.Session() as session:
+            # The cached account session is shared by tasks. Copy login cookies
+            # and let only this operation's verify response supply BDCLND.
+            for cookie in self._session.cookies.copy():
+                if cookie.name != "BDCLND":
+                    session.cookies.set_cookie(cookie)
+            token = self._share_session.set(session)
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                self._share_session.reset(token)
+    return run
 
 
 # ==================== 常量定义 ====================
@@ -158,6 +210,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         super().__init__(cookie, index, config=config, no_login=no_login)
         self._cookies_dict: Dict[str, str] = {}
         self._session: Optional[requests.Session] = None
+        self._share_session: ContextVar[requests.Session | None] = ContextVar("baidu_share_session", default=None)
         self._bduss: str = ""
         self._stoken: str = ""
         self._bdstoken: str = ""
@@ -183,7 +236,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
     def _init_session(self):
         """初始化 requests session"""
         self._session = requests.Session()
-        self._session.cookies.update(self._cookies_dict)
+        self._session.cookies.update({name: value for name, value in self._cookies_dict.items() if name != "BDCLND"})
 
     def _get_error_message(self, errno: int) -> str:
         """获取错误码对应的提示信息"""
@@ -208,10 +261,15 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         params: Optional[Dict[str, str]] = None,
         headers: Optional[Dict[str, str]] = None,
         data: Any = None,
+        *,
+        share_endpoint: str = "",
         **kwargs,
     ) -> requests.Response:
         """发送 HTTP 请求"""
-        if not self._session:
+        session = self._share_session.get() if share_endpoint else self._session
+        if session is None:
+            session = self._session
+        if not session:
             raise Exception("Session 未初始化，请检查 Cookie")
         self._throttle_request()
         if params is None:
@@ -223,7 +281,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             headers = self._get_headers(url)
 
         try:
-            resp = self._session.request(
+            return session.request(
                 method,
                 url,
                 params=params,
@@ -232,15 +290,10 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 timeout=30,
                 **kwargs,
             )
-            # 浏览器导入的分享 Cookie 没有域信息。有服务端签发的值时，移除导入的旧值。
-            cookies = self._session.cookies
-            if cookies.get("BDCLND", domain="", path="/") is not None and any(
-                cookie.name == "BDCLND" and cookie.domain for cookie in cookies
-            ):
-                cookies.set("BDCLND", None, domain="", path="/")
-            return resp
         except Exception as e:
             logger.error(f"[Baidu] HTTP 请求失败: {type(e).__name__}")
+            if share_endpoint:
+                raise _ShareError.from_request_error(share_endpoint, e) from None
             raise
 
     def _check_response(self, info: Dict) -> Dict:
@@ -615,6 +668,33 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         return "/"
 
     # ==================== 分享链接操作 ====================
+    @staticmethod
+    def _share_errno(payload: Dict) -> int:
+        return int(payload.get("errno") or payload.get("error_code") or 0)
+
+    def _share_api_error(self, endpoint: str, errno: int, *, page: int | None = None,
+                         reason: str | None = None) -> _ShareError:
+        if reason is None:
+            reason = self.ERROR_CODES.get(errno, "百度返回未识别的错误码")
+            if endpoint == _SHARE_LIST and errno == -9:
+                reason = "分享子目录不存在或当前不可读"
+        return _ShareError(endpoint, reason, errno=errno, page=page)
+
+    @staticmethod
+    def _share_json(response: requests.Response, endpoint: str) -> Dict:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            raise _ShareError(endpoint, f"响应格式异常（HTTP {response.status_code}）")
+        return payload
+
+    def _check_share_access(self, result: Dict) -> None:
+        errno = self._share_errno(result)
+        if errno:
+            raise self._share_api_error(_SHARE_VERIFY, errno)
+
     def _shared_init_url(self, shared_url: str) -> str:
         """获取分享初始化 URL"""
         u = urlparse(shared_url)
@@ -629,7 +709,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         vcode: str = "",
     ) -> Dict:
         """访问分享链接（验证提取码）"""
-        url = "https://pan.baidu.com/share/verify"
+        url = PAN_BAIDU_COM + _SHARE_VERIFY
         init_url = self._shared_init_url(shared_url)
 
         params = {
@@ -649,13 +729,12 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         headers = dict(PAN_HEADERS)
         headers["Referer"] = init_url
 
-        resp = self._request("POST", url, params=params, headers=headers, data=data)
-        # Session 已保存响应 Cookie，保留服务端设置的域和路径。
-        return self._check_response(resp.json())
+        resp = self._request("POST", url, params=params, headers=headers, data=data, share_endpoint=_SHARE_VERIFY)
+        return self._share_json(resp, _SHARE_VERIFY)
 
     def _api_shared_paths(self, shared_url: str) -> Dict:
         """获取分享文件列表（从 HTML 解析）"""
-        resp = self._request("GET", shared_url, params=None)
+        resp = self._request("GET", shared_url, params=None, share_endpoint=_SHARE_PAGE)
         html = resp.text
 
         # 新版分享页将数据放在独立 JSON script 中；兼容旧版函数调用。
@@ -677,7 +756,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 continue
             if isinstance(shared_data, dict) and "file_list" in shared_data:
                 return shared_data
-        raise ValueError("无法读取百度分享文件列表，请检查分享链接、提取码或账号状态")
+        raise _ShareError(_SHARE_PAGE, "响应里没有分享文件列表，请检查链接或分享授权")
 
     # 分享页（/s/xxx 页面里的 yunData/locals JSON）的 errno 与分享接口的 ERROR_CODES 语义不完全一致：
     # -7 在分享页代表「分享不存在/已被取消」，而不是「分享文件夹等待审核中」。
@@ -732,8 +811,8 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             "bdstoken": "null",
             "showempty": "0",
         }
-        resp = self._request("GET", url, params=params)
-        return self._check_response(resp.json())
+        resp = self._request("GET", url, params=params, share_endpoint=_SHARE_LIST)
+        return self._share_json(resp, _SHARE_LIST)
 
     def _list_complete_shared_directory(self, path: str, uk: int, share_id: int) -> List[Dict]:
         from .complete_listing import Collector, rows, status, validate_entries
@@ -741,6 +820,9 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         collected = Collector()
         for page in range(1, self.COMPLETE_LISTING_MAX_PAGES + 1):
             response = self._api_list_shared_paths(path, uk, share_id, page=page)
+            errno = self._share_errno(response)
+            if errno:
+                raise self._share_api_error(_SHARE_LIST, errno, page=page)
             status(response, "errno")
             batch = rows(response.get("list"))
             validate_entries(batch)
@@ -797,14 +879,16 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         headers["Origin"] = "https://pan.baidu.com"
         headers["Referer"] = shared_url
 
-        resp = self._request("POST", url, params=params, headers=headers, data=data)
-        info = resp.json()
+        resp = self._request("POST", url, params=params, headers=headers, data=data, share_endpoint=_SHARE_TRANSFER)
+        info = self._share_json(resp, _SHARE_TRANSFER)
 
         # 处理嵌套错误码
-        if info.get("info") and info["info"][0].get("errno"):
-            info["errno"] = info["info"][0]["errno"]
-
-        return self._check_response(info)
+        items = info.get("info")
+        if isinstance(items, list) and items and isinstance(items[0], dict):
+            nested_errno = self._share_errno(items[0])
+            if nested_errno:
+                info["errno"] = nested_errno
+        return info
 
     # ==================== 分享目录树 BFS ====================
     def _get_item_path(self, item: Dict) -> str:
@@ -848,11 +932,16 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 return path, breadcrumb
             queue.append((path, breadcrumb))
 
+        read_error = None
         for _ in range(max_depth):
             next_queue: List[Tuple[str, List[Dict]]] = []
             for current_path, current_breadcrumb in queue:
                 try:
                     items = self._list_complete_shared_directory(current_path, uk, share_id)
+                except _ShareError as exc:
+                    if read_error is None:
+                        read_error = exc
+                    continue
                 except Exception:
                     continue
 
@@ -870,11 +959,14 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 break
             queue = next_queue
 
+        if read_error is not None:
+            raise read_error
         logger.warning(
             f"[Baidu] 分享目录树中未找到 fid={target_fid}，深度限制={max_depth}"
         )
         return "", []
 
+    @_isolated_share_operation
     def _resolve_share_fid_to_path(
         self, share_url: str, passcode: str, fid: str
     ) -> str:
@@ -916,6 +1008,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             logger.error(f"[Baidu] _resolve_share_fid_to_path 失败: {type(e).__name__}")
             return "/"
 
+    @_isolated_share_operation
     def _resolve_share_path(
         self,
         share_url: str,
@@ -957,7 +1050,8 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             return []
 
     # ==================== 公共接口实现 ====================
-    def get_stoken(self, pwd_id: str, passcode: str = "", *, check_errno: bool = False) -> Dict:
+    @_isolated_share_operation
+    def get_stoken(self, pwd_id: str, passcode: str = "", *, check_errno: bool = True) -> Dict:
         """获取分享令牌（验证分享链接有效性）"""
         if not self._session:
             return {"status": 500, "code": 1, "message": "百度网盘客户端未初始化"}
@@ -966,9 +1060,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             share_url = f"https://pan.baidu.com/s/{pwd_id}"
             result = self._api_access_shared(share_url, passcode)
             if check_errno:
-                errno = int(result.get("errno") or result.get("error_code") or 0)
-                if errno:
-                    return {"status": 400, "code": errno, "message": self._get_error_message(errno)}
+                self._check_share_access(result)
             return {
                 "status": 200,
                 "code": 0,
@@ -978,20 +1070,13 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 },
                 "message": "success",
             }
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"[Baidu] 访问分享失败: {error_msg}")
-            errno_match = re.search(r"errno[=:]?\s*(-?\d+)", error_msg)
-            if errno_match:
-                errno = int(errno_match.group(1))
-                return {
-                    "status": 400,
-                    "code": errno,
-                    "message": self._get_error_message(errno),
-                }
+        except _ShareError as exc:
+            return {"status": 400, **exc.failure({})}
+        except Exception as exc:
+            error = _ShareError.from_request_error(_SHARE_VERIFY, exc)
+            return {"status": 400, **error.failure({})}
 
-        return {"status": 400, "code": 1, "message": "分享链接无效或已失效"}
-
+    @_isolated_share_operation
     def get_detail(
         self,
         pwd_id: str,
@@ -1010,7 +1095,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             passcode = parts[1] if len(parts) > 1 else ""
 
             share_url = f"https://pan.baidu.com/s/{share_id}"
-            self._api_access_shared(share_url, passcode)
+            self._check_share_access(self._api_access_shared(share_url, passcode))
 
             # 获取分享数据
             shared_data = self._api_shared_paths(share_url)
@@ -1019,15 +1104,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
 
             page_error = self._shared_page_error(shared_data)
             if page_error:
-                logger.warning(
-                    f"[Baidu] 分享页标记失效 errno={page_error['code']}：{share_url}"
-                )
-                return {
-                    "code": page_error["code"],
-                    "message": page_error["message"],
-                    "data": {"list": [], "full_path": []},
-                    "metadata": {"_total": 0},
-                }
+                raise self._share_api_error(_SHARE_PAGE, page_error["code"], reason=page_error["message"])
 
             uk = shared_data.get("share_uk") or shared_data.get("uk")
             if uk:
@@ -1071,6 +1148,8 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                 "metadata": {"_total": len(result_list)},
             }
 
+        except _ShareError as exc:
+            return {**exc.failure({"list": [], "full_path": []}), "metadata": {"_total": 0}}
         except Exception as e:
             logger.error(f"[Baidu] 获取分享详情失败: {type(e).__name__}")
             return {"code": 1, "message": f"获取分享详情失败: {e}", "data": {"list": []}}
@@ -1191,6 +1270,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
                        len({fid for fid in saved_fids if fid}), expected_count)
         return saved_fids
 
+    @_isolated_share_operation
     def save_file(
         self,
         fid_list: List[str],
@@ -1204,6 +1284,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         if not self._session:
             return {"code": 1, "message": "百度网盘客户端未初始化", "data": {}}
 
+        write_started = False
         try:
             parts = stoken.split(":") if stoken else [pwd_id, ""]
             share_id = parts[0]
@@ -1213,7 +1294,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
             remote_dir = self._resolve_fid_to_path(to_pdir_fid if to_pdir_fid else "0")
 
             # 访问分享并获取元数据
-            self._api_access_shared(share_url, passcode)
+            self._check_share_access(self._api_access_shared(share_url, passcode))
             shared_data = self._api_shared_paths(share_url)
 
             if not shared_data:
@@ -1221,7 +1302,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
 
             page_error = self._shared_page_error(shared_data)
             if page_error:
-                return {"code": page_error["code"], "message": page_error["message"], "data": {}}
+                raise self._share_api_error(_SHARE_PAGE, page_error["code"], reason=page_error["message"])
 
             uk = shared_data.get("share_uk") or shared_data.get("uk")
             if uk:
@@ -1242,38 +1323,37 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
 
             # 转存文件
             fs_ids = [int(fid) for fid in fid_token_list if fid and fid.isdigit()]
-
+            write_started = True
             result = self._api_transfer_shared_paths(
                 remote_dir, fs_ids, uk, share_id_num, bdstoken, share_url
             )
 
-            if result.get("errno") == 0 or not result.get("errno"):
-                saved_fids = self._confirm_saved_file_ids(remote_dir, before_items, file_names, len(fs_ids))
-                return {
-                    "code": 0,
-                    "message": "success",
-                    "data": {
-                        "task_id": str(result.get('taskid') or result.get('task_id') or f"baidu_sync_{share_id}"),
-                        "save_as_top_fids": saved_fids,
-                        "_sync": True,
-                    },
-                }
-            else:
-                errno = result.get("errno", 1)
-                return {
-                    "code": errno,
-                    "message": self._get_error_message(errno),
-                    "data": {},
-                }
+            errno = self._share_errno(result)
+            if errno:
+                return self._share_api_error(_SHARE_TRANSFER, errno).failure({})
 
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"[Baidu] 转存失败: {error_msg}")
-            errno_match = re.search(r"errno[=:]?\s*(-?\d+)", error_msg)
-            if errno_match:
-                errno = int(errno_match.group(1))
-                return {"write_uncertain": True, "code": errno, "message": self._get_error_message(errno), "data": {}}
-            return {"write_uncertain": True, "code": 1, "message": f"转存失败: {error_msg}", "data": {}}
+            saved_fids = self._confirm_saved_file_ids(remote_dir, before_items, file_names, len(fs_ids))
+            return {
+                "code": 0,
+                "message": "success",
+                "data": {
+                    "task_id": str(result.get('taskid') or result.get('task_id') or f"baidu_sync_{share_id}"),
+                    "save_as_top_fids": saved_fids,
+                    "_sync": True,
+                },
+            }
+
+        except Exception as exc:
+            if isinstance(exc, _ShareError):
+                failure = exc.failure({})
+            elif write_started:
+                failure = _ShareError.from_request_error(_SHARE_TRANSFER, exc).failure({})
+            else:
+                failure = {"code": 1, "message": f"转存准备失败（{type(exc).__name__}），未提交转存", "data": {}}
+            if write_started:
+                failure["write_uncertain"] = True
+                failure["pending_reason"] = f"{failure['message']}，转存结果待确认"
+            return failure
 
     def query_task(self, task_id: str) -> Dict:
         """Legacy response; typed transfers confirm actual saved directory entries."""
@@ -1448,6 +1528,7 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
     _SHARE_VERIFY_DELAY_SECONDS = 0.8
     _SHARE_VERIFY_FATAL_CODES = frozenset({-1, -7, -9, 105, 145})
 
+    @_isolated_share_operation
     def _verify_created_share(
         self,
         share_page_url: str,
@@ -1714,6 +1795,9 @@ class BaiduAdapter(DramaLeadInMixin, BaseCloudDriveAdapter):
         status = data.get("status")
         errno = self._lead_in_to_int(data.get("code"), 0)
         message = str(data.get("message") or "").strip()
+        # A missing subdirectory does not establish that the whole source share is invalid.
+        if errno == -9 and data.get("endpoint") == _SHARE_LIST:
+            return {"kind": "unknown", "message": message}
         if str(status) == "500":
             return {"kind": "auth", "message": message or "账号未登录或 Cookie 已失效"}
         if errno in (-6, -21) or any(

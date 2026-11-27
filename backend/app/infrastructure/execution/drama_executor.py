@@ -337,6 +337,8 @@ class DramaTaskExecutor:
             raise ShareAccessError(message, reason=kind) from exc
         if is_transient_error(exc) or is_transient_error(message):
             raise ShareAccessError(message, reason="transient") from exc
+        if getattr(self.adapter, "DRIVE_TYPE", None) == "baidu" and isinstance(response, dict) and response.get("endpoint"):
+            raise RuntimeError(message) from exc
         raise exc
 
     def _fetch_share_detail(self, *, pwd_id: str, stoken: str, pdir_fid: str) -> dict[str, Any]:

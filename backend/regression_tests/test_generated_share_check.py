@@ -46,11 +46,11 @@ def test_history_database_failure_propagates():
 
 
 def test_baidu_probe_keeps_verify_expiry_code(monkeypatch):
-    adapter = object.__new__(BaiduAdapter)
-    adapter._session = object()
+    adapter = BaiduAdapter(cookie="BDUSS=fake")
     monkeypatch.setattr(adapter, "_api_access_shared", lambda url, password: {"errno": 105})
     result = adapter.get_stoken("public", "1234", check_errno=True)
-    assert result["code"] == 105 and result["message"] == "分享链接已过期"
+    assert result["code"] == 105
+    assert result["message"] == "百度 /share/verify errno=105：分享链接已过期"
 
 
 def test_checks_generated_link_each_run_without_blocking_transfer(monkeypatch):

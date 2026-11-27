@@ -164,7 +164,7 @@ class TaskExecutor:
                 self._require_session(), task, account_manager, always_notify=share_check_always_notify
             )
         if _generated_share_check:
-            log.section("分享链接检测")
+            log.section("检测已生成的分享链接")
             log.line(_generated_share_check["message"])
         share_snapshot = {SNAPSHOT_KEY: _generated_share_check} if _generated_share_check else {}
         task_data = self._prepare_task_data(task, prepared_data, manual_run)

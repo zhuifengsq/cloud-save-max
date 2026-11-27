@@ -92,7 +92,8 @@ class TransferStrategy:
                     read('ls_dir', lambda: adapter.ls_dir(destination))
                 except Exception:
                     pass
-            return TransferResult('pending', kind='pending', message='转存结果待确认')
+            return TransferResult('pending', kind='pending',
+                                  message=response.get('pending_reason') or '转存结果待确认')
         if not _ok(response):
             return _failed(adapter, response or {}, review_errno=self.review_errno)
         data = response.get('data')

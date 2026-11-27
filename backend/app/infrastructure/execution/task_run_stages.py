@@ -183,7 +183,7 @@ class PreparedTaskEngine:
                         share_check, check_manager, always_notify=policy.share_check_always_notify
                     )
                     if check:
-                        run_log.section("分享链接检测")
+                        run_log.section("检测已生成的分享链接")
                         run_log.line(str(check["message"]))
                 check_drama_schedule_skip(task_data, manual_run=False, log=run_log)
                 run_log.set_stage("validate_schedule")

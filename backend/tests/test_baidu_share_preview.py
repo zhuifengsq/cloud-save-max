@@ -8,6 +8,7 @@ from app.infrastructure.drive.adapters.baidu_adapter import BaiduAdapter
 class BaiduSharePreviewTests(unittest.TestCase):
     def setUp(self):
         self.adapter = BaiduAdapter(cookie="BDUSS=test")
+        self.adapter._api_access_shared = Mock(return_value={"errno": 0})
         self.data = {"share_uk": 123, "shareid": 456, "file_list": [
             {"fs_id": 6174099023536, "isdir": 1, "path": "/show", "server_filename": "show"}
         ]}
@@ -19,7 +20,6 @@ class BaiduSharePreviewTests(unittest.TestCase):
 
     def test_json_script_supports_subfolder_listing(self):
         self.page('<script type="application/json">' + json.dumps(self.data) + '</script>')
-        self.adapter._api_access_shared = Mock()
         self.adapter._api_list_shared_paths = Mock(return_value={"errno": 0, "list": [
             {"fs_id": 99, "isdir": 0, "path": "/show/01.mp4", "server_filename": "01.mp4"}
         ]})
@@ -39,20 +39,17 @@ class BaiduSharePreviewTests(unittest.TestCase):
 
     def test_unreadable_page_is_not_successful_empty_directory(self):
         self.page('<html>请输入提取码</html>')
-        self.adapter._api_access_shared = Mock()
         result = self.adapter.get_detail("1test", "1test:1111", "0")
         self.assertNotEqual(result["code"], 0)
 
     def test_valid_empty_share_is_still_empty(self):
         self.data["file_list"] = []
         self.page('<script type="application/json">' + json.dumps(self.data) + '</script>')
-        self.adapter._api_access_shared = Mock()
         result = self.adapter.get_detail("1test", "1test:1111", "0")
         self.assertEqual(result["code"], 0)
         self.assertEqual(result["data"]["list"], [])
 
     def _mock_share_directory(self, *pages):
-        self.adapter._api_access_shared = Mock()
         self.adapter._api_shared_paths = Mock(return_value=self.data)
         self.adapter._api_list_shared_paths = Mock(side_effect=pages)
 
@@ -113,7 +110,8 @@ class BaiduSharePreviewTests(unittest.TestCase):
 
         result = self.adapter.get_detail("1test", "1test:1111", "/show")
 
-        self.assertNotEqual(result["code"], 0)
+        self.assertEqual(result["code"], -9)
+        self.assertIn("errno=-9（第 2 页）", result["message"])
         self.assertEqual(result["data"]["list"], [])
         self.assertEqual(self.adapter._api_list_shared_paths.call_count, 2)
 
