@@ -3,6 +3,7 @@ import { ElMessage } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import RoleAssignDialog from '@/components/users/RoleAssignDialog.vue'
+import ResponsivePagination from '@/components/ResponsivePagination.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { USER_WRITE } from '@/constants/permissions'
 import {
@@ -288,14 +289,26 @@ onMounted(async () => {
       </el-table>
 
       <div class="pagination-bar">
-        <el-pagination
-          v-model:current-page="query.page"
-          v-model:page-size="query.page_size"
-          background
-          layout="total, sizes, prev, pager, next"
+        <ResponsivePagination
+          :current-page="query.page"
+          :page-size="query.page_size"
           :total="total"
-          @change="loadUsers"
-        />
+          label="个用户"
+          :mobile="isMobile"
+          :disabled="loading"
+          @current-change="(v) => ((query.page = v), loadUsers())"
+        >
+          <template #desktop>
+            <el-pagination
+              v-model:current-page="query.page"
+              v-model:page-size="query.page_size"
+              background
+              layout="total, sizes, prev, pager, next"
+              :total="total"
+              @change="loadUsers"
+            />
+          </template>
+        </ResponsivePagination>
       </div>
     </section>
 

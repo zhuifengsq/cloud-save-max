@@ -12,6 +12,7 @@ import {
   purgeSharePreviewBatchCache,
 } from '@/api/shareLinkCache'
 import DriveTypeIcon from '@/components/tasks/DriveTypeIcon.vue'
+import ResponsivePagination from '@/components/ResponsivePagination.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { TASK_WRITE } from '@/constants/permissions'
 import { useAuthStore } from '@/stores/auth'
@@ -343,14 +344,26 @@ onMounted(async () => {
           </el-table>
 
           <div class="pagination-bar">
-            <el-pagination
-              v-model:current-page="cache.query.page"
-              v-model:page-size="cache.query.page_size"
-              background
-              layout="total, sizes, prev, pager, next"
+            <ResponsivePagination
+              :current-page="cache.query.page"
+              :page-size="cache.query.page_size"
               :total="cache.total"
-              @change="loadCache"
-            />
+              label="条缓存"
+              :mobile="isMobile"
+              :disabled="cache.loading"
+              @current-change="(v) => ((cache.query.page = v), loadCache())"
+            >
+              <template #desktop>
+                <el-pagination
+                  v-model:current-page="cache.query.page"
+                  v-model:page-size="cache.query.page_size"
+                  background
+                  layout="total, sizes, prev, pager, next"
+                  :total="cache.total"
+                  @change="loadCache"
+                />
+              </template>
+            </ResponsivePagination>
           </div>
         </section>
       </el-tab-pane>
@@ -480,14 +493,26 @@ onMounted(async () => {
           </el-table>
 
           <div class="pagination-bar">
-            <el-pagination
-              v-model:current-page="invalid.query.page"
-              v-model:page-size="invalid.query.page_size"
-              background
-              layout="total, sizes, prev, pager, next"
+            <ResponsivePagination
+              :current-page="invalid.query.page"
+              :page-size="invalid.query.page_size"
               :total="invalid.total"
-              @change="loadInvalid"
-            />
+              label="条失效链接"
+              :mobile="isMobile"
+              :disabled="invalid.loading"
+              @current-change="(v) => ((invalid.query.page = v), loadInvalid())"
+            >
+              <template #desktop>
+                <el-pagination
+                  v-model:current-page="invalid.query.page"
+                  v-model:page-size="invalid.query.page_size"
+                  background
+                  layout="total, sizes, prev, pager, next"
+                  :total="invalid.total"
+                  @change="loadInvalid"
+                />
+              </template>
+            </ResponsivePagination>
           </div>
         </section>
       </el-tab-pane>

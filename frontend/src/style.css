@@ -1083,6 +1083,14 @@ html:root[data-theme='dark'] .app-theme-switch {
   margin-top: 16px;
 }
 
+.pagination-bar > .responsive-pagination {
+  width: 100%;
+}
+
+.pagination-bar > .responsive-pagination > .el-pagination {
+  margin-inline-start: auto;
+}
+
 .login-page,
 .simple-page {
   min-height: 100vh;
@@ -2027,7 +2035,7 @@ pre {
 }
 
 .app-nav-sections:hover,
-.app-nav-sections:focus-within {
+.app-nav-sections:has(:focus-visible) {
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
@@ -2066,7 +2074,7 @@ pre {
   }
 
   .app-nav-sections:hover::-webkit-scrollbar-thumb,
-  .app-nav-sections:focus-within::-webkit-scrollbar-thumb {
+  .app-nav-sections:has(:focus-visible)::-webkit-scrollbar-thumb {
     background: var(--scrollbar-thumb);
   }
 

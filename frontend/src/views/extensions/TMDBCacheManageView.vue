@@ -2,6 +2,7 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Clock, Collection, Connection, Timer } from '@element-plus/icons-vue'
 import CronPreviewDialog from '@/components/CronPreviewDialog.vue'
+import ResponsivePagination from '@/components/ResponsivePagination.vue'
 import { copyText } from '@/utils/clipboard'
 
 import {
@@ -721,7 +722,7 @@ onMounted(refreshAll)
                 <code class="mono-pill">{{ row.tmdb_id }}</code>
               </template>
             </el-table-column>
-            <el-table-column label="标题" min-width="140">
+            <el-table-column label="标题" min-width="128">
               <template #default="{ row }">
                 <div class="title__main">{{ row.display_title || '—' }}</div>
                 <div v-if="row.original_title && row.original_title !== row.display_title" class="title__sub">{{ row.original_title }}</div>
@@ -740,7 +741,7 @@ onMounted(refreshAll)
                 <span v-else class="muted">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="主演" width="76">
+            <el-table-column label="主演" width="88">
               <template #default="{ row }">
                 <el-tag v-if="row.credits_cached" size="small" type="success" effect="plain" round disable-transitions>已缓存</el-tag>
                 <span v-else class="muted">—</span>
@@ -772,16 +773,29 @@ onMounted(refreshAll)
           </el-table>
 
           <div class="pager">
-            <el-pagination
-              background
-              :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next'"
-              :page-size="list.pageSize"
-              :page-sizes="[10, 20, 50, 100, 200]"
+            <ResponsivePagination
+              label="TMDB 缓存分页"
               :current-page="list.page"
+              :page-size="list.pageSize"
               :total="list.total"
-              @update:page-size="(v) => ((list.pageSize = v), (list.page = 1), loadList())"
-              @update:current-page="(v) => ((list.page = v), loadList())"
-            />
+              :mobile="isMobile"
+              :disabled="list.loading"
+              @current-change="(v) => ((list.page = v), loadList())"
+            >
+              <template #desktop>
+                <el-pagination
+                  class="pager__desktop"
+                  background
+                  layout="total, sizes, prev, pager, next"
+                  :page-size="list.pageSize"
+                  :page-sizes="[10, 20, 50, 100, 200]"
+                  :current-page="list.page"
+                  :total="list.total"
+                  @update:page-size="(v) => ((list.pageSize = v), (list.page = 1), loadList())"
+                  @update:current-page="(v) => ((list.page = v), loadList())"
+                />
+              </template>
+            </ResponsivePagination>
           </div>
         </section>
       </el-tab-pane>
@@ -1242,9 +1256,11 @@ onMounted(refreshAll)
 }
 
 .pager {
-  display: flex;
-  justify-content: flex-end;
   margin-top: 16px;
+}
+
+.pager__desktop {
+  margin-inline-start: auto;
 }
 
 .title__main {

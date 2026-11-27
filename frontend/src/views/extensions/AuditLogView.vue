@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import CronPreviewDialog from '@/components/CronPreviewDialog.vue'
+import ResponsivePagination from '@/components/ResponsivePagination.vue'
 import { fetchAuditLogs, deleteAllAuditLogs, fetchAuditLogScheduler, updateAuditLogScheduler } from '@/api/audit'
 import type { AuditLogItem } from '@/types/audit'
 import { useIsMobile } from '@/composables/useIsMobile'
@@ -285,14 +286,26 @@ onMounted(() => {
           </el-table>
 
           <div class="pagination-bar">
-            <el-pagination
-              v-model:current-page="query.page"
-              v-model:page-size="query.page_size"
-              background
-              layout="total, sizes, prev, pager, next"
+            <ResponsivePagination
+              :current-page="query.page"
+              :page-size="query.page_size"
               :total="total"
-              @change="loadData"
-            />
+              label="条日志"
+              :mobile="isMobile"
+              :disabled="loading"
+              @current-change="(v) => ((query.page = v), loadData())"
+            >
+              <template #desktop>
+                <el-pagination
+                  v-model:current-page="query.page"
+                  v-model:page-size="query.page_size"
+                  background
+                  layout="total, sizes, prev, pager, next"
+                  :total="total"
+                  @change="loadData"
+                />
+              </template>
+            </ResponsivePagination>
           </div>
         </section>
       </el-tab-pane>
