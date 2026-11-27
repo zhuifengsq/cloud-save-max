@@ -40,7 +40,7 @@ defineOptions({ name: 'DashboardView' })
 const DRAMA_REFRESH_MS = 60 * 1000
 const CAPACITY_REFRESH_MS = 5 * 60 * 1000
 const CHECK_TICK_MS = 60 * 1000
-const LIST_DISPLAY_LIMIT = 10
+const LIST_DISPLAY_LIMIT = 7
 
 const dramaDays = ref(30)
 const dramaLoading = ref(false)
@@ -471,9 +471,9 @@ function formatUpdatesTime(value?: string | null, range: DramaUpdatesRange = 'to
 }
 
 const upcomingAiring = computed(() => {
-  const today = beijingDateStr(new Date())
+  const tomorrow = beijingDateStr(addDays(new Date(), 1))
   const maxDate = beijingDateStr(addDays(new Date(), 7))
-  // 每部剧只保留最近一次播出，避免同一部剧出现多行
+  // 每部剧只保留最近一次播出，避免同一部剧出现多行；从明天起展示，不足 7 条时顺延补足
   const byDrama = new Map<number, {
     task: TaskOverview
     air_date: string
@@ -484,7 +484,7 @@ const upcomingAiring = computed(() => {
   for (const task of dramaTasks.value) {
     if (!task.enabled) continue
     if (String(task.tmdb_media_type || '').toLowerCase() !== 'tv') continue
-    const next = nextAiringForTask(task, today, maxDate)
+    const next = nextAiringForTask(task, tomorrow, maxDate)
     if (!next) continue
     const dramaKey = Number(task.tmdb_id) > 0 ? Number(task.tmdb_id) : task.id
     const current = byDrama.get(dramaKey)
@@ -500,7 +500,19 @@ const upcomingAiring = computed(() => {
   })
 })
 
-const displayedUpcomingAiring = computed(() => upcomingAiring.value.slice(0, LIST_DISPLAY_LIMIT))
+const upcomingTomorrowCount = computed(() => {
+  const tomorrow = beijingDateStr(addDays(new Date(), 1))
+  return upcomingAiring.value.filter((it) => it.air_date === tomorrow).length
+})
+
+const displayedUpcomingAiring = computed(() => {
+  const items = upcomingAiring.value
+  if (!items.length) return []
+  const tomorrow = beijingDateStr(addDays(new Date(), 1))
+  const tomorrowItems = items.filter((it) => it.air_date === tomorrow)
+  if (tomorrowItems.length >= LIST_DISPLAY_LIMIT) return tomorrowItems
+  return items.slice(0, LIST_DISPLAY_LIMIT)
+})
 
 const failures = computed(() => dramaOverview.value?.recent_failures || [])
 
@@ -922,7 +934,8 @@ onBeforeUnmount(() => {
             <div class="section-header__eyebrow">Upcoming</div>
             <h2>即将播出</h2>
             <div class="section-header__desc">
-              <span v-if="upcomingAiring.length">未来 7 天 {{ upcomingAiring.length }} 部</span>
+              <span v-if="upcomingTomorrowCount">明天 {{ upcomingTomorrowCount }} 部 · 未来 7 天共 {{ upcomingAiring.length }} 部</span>
+              <span v-else-if="upcomingAiring.length">未来 7 天 {{ upcomingAiring.length }} 部</span>
               <span v-else-if="tmdbLoading">TMDB 资料加载中…</span>
               <span v-else>未来 7 天暂无</span>
             </div>
@@ -971,13 +984,16 @@ onBeforeUnmount(() => {
               </el-tooltip>
               <div class="upcoming-row__sub">
                 <span v-if="it.predicted" class="upcoming-row__predicted">预计更新</span>
-                <span v-else-if="it.episode" class="upcoming-row__ep">{{ it.episode }}</span>
+                <span v-else-if="it.episode" class="upcoming-row__ep" :title="it.episode">{{ it.episode }}</span>
                 <span v-else class="upcoming-row__predicted">即将更新</span>
               </div>
             </div>
 
             <div class="upcoming-row__aside">
-              <span class="upcoming-row__day" :class="{ 'is-today': relativeDayLabel(it.air_date) === '今天' }">
+              <span
+                class="upcoming-row__day"
+                :class="{ 'is-today': relativeDayLabel(it.air_date) === '今天' || relativeDayLabel(it.air_date) === '明天' }"
+              >
                 {{ relativeDayLabel(it.air_date) }}
               </span>
               <span v-if="formatShortAirDate(it.air_date)" class="upcoming-row__date">
@@ -1301,7 +1317,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-height: 804px;
+  height: 756px;
   overflow: hidden;
 }
 
@@ -1544,6 +1560,9 @@ onBeforeUnmount(() => {
 }
 
 .upcoming-row__ep {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1714,6 +1733,7 @@ onBeforeUnmount(() => {
 
   .updates-card,
   .upcoming-card {
+    height: auto;
     max-height: none;
     overflow: visible;
   }

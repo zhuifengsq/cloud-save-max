@@ -15,7 +15,7 @@ from app.application.task_scheduler import get_or_create_task_scheduler_setting
 # 「近期失败」清理水位：清理失败记录时写入；早于该时刻的「分享链接检测失败」不再出现在仪表盘。
 # 只影响展示，不改写执行记录本身——分享链接的真实状态仍由任务列表的检测徽章如实展示。
 DRAMA_FAILURES_CLEARED_KEY = "dashboard.drama_failures_cleared_at"
-RECENT_UPDATE_LIMIT = 6
+RECENT_UPDATE_LIMIT = 7
 
 
 def _safe_json_object(value: str | None) -> dict:
@@ -118,6 +118,7 @@ def build_drama_overview(db: Session, *, days: int = 30, include_shareurl_logs: 
     
     now_utc = datetime.now()
     since = now_utc - timedelta(days=window_days)
+    today_start = datetime(now_utc.year, now_utc.month, now_utc.day)
     month_start = datetime(now_utc.year, now_utc.month, 1)
 
     scheduler = get_or_create_task_scheduler_setting(db)
@@ -197,9 +198,10 @@ def build_drama_overview(db: Session, *, days: int = 30, include_shareurl_logs: 
         if status == "success" and started_at >= month_start:
             monthly_success_count += 1
 
-        if status == "success" and len(recent_updates) < RECENT_UPDATE_LIMIT:
+        if status == "success":
+            is_today = started_at >= today_start
             drama_key = ("tmdb", tmdb_ids[task_id]) if task_id in tmdb_ids else ("task", task_id)
-            if drama_key not in recent_updates:
+            if drama_key not in recent_updates and (is_today or len(recent_updates) < RECENT_UPDATE_LIMIT):
                 data = _safe_json_object(snapshot)
                 count = data.get("transfer_count")
                 names = data.get("new_files")
