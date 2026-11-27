@@ -588,8 +588,10 @@ function goBack() {
           <span>{{ draft.category || (draft.mediaType === 'movie' ? '电影' : '剧集') }}</span>
           <span v-if="draft.tmdbId">TMDB #{{ draft.tmdbId }}</span>
         </div>
-        <el-button text :loading="posterLoading" @click="loadPosterFromTMDB">重新获取海报</el-button>
-        <el-button class="copy-poster__more" :disabled="!draft.tmdbId" @click="imagePickerVisible = true">选择更多配图</el-button>
+        <div class="copy-poster__actions">
+          <el-button :loading="posterLoading" @click="loadPosterFromTMDB">重新获取海报</el-button>
+          <el-button :disabled="!draft.tmdbId" @click="imagePickerVisible = true">选择更多配图</el-button>
+        </div>
       </section>
 
       <section class="glass-panel copy-card copy-main">
@@ -626,7 +628,7 @@ function goBack() {
               <div v-for="(link, idx) in draft.links" :key="idx" class="copy-link-row">
                 <span class="copy-link-tag">{{ driveLabel(link.drive) }}</span>
                 <el-input v-model="link.url" placeholder="https://pan.quark.cn/s/..." />
-                <el-button text size="small" @click="removeLink(idx)">删除</el-button>
+                <el-button text type="danger" size="small" @click="removeLink(idx)">删除</el-button>
               </div>
             </div>
             <div v-else class="copy-links__empty">还没有链接，点右上角「+ 添加链接」</div>
@@ -690,7 +692,7 @@ function goBack() {
               <div v-for="(link, idx) in draft.links" :key="idx" class="copy-link-row">
                 <span class="copy-link-tag">{{ driveLabel(link.drive) }}</span>
                 <el-input v-model="link.url" placeholder="https://pan.quark.cn/s/..." />
-                <el-button text size="small" @click="removeLink(idx)">删除</el-button>
+                <el-button text type="danger" size="small" @click="removeLink(idx)">删除</el-button>
               </div>
             </div>
             <div v-else class="copy-links__empty">还没有链接，点右上角「+ 添加链接」</div>
@@ -779,7 +781,7 @@ function goBack() {
               <div v-for="(link, idx) in draft.links" :key="idx" class="copy-link-row">
                 <span class="copy-link-tag">{{ driveLabel(link.drive) }}</span>
                 <el-input v-model="link.url" placeholder="https://pan.quark.cn/s/..." />
-                <el-button text size="small" @click="removeLink(idx)">删除</el-button>
+                <el-button text type="danger" size="small" @click="removeLink(idx)">删除</el-button>
               </div>
             </div>
             <div v-else class="copy-links__empty">还没有链接，点右上角「+ 添加链接」</div>
@@ -863,8 +865,16 @@ function goBack() {
   display: block;
 }
 
-.copy-poster__frame--wide {aspect-ratio: 16 / 9;}
-.copy-poster__more {margin-left: 0;}
+.copy-poster__frame--wide { aspect-ratio: 16 / 9; }
+.copy-poster__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.copy-poster__actions :deep(.el-button) {
+  margin-left: 0;
+  width: 100%;
+}
 
 .copy-poster__empty {
   display: grid;
@@ -978,7 +988,9 @@ function goBack() {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  padding-top: 4px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
 }
 
 @media (max-width: 960px) {
@@ -988,6 +1000,28 @@ function goBack() {
 
   .copy-poster {
     max-width: 320px;
+    width: 100%;
+    margin-inline: auto;
+  }
+}
+
+@media (max-width: 767px) {
+  .copy-card {
+    padding: 16px;
+  }
+
+  .copy-links {
+    grid-template-columns: 1fr;
+  }
+
+  .copy-field--title {
+    flex: 1 1 100%;
+  }
+
+  .copy-field--year,
+  .copy-field--episode,
+  .copy-field--wps-type {
+    flex: 1 1 120px;
   }
 }
 
@@ -1053,11 +1087,14 @@ function goBack() {
 }
 
 .weibo-block {
-  margin-top: 14px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 10px;
   overflow: hidden;
   background: var(--el-fill-color-blank);
+}
+
+.weibo-block .copy-links__empty {
+  padding: 14px 12px;
 }
 
 .weibo-block__head {
@@ -1087,6 +1124,18 @@ function goBack() {
 }
 
 .weibo-guide {
-  padding: 8px 10px;
+  padding: 0;
+}
+
+.weibo-guide :deep(.el-textarea__inner) {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 10px 12px;
+  border-radius: 0;
+}
+
+.weibo-guide :deep(.el-textarea__inner:focus) {
+  box-shadow: none;
 }
 </style>

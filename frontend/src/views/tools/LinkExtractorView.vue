@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
+import { Document } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { isAxiosError } from 'axios'
 import { clearWpsHotUpdatesCache, readWpsHotUpdates, type WpsHotUpdates } from '@/api/linkExtractor'
+import { useIsMobile } from '@/composables/useIsMobile'
 import { copyText } from '@/utils/clipboard'
 import {
   clipboardHtmlToText, DEFAULT_HOT_PREFIX, DEFAULT_HOT_SUFFIX, DEFAULT_QUARK_SUFFIX,
   extractTable, filterQuark, generateHotUpdates, organizeDualDisk, parseWpsHeadline, type ExtractedLink,
 } from '@/utils/linkExtractor'
+
+const isMobile = useIsMobile()
 
 type Tab = 'table' | 'quark' | 'dual' | 'hot'
 const tabs: { key: Tab; label: string; action: string; placeholder: string }[] = [
@@ -179,10 +183,11 @@ async function exportExcel() {
       </div>
     </div>
 
+    <el-tabs v-model="activeTab" class="extractor-tabs">
+      <el-tab-pane v-for="tab in tabs" :key="tab.key" :label="tab.label" :name="tab.key" />
+    </el-tabs>
+
     <section class="glass-panel tool-panel">
-      <el-tabs v-model="activeTab">
-        <el-tab-pane v-for="tab in tabs" :key="tab.key" :label="tab.label" :name="tab.key" />
-      </el-tabs>
       <div class="tool-content">
         <div class="tool-workspace">
           <div class="tool-pane tool-pane--source">
@@ -236,7 +241,17 @@ async function exportExcel() {
                 </div>
               </div>
               <template v-if="activeTab === 'table'">
-                <el-table :data="rows" max-height="440" empty-text="未识别到链接，请检查粘贴内容" stripe>
+                <div v-if="isMobile" class="mobile-record-list">
+                  <div v-if="!rows.length" class="empty-state empty-state--compact">
+                    <div class="empty-state__title">未识别到链接</div>
+                    <div class="empty-state__desc">请检查粘贴内容是否包含有效的网盘链接。</div>
+                  </div>
+                  <article v-for="(row, idx) in rows" :key="`${idx}-${row.url}`" class="mobile-record-card">
+                    <div class="mobile-record-card__title">{{ row.title || '—' }}</div>
+                    <a class="result-link" :href="row.url" target="_blank" rel="noopener noreferrer">{{ row.url }}</a>
+                  </article>
+                </div>
+                <el-table v-else :data="rows" max-height="440" empty-text="未识别到链接，请检查粘贴内容" stripe>
                   <el-table-column prop="title" label="影视名称" min-width="150" />
                   <el-table-column label="下载链接" min-width="250">
                     <template #default="scope">
@@ -247,7 +262,15 @@ async function exportExcel() {
               </template>
               <el-input v-else :model-value="current.output" type="textarea" :rows="13" readonly aria-label="整理结果文本" />
             </section>
-            <div v-else class="result-placeholder">{{ activeTab === 'table' ? '提取后可预览、复制或导出 Excel' : '整理后的内容会显示在这里' }}</div>
+            <div v-else class="result-placeholder">
+              <div class="result-placeholder__inner">
+                <span class="result-placeholder__icon" aria-hidden="true">
+                  <el-icon><Document /></el-icon>
+                </span>
+                <div class="result-placeholder__title">{{ activeTab === 'table' ? '等待提取链接' : '等待整理内容' }}</div>
+                <div class="result-placeholder__desc">{{ activeTab === 'table' ? '提取后可预览、复制或导出 Excel' : '整理后的内容会显示在这里' }}</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -257,48 +280,75 @@ async function exportExcel() {
 
 <style scoped>
 .link-extractor { min-width: 0; }
-.tool-panel { padding: 8px 24px 24px; min-width: 0; }
-.tool-content { display: grid; gap: 20px; padding-top: 8px; min-width: 0; }
+.extractor-tabs :deep(.el-tabs__header) { margin-bottom: 16px; }
+.tool-panel { padding: 22px 24px; min-width: 0; }
+.tool-content { display: grid; gap: 20px; min-width: 0; }
 .tool-workspace { display: grid; gap: 20px; min-width: 0; }
-.tool-pane { display: grid; gap: 20px; min-width: 0; align-content: start; }
+.tool-pane { display: grid; gap: 18px; min-width: 0; align-content: start; }
 .tool-field { display: grid; gap: 10px; min-width: 0; }
 .tool-field label { color: var(--ink-2); font-size: 14px; font-weight: 600; }
 .wps-source { display: flex; flex-wrap: wrap; gap: 10px; }
-.wps-source > .el-input { flex: 1 1 280px; width: auto; min-width: 0; }
+.wps-source > .el-input { flex: 1 1 200px; width: auto; min-width: 0; }
 .tool-field :deep(textarea), .tool-result :deep(textarea) { line-height: 1.7; }
 .affix-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .tool-actions, .result-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 .tool-actions .el-button, .result-actions .el-button { margin-left: 0; }
+.source-actions { padding-top: 14px; border-top: 1px solid var(--line-soft); }
 .tool-result { min-width: 0; border-top: 1px solid var(--line); padding-top: 24px; display: grid; gap: 16px; }
 .result-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .result-title { display: grid; gap: 6px; }
 .result-title h3 { margin: 0; font-size: 16px; }
 .result-title span { color: var(--ink-3); font-size: 13px; }
-.result-link { color: var(--brand); overflow-wrap: anywhere; }
+.result-link { color: var(--brand); overflow-wrap: anywhere; font-size: 13px; }
 .result-link:hover { text-decoration: underline; }
-.result-placeholder { padding: 26px 12px; border: 1px dashed var(--line-strong); border-radius: var(--control-radius); text-align: center; color: var(--ink-3); font-size: 14px; }
+.mobile-record-card__title { font-weight: 600; font-size: 14px; color: var(--ink); overflow-wrap: anywhere; }
+.result-placeholder {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 36px 20px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--panel-radius);
+  background: var(--surface-muted);
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+.result-placeholder__inner { display: grid; justify-items: center; gap: 8px; }
+.result-placeholder__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--el-color-primary-light-9);
+  color: var(--brand);
+  font-size: 20px;
+}
+.result-placeholder__title { font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.result-placeholder__desc { color: var(--ink-3); font-size: 13px; }
 @media (min-width: 1180px) {
   .tool-workspace {
     grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
     gap: 24px;
-    align-items: start;
+    align-items: stretch;
   }
   .tool-pane--result {
     border-left: 1px solid var(--line);
     padding-left: 24px;
+    display: flex;
+    flex-direction: column;
   }
   .tool-result {
     border-top: 0;
     padding-top: 0;
   }
   .result-placeholder {
-    min-height: 280px;
-    display: grid;
-    place-items: center;
+    flex: 1;
+    min-height: 300px;
   }
 }
 @media (max-width: 640px) {
-  .tool-panel { padding: 4px 14px 18px; }
+  .tool-panel { padding: 16px 14px; }
   .affix-grid { grid-template-columns: 1fr; }
   .source-actions { flex-wrap: nowrap; gap: 8px; }
   .tool-panel .source-actions > .el-button {
