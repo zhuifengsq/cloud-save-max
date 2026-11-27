@@ -447,7 +447,8 @@ html:root[data-theme='dark'] .glass-panel {
 }
 
 .metric-tile--warn {
-  border-color: color-mix(in oklab, var(--el-color-warning) 35%, var(--line));
+  border-color: color-mix(in oklab, var(--el-color-warning) 28%, var(--line));
+  background: linear-gradient(180deg, color-mix(in oklab, var(--el-color-warning) 6%, var(--card)) 0%, var(--card) 58%);
 }
 
 .card-grid {
@@ -556,6 +557,7 @@ html:root[data-theme='dark'] .glass-panel {
   border-radius: 10px;
   overflow: hidden;
   background: transparent;
+  box-shadow: 0 2px 6px rgba(23, 32, 51, 0.08), inset 0 0 0 1px rgba(23, 32, 51, 0.08);
 }
 
 .app-logo__mark img {
@@ -590,6 +592,7 @@ html:root[data-theme='dark'] .glass-panel {
   border-radius: var(--control-radius);
   font-size: 15px;
   color: var(--ink-2);
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .app-menu .el-menu-item.is-active {
@@ -782,7 +785,8 @@ html:root[data-theme='dark'] .app-nav-sections {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--brand-soft);
+  background: linear-gradient(145deg, color-mix(in oklab, var(--brand) 16%, var(--card)), var(--brand-soft));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--brand) 22%, transparent);
   color: var(--brand);
   font-size: 13px;
   font-weight: 700;
@@ -1311,6 +1315,19 @@ body .el-button {
   transition: background-color 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s, scale 0.12s ease-out;
 }
 
+body .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):not(.el-button--warning):not(.is-text):not(.is-link):not(.is-disabled) {
+  box-shadow: 0 1px 2px rgba(23, 32, 51, 0.04);
+}
+
+body .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):not(.el-button--warning):not(.is-text):not(.is-link):not(.is-disabled):hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 2px 5px rgba(23, 32, 51, 0.06);
+}
+
+html:root[data-theme='dark'] .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):not(.el-button--warning):not(.is-text):not(.is-link):not(.is-disabled) {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+}
+
 @media (prefers-reduced-motion: no-preference) {
   body .el-button:not(.is-disabled):active {
     scale: 0.98;
@@ -1836,13 +1853,80 @@ html:root[data-theme='dark'] .el-message-box__btns .el-button--primary.el-button
   color: var(--el-text-color-primary);
 }
 
+.el-dropdown-menu {
+  border-radius: 12px !important;
+  padding: 6px !important;
+  box-shadow: var(--el-box-shadow-light) !important;
+}
+
 .el-dropdown-menu__item {
   border-radius: 6px;
-  margin: 2px 6px;
+  margin: 2px 0;
+  padding: 6px 12px;
+  transition: background-color 0.14s ease, color 0.14s ease;
 }
 
 .el-dropdown-menu__item:not(.is-disabled):hover {
   background: var(--el-menu-hover-bg-color) !important;
+}
+
+.el-popper.is-light,
+.el-select__popper.el-popper {
+  border-radius: 12px !important;
+  border-color: var(--el-border-color-lighter) !important;
+  box-shadow: var(--el-box-shadow-light) !important;
+}
+
+.el-select-dropdown__list {
+  padding: 6px !important;
+}
+
+.el-select-dropdown__item {
+  border-radius: 6px;
+  padding: 0 12px;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.el-message {
+  background: var(--card) !important;
+  border: 1px solid var(--line-strong) !important;
+  border-radius: 12px !important;
+  box-shadow: var(--el-box-shadow-light) !important;
+  padding: 11px 16px !important;
+}
+
+.el-message__content {
+  color: var(--ink) !important;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.el-message--success .el-message__icon {
+  color: var(--el-color-success) !important;
+}
+
+.el-message--warning .el-message__icon {
+  color: var(--el-color-warning) !important;
+}
+
+.el-message--error .el-message__icon {
+  color: var(--el-color-danger) !important;
+}
+
+.el-message--info .el-message__icon {
+  color: var(--brand) !important;
+}
+
+.el-progress-bar__outer {
+  background-color: var(--el-fill-color);
+}
+
+.el-progress.is-success .el-progress-bar__inner {
+  background-image: linear-gradient(90deg, var(--el-color-success), color-mix(in oklab, var(--el-color-success) 78%, #ffffff));
+}
+
+.el-progress.is-exception .el-progress-bar__inner {
+  background-image: linear-gradient(90deg, var(--el-color-danger), color-mix(in oklab, var(--el-color-danger) 78%, #ffffff));
 }
 
 .el-table__body tr.current-row > td.el-table__cell {
@@ -1907,6 +1991,19 @@ html:root[data-theme='dark'] .el-alert--info.is-light .el-alert__description {
 .el-pagination {
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.el-pagination.is-background .el-pager li,
+.el-pagination.is-background .btn-prev,
+.el-pagination.is-background .btn-next {
+  border-radius: 8px;
+  transition: background-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.el-pagination.is-background .el-pager li.is-active {
+  font-weight: 600;
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 1px 3px rgba(53, 102, 232, 0.24);
 }
 
 :focus-visible {

@@ -800,7 +800,9 @@ onBeforeUnmount(() => {
                 <span>{{ it.episode }}</span>
               </template>
             </div>
-            <div class="upcoming-row__right">{{ relativeDayLabel(it.air_date) }}</div>
+            <div class="upcoming-row__right" :class="{ 'is-today': relativeDayLabel(it.air_date) === '今天' }">
+              {{ relativeDayLabel(it.air_date) }}
+            </div>
           </div>
         </div>
       </section>
@@ -1137,6 +1139,15 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   white-space: nowrap;
+}
+
+.upcoming-row__right.is-today {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--el-color-success) 24%, transparent);
 }
 
 .capacity-section {
